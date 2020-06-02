@@ -52,16 +52,17 @@ class TrainingJob(Job):
     """
 
     def __init__(
-        self, config: Config, dataset: Dataset, parent_job: Job = None, model=None
+        self, config: Config, dataset: Dataset, parent_job: Job = None, model=None, lapse_worker=None
     ) -> None:
         from kge.job import EvaluationJob
 
         super().__init__(config, dataset, parent_job)
         if model is None:
-            self.model: KgeModel = KgeModel.create(config, dataset)
+            self.model: KgeModel = KgeModel.create(config, dataset, lapse_worker=lapse_worker)
         else:
             self.model: KgeModel = model
-        self.optimizer = KgeOptimizer.create(config, self.model)
+        lapse_indexes = [np.arange(dataset.num_entities(), dtype=np.int), np.arange(dataset.num_relations(), dtype=np.int) + dataset.num_entities()]
+        self.optimizer = KgeOptimizer.create(config, self.model, lapse_worker=lapse_worker, lapse_indexes=lapse_indexes)
         self.kge_lr_scheduler = KgeLRScheduler(config, self.optimizer)
         self.loss = KgeLoss.create(config)
         self.abort_on_nan: bool = config.get("train.abort_on_nan")
@@ -120,15 +121,15 @@ class TrainingJob(Job):
 
     @staticmethod
     def create(
-        config: Config, dataset: Dataset, parent_job: Job = None, model=None
+        config: Config, dataset: Dataset, parent_job: Job = None, model=None, lapse_worker=None
     ) -> "TrainingJob":
         """Factory method to create a training job."""
         if config.get("train.type") == "KvsAll":
-            return TrainingJobKvsAll(config, dataset, parent_job, model=model)
+            return TrainingJobKvsAll(config, dataset, parent_job, model=model, lapse_worker=lapse_worker)
         elif config.get("train.type") == "negative_sampling":
-            return TrainingJobNegativeSampling(config, dataset, parent_job, model=model)
+            return TrainingJobNegativeSampling(config, dataset, parent_job, model=model, lapse_worker=lapse_worker)
         elif config.get("train.type") == "1vsAll":
-            return TrainingJob1vsAll(config, dataset, parent_job, model=model)
+            return TrainingJob1vsAll(config, dataset, parent_job, model=model, lapse_worker=lapse_worker)
         else:
             # perhaps TODO: try class with specified name -> extensibility
             raise ValueError("train.type")
@@ -381,6 +382,8 @@ class TrainingJob(Job):
             self.optimizer.step()
             batch_optimizer_time += time.time()
 
+            self.model.push_back()
+
             # tracing/logging
             if self.trace_batch:
                 batch_trace = {
@@ -506,8 +509,8 @@ class TrainingJobKvsAll(TrainingJob):
     - Example: a query + its labels, e.g., (John,marriedTo), [Jane]
     """
 
-    def __init__(self, config, dataset, parent_job=None, model=None):
-        super().__init__(config, dataset, parent_job, model=model)
+    def __init__(self, config, dataset, parent_job=None, model=None, lapse_worker=None):
+        super().__init__(config, dataset, parent_job, model=model, lapse_worker=lapse_worker)
         self.label_smoothing = config.check_range(
             "KvsAll.label_smoothing", float("-inf"), 1.0, max_inclusive=False
         )
@@ -769,8 +772,8 @@ class TrainingJobKvsAll(TrainingJob):
 
 
 class TrainingJobNegativeSampling(TrainingJob):
-    def __init__(self, config, dataset, parent_job=None, model=None):
-        super().__init__(config, dataset, parent_job, model=model)
+    def __init__(self, config, dataset, parent_job=None, model=None, lapse_worker=None):
+        super().__init__(config, dataset, parent_job, model=model, lapse_worker=lapse_worker)
         self._sampler = KgeSampler.create(config, "negative_sampling", dataset)
         self.is_prepared = False
         self._implementation = self.config.check(
@@ -1019,8 +1022,8 @@ class TrainingJobNegativeSampling(TrainingJob):
 class TrainingJob1vsAll(TrainingJob):
     """Samples SPO pairs and queries sp_ and _po, treating all other entities as negative."""
 
-    def __init__(self, config, dataset, parent_job=None, model=None):
-        super().__init__(config, dataset, parent_job, model=model)
+    def __init__(self, config, dataset, parent_job=None, model=None, lapse_worker=None):
+        super().__init__(config, dataset, parent_job, model=model, lapse_worker=lapse_worker)
         self.is_prepared = False
         config.log("Initializing spo training job...")
         self.type_str = "1vsAll"

@@ -13,7 +13,7 @@ class ComplExScorer(RelationalScorer):
 
     """
 
-    def __init__(self, config: Config, dataset: Dataset, configuration_key=None):
+    def __init__(self, config: Config, dataset: Dataset, configuration_key=None, lapse_worker=None):
         super().__init__(config, dataset, configuration_key)
 
     def score_emb(self, s_emb, p_emb, o_emb, combine: str):
@@ -47,7 +47,7 @@ class ComplExScorer(RelationalScorer):
 class ComplEx(KgeModel):
     r"""Implementation of the ComplEx KGE model."""
 
-    def __init__(self, config: Config, dataset: Dataset, configuration_key=None):
+    def __init__(self, config: Config, dataset: Dataset, configuration_key=None, lapse_worker=None):
         super().__init__(
-            config, dataset, ComplExScorer, configuration_key=configuration_key
+            config, dataset, ComplExScorer, configuration_key=configuration_key, lapse_worker=lapse_worker
         )

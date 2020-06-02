@@ -1,15 +1,19 @@
 from kge import Config, Configurable
 import torch.optim
 from torch.optim.lr_scheduler import _LRScheduler
+from kge.util.dist_sgd import DistSGD
 
 
 class KgeOptimizer:
     """ Wraps torch optimizers """
 
     @staticmethod
-    def create(config, model):
+    def create(config, model, lapse_worker=None, lapse_indexes=None):
         """ Factory method for optimizer creation """
         try:
+            if config.get("train.optimizer") == "dist_sgd":
+                optimizer = DistSGD(model, lapse_worker=lapse_worker, lapse_indexes=lapse_indexes, **config.get("train.optimizer_args"))
+                return optimizer
             optimizer = getattr(torch.optim, config.get("train.optimizer"))
             return optimizer(
                 [p for p in model.parameters() if p.requires_grad],

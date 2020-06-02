@@ -5,6 +5,7 @@ from collections import OrderedDict
 from torch import Tensor
 import torch.nn
 import os
+import numpy as np
 
 import kge
 from kge import Config, Configurable, Dataset
@@ -221,7 +222,7 @@ class KgeEmbedder(KgeBase):
 
     @staticmethod
     def create(
-        config: Config, dataset: Dataset, configuration_key: str, vocab_size: int
+        config: Config, dataset: Dataset, configuration_key: str, vocab_size: int, lapse_worker=None, lapse_index=None
     ) -> "KgeEmbedder":
         """Factory method for embedder creation."""
 
@@ -233,9 +234,17 @@ class KgeEmbedder(KgeBase):
             raise Exception("Can't find {}.type in config".format(configuration_key))
 
         try:
-            embedder = getattr(module, class_name)(
-                config, dataset, configuration_key, vocab_size
-            )
+            if config.get("num_workers") > 1:
+                class_name = "Distributed" + class_name
+                embedder = getattr(module, class_name)(
+                    config, dataset, configuration_key, vocab_size,
+                    lapse_worker=lapse_worker,
+                    lapse_index=lapse_index
+                )
+            else:
+                embedder = getattr(module, class_name)(
+                    config, dataset, configuration_key, vocab_size
+                )
             return embedder
         except ImportError:
             # perhaps TODO: try class with specified name -> extensibility
@@ -256,6 +265,10 @@ class KgeEmbedder(KgeBase):
         """Returns all embeddings."""
         raise NotImplementedError
 
+    def push_back(self) -> None:
+        """Pushes used values back to parameter server"""
+        pass
+
 
 class KgeModel(KgeBase):
     r"""Generic KGE model for KBs with a fixed set of entities and relations.
@@ -273,6 +286,7 @@ class KgeModel(KgeBase):
         scorer: Union[RelationalScorer, type],
         initialize_embedders=True,
         configuration_key=None,
+        lapse_worker=None
     ):
         super().__init__(config, dataset, configuration_key)
 
@@ -290,6 +304,8 @@ class KgeModel(KgeBase):
                 dataset,
                 self.configuration_key + ".entity_embedder",
                 dataset.num_entities(),
+                lapse_worker=lapse_worker,
+                lapse_index=np.arange(dataset.num_entities(), dtype=np.int)
             )
 
             #: Embedder used for relations
@@ -299,6 +315,8 @@ class KgeModel(KgeBase):
                 dataset,
                 self.configuration_key + ".relation_embedder",
                 num_relations,
+                lapse_worker=lapse_worker,
+                lapse_index=np.arange(dataset.num_relations(), dtype=np.int)+dataset.num_entities()
             )
 
         #: Scorer
@@ -323,7 +341,7 @@ class KgeModel(KgeBase):
 
     @staticmethod
     def create(
-        config: Config, dataset: Dataset, configuration_key: Optional[str] = None
+        config: Config, dataset: Dataset, configuration_key: Optional[str] = None, lapse_worker=None
     ) -> "KgeModel":
         """Factory method for model creation."""
 
@@ -338,7 +356,7 @@ class KgeModel(KgeBase):
             raise Exception("Can't find {}.type in config".format(configuration_key))
 
         try:
-            model = getattr(module, class_name)(config, dataset, configuration_key)
+            model = getattr(module, class_name)(config, dataset, configuration_key, lapse_worker=lapse_worker)
             model.to(config.get("job.device"))
             return model
         except ImportError:
@@ -600,3 +618,7 @@ class KgeModel(KgeBase):
             sp_scores = self._scorer.score_emb(s, p, all_objects, combine="sp_")
             po_scores = self._scorer.score_emb(all_subjects, p, o, combine="_po")
         return torch.cat((sp_scores, po_scores), dim=1)
+
+    def push_back(self):
+        self._entity_embedder.push_back()
+        self._relation_embedder.push_back()
