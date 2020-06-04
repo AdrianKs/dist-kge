@@ -5,6 +5,7 @@ import os
 import sys
 import traceback
 import yaml
+import threading
 
 import numpy as np
 import lapse
@@ -16,12 +17,14 @@ from kge.misc import get_git_revision_short_hash, kge_base_dir, is_number
 from kge.util.dump import add_dump_parsers, dump
 from kge.util.io import get_checkpoint_file, load_checkpoint
 from kge.util.package import package_model, add_package_parser
+from kge.cli import create_parser, process_meta_command, argparse_bool_type
 
 from copy import deepcopy
 from torch import multiprocessing as mp
+import time
 
 servers = 1
-num_workers_per_server = 4
+num_workers_per_server = 1
 localip = "127.0.0.1"
 port = "9091"
 mp.set_start_method('spawn', force=True)
@@ -45,143 +48,34 @@ def init_server(rank, servers, num_keys, embedding_dim, config, dataset):
 
     lapse.setup(num_keys, num_workers_per_server)
     s = lapse.Server(num_keys, embedding_dim)
-
+    configs = {}
+    datasets = {}
+    processes = []
+    start_time = time.time()
     for w in range(num_workers_per_server):
         print(num_workers_per_server)
         worker_id = rank * num_workers_per_server + w
-        kv = lapse.Worker(0, w+1, s)
-        #fn(worker_id, rank, servers, kv)
-        # test_values = np.ones([2, 100], dtype=np.float32)
-        # kv.pull_2d([0,1], test_values)
-        # print(test_values)
-        job = Job.create(config, dataset, lapse_worker=kv)
-        job.run()
+        configs[w] = deepcopy(config)
+        configs[w].folder = os.path.join(config.folder, f"worker-{w}")
+        configs[w].init_folder()
+        datasets[w] = deepcopy(dataset)
+        #datasets[w] = Dataset.create(configs[w],
+        #                                folder=os.path.join(dataset.folder,
+        #                                                    f"partition_{worker_id}"))
+        datasets[w] = Dataset.create(configs[w], dataset.folder)
+        kv = lapse.Worker(0, worker_id + 1, s)
+        job = Job.create(configs[w], datasets[w], lapse_worker=kv)
+        #job.run()
+        p = threading.Thread(target=job.run)
+        p.start()
+        processes.append(p)
+    for p in processes:
+        p.join()
+    end_time = time.time()
+    print(end_time-start_time)
 
     # shutdown server
     s.shutdown()
-
-
-
-def argparse_bool_type(v):
-    "Type for argparse that correctly treats Boolean values"
-    if isinstance(v, bool):
-        return v
-    if v.lower() in ("yes", "true", "t", "y", "1"):
-        return True
-    elif v.lower() in ("no", "false", "f", "n", "0"):
-        return False
-    else:
-        raise argparse.ArgumentTypeError("Boolean value expected.")
-
-
-def process_meta_command(args, meta_command, fixed_args):
-    """Process&update program arguments for meta commands.
-
-    `meta_command` is the name of a special command, which fixes all key-value arguments
-    given in `fixed_args` to the specified value. `fxied_args` should contain key
-    `command` (for the actual command being run).
-
-    """
-    if args.command == meta_command:
-        for k, v in fixed_args.items():
-            if k != "command" and vars(args)[k] and vars(args)[k] != v:
-                raise ValueError(
-                    "invalid argument for '{}' command: --{} {}".format(
-                        meta_command, k, v
-                    )
-                )
-            vars(args)[k] = v
-
-
-def create_parser(config, additional_args=[]):
-    # define short option names
-    short_options = {
-        "dataset.name": "-d",
-        "job.type": "-j",
-        "train.max_epochs": "-e",
-        "model": "-m",
-    }
-
-    # create parser for config
-    parser_conf = argparse.ArgumentParser(add_help=False)
-    for key, value in Config.flatten(config.options).items():
-        short = short_options.get(key)
-        argtype = type(value)
-        if argtype == bool:
-            argtype = argparse_bool_type
-        if short:
-            parser_conf.add_argument("--" + key, short, type=argtype)
-        else:
-            parser_conf.add_argument("--" + key, type=argtype)
-
-    # add additional arguments
-    for key in additional_args:
-        parser_conf.add_argument(key)
-
-    # add argument to abort on outdated data
-    parser_conf.add_argument(
-        "--abort-when-cache-outdated",
-        action="store_const",
-        const=True,
-        default=False,
-        help="Abort processing when an outdated cached dataset file is found "
-        "(see description of `dataset.pickle` configuration key). "
-        "Default is to recompute such cache files.",
-    )
-
-    # create main parsers and subparsers
-    parser = argparse.ArgumentParser("kge")
-    subparsers = parser.add_subparsers(title="command", dest="command")
-    subparsers.required = True
-
-    # start and its meta-commands
-    parser_start = subparsers.add_parser(
-        "start", help="Start a new job (create and run it)", parents=[parser_conf]
-    )
-    parser_create = subparsers.add_parser(
-        "create", help="Create a new job (but do not run it)", parents=[parser_conf]
-    )
-    for p in [parser_start, parser_create]:
-        p.add_argument("config", type=str, nargs="?")
-        p.add_argument("--folder", "-f", type=str, help="Output folder to use")
-        p.add_argument(
-            "--run",
-            default=p is parser_start,
-            type=argparse_bool_type,
-            help="Whether to immediately run the created job",
-        )
-
-    # resume and its meta-commands
-    parser_resume = subparsers.add_parser(
-        "resume", help="Resume a prior job", parents=[parser_conf]
-    )
-    parser_eval = subparsers.add_parser(
-        "eval", help="Evaluate the result of a prior job", parents=[parser_conf]
-    )
-    parser_valid = subparsers.add_parser(
-        "valid",
-        help="Evaluate the result of a prior job using validation data",
-        parents=[parser_conf],
-    )
-    parser_test = subparsers.add_parser(
-        "test",
-        help="Evaluate the result of a prior job using test data",
-        parents=[parser_conf],
-    )
-    for p in [parser_resume, parser_eval, parser_valid, parser_test]:
-        p.add_argument("config", type=str)
-        p.add_argument(
-            "--checkpoint",
-            type=str,
-            help=(
-                "Which checkpoint to use: 'default', 'last', 'best', a number "
-                "or a file name"
-            ),
-            default="default",
-        )
-    add_dump_parsers(subparsers)
-    add_package_parser(subparsers)
-    return parser
 
 
 def main():
@@ -339,19 +233,18 @@ def main():
                     )
             else:
                 configs = {}
-                datasets = {}
                 processes = []
                 p = mp.Process(target=init_scheduler, args=(servers, dataset.num_entities()))
                 p.start()
                 processes.append(p)
+                num_keys = dataset.num_entities() + dataset.num_relations()
+                if config.get("train.optimizer") == "dist_adagrad":
+                    num_keys *= 2
                 for rank in range(servers):
                     configs[rank] = deepcopy(config)
                     configs[rank].folder = os.path.join(config.folder, f"server-{rank}")
                     configs[rank].init_folder()
-                    datasets[rank] = deepcopy(dataset)
-                    #job = Job.create(configs[rank], datasets[rank])
-                    #init_server(rank, servers, dataset.num_entities(), config.get("lookup_embedder.dim"), job)
-                    p = mp.Process(target=init_server, args=(rank, servers, dataset.num_entities() + dataset.num_relations(), config.get("lookup_embedder.dim"), configs[rank], datasets[rank]))
+                    p = mp.Process(target=init_server, args=(rank, servers, num_keys, config.get("lookup_embedder.dim"), configs[rank], dataset))
                     p.start()
                     processes.append(p)
                 for p in processes:
