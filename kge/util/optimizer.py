@@ -2,6 +2,7 @@ from kge import Config, Configurable
 import torch.optim
 from torch.optim.lr_scheduler import _LRScheduler
 from kge.util.dist_sgd import DistSGD
+from kge.util.dist_adagrad import DistAdagrad
 
 
 class KgeOptimizer:
@@ -13,6 +14,9 @@ class KgeOptimizer:
         try:
             if config.get("train.optimizer") == "dist_sgd":
                 optimizer = DistSGD(model, lapse_worker=lapse_worker, lapse_indexes=lapse_indexes, **config.get("train.optimizer_args"))
+                return optimizer
+            if config.get("train.optimizer") == "dist_adagrad":
+                optimizer = DistAdagrad(model, lapse_worker=lapse_worker, lapse_indexes=lapse_indexes, **config.get("train.optimizer_args"))
                 return optimizer
             optimizer = getattr(torch.optim, config.get("train.optimizer"))
             return optimizer(
