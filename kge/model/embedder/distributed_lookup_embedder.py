@@ -15,7 +15,7 @@ from typing import List
 
 class DistributedLookupEmbedder(KgeEmbedder):
     def __init__(
-        self, config: Config, dataset: Dataset, configuration_key: str, vocab_size: int, lapse_worker: lapse.Worker, lapse_index: np.ndarray
+        self, config: Config, dataset: Dataset, configuration_key: str, vocab_size: int, lapse_worker: lapse.Worker, lapse_index: np.ndarray, complete_vocab_size
     ):
         super().__init__(config, dataset, configuration_key)
 
@@ -26,6 +26,7 @@ class DistributedLookupEmbedder(KgeEmbedder):
         self.sparse = self.get_option("sparse")
         self.config.check("train.trace_level", ["batch", "epoch"])
         self.vocab_size = vocab_size
+        self.complete_vocab_size = complete_vocab_size
         self.cached_indexes = []
 
         round_embedder_dim_to = self.get_option("round_dim_to")
@@ -62,7 +63,11 @@ class DistributedLookupEmbedder(KgeEmbedder):
                 dropout = 0
         self.dropout = torch.nn.Dropout(dropout)
         self.lapse_worker = lapse_worker
-        self.lapse_index = lapse_index
+        self.lapse_index = lapse_index  # maps the id from the dataset to the id stored in lapse
+        #self.local_index_mapper = torch.arange(complete_vocab_size, dtype=torch.int)
+        self.local_index_mapper = torch.zeros(complete_vocab_size, dtype=torch.int)-1  # maps the id from the dataset to the id of the embedding here in the embedder
+        self.local_to_lapse_mapper = np.zeros(vocab_size, dtype=np.int)-1  # maps the local embeddings to the embeddings in lapse
+        self.num_pulled = 0
         # TODO: here we initialize the values in lapse from every worker
         #  would be nice, if we could do this once globally for all parameters
         self.lapse_worker.push(self.lapse_index[np.arange(self.vocab_size)], self._embeddings.weight.detach().numpy())
@@ -86,38 +91,63 @@ class DistributedLookupEmbedder(KgeEmbedder):
 
             job.pre_batch_hooks.append(normalize_embeddings)
 
+    def _pull_embeddings(self, indexes):
+        local_indexes = self.local_index_mapper[indexes]
+        missing_mask = local_indexes == -1
+        num_missing = torch.sum(missing_mask).item()
+        if num_missing > 0:
+            missing_local_indexes = torch.arange(self.num_pulled, self.num_pulled+num_missing, dtype=torch.long)
+            self.num_pulled += num_missing
+
+            #self.lapse_worker.localize(keys=self.lapse_index[missing_local_indexes])
+            # TODO: we still create a new tensor here. We can not just convert a tensor
+            #  to numpy, which needs grad, since grad would have to be dropped
+            current_embeddings = self._embeddings.weight[missing_local_indexes, :].cpu().numpy()
+            pull_indexes = self.lapse_index[indexes[missing_mask].cpu()].reshape(-1)
+            self.lapse_worker.pull(pull_indexes,
+                                   current_embeddings)
+            self._embeddings.weight[missing_local_indexes, :] = torch.from_numpy(
+                current_embeddings).to(self._embeddings.weight.device)
+
+            # update local index mapper
+            self.local_index_mapper[indexes[missing_mask]] = missing_local_indexes.int()
+            # update local to lapse mapper
+            self.local_to_lapse_mapper[missing_local_indexes] = pull_indexes
+
     def embed(self, indexes: Tensor) -> Tensor:
         long_indexes = indexes.long()
         with torch.no_grad():
-            self.lapse_worker.localize(keys=long_indexes.numpy())
             #self.lapse_worker.pull(np.array([1,2,3,4]), np.ones(4*100))  # self._embeddings.weight[long_indexes, :].numpy().flatten())
             long_unique_indexes = torch.unique(long_indexes)
-            numpy_unique_indexes = long_unique_indexes.numpy().flatten()
+            self._pull_embeddings(long_unique_indexes)
+
+            #numpy_unique_indexes = long_unique_indexes.numpy().flatten()
             # if 0 in numpy_unique_indexes:
             #     print("before pull")
             #     print(self._embeddings.weight[long_unique_indexes, :])
             #self._embeddings.weight.requires_grad=False
             # TODO: we still create a new tensor here. We can not just convert a tensor
             #  to numpy, which needs grad, since grad would have to be dropped
-            current_embeddings = self._embeddings.weight[long_unique_indexes, :].numpy()
-            self.lapse_worker.pull_2d(self.lapse_index[numpy_unique_indexes], current_embeddings)
-            self._embeddings.weight[long_unique_indexes, :] = torch.from_numpy(current_embeddings)
+            #current_embeddings = self._embeddings.weight[long_unique_indexes, :].numpy()
+            #self.lapse_worker.pull(self.lapse_index[numpy_unique_indexes], current_embeddings)
+            #self._embeddings.weight[long_unique_indexes, :] = torch.from_numpy(current_embeddings)
             #self._embeddings.weight.requires_grad=True
             # if 0 in numpy_unique_indexes:
             #     print("after pull")
             #     print(self._embeddings.weight[long_unique_indexes, :])
             # test_values = torch.ones([2, 100], dtype=torch.float32)
-            # self.lapse_worker.pull_2d([0, 1], test_values.numpy())
+            # self.lapse_worker.pull([0, 1], test_values.numpy())
             # print(test_values)
-            if self.cached_indexes is not None:
-                if len(numpy_unique_indexes) == self.vocab_size:
-                    self.cached_indexes = None
-                else:
-                    self.cached_indexes.append(numpy_unique_indexes)
+            #if self.cached_indexes is not None:
+            #    if len(numpy_unique_indexes) == self.vocab_size:
+            #        self.cached_indexes = None
+            #    else:
+            #        self.cached_indexes.append(numpy_unique_indexes)
 
-        return self._postprocess(self._embeddings(long_indexes))
+        return self._postprocess(self._embeddings(self.local_index_mapper[long_indexes].to(self._embeddings.weight.device).long()))
 
     def embed_all(self) -> Tensor:
+        raise NotImplementedError
         all_indexes = np.arange(self.vocab_size)
         with torch.no_grad():
             self.lapse_worker.localize(keys=all_indexes)
@@ -130,13 +160,16 @@ class DistributedLookupEmbedder(KgeEmbedder):
 
     @torch.no_grad()
     def push_back(self):
-        return
-        if self.cached_indexes is None:
-            indexes = np.arange(self.vocab_size)
-        else:
-            indexes = np.unique(np.concatenate(self.cached_indexes))
-        self.lapse_worker.push(self.lapse_index[indexes], self._embeddings.weight[indexes, :].numpy())
-        self.cached_indexes = []
+        self.local_index_mapper[:] = -1
+        self.local_to_lapse_mapper[:] = -1
+        self.num_pulled = 0
+        # return
+        # if self.cached_indexes is None:
+        #     indexes = np.arange(self.vocab_size)
+        # else:
+        #     indexes = np.unique(np.concatenate(self.cached_indexes))
+        # self.lapse_worker.push(self.lapse_index[indexes], self._embeddings.weight[indexes, :].numpy())
+        # self.cached_indexes = []
 
     def _postprocess(self, embeddings: Tensor) -> Tensor:
         if self.dropout.p > 0:
