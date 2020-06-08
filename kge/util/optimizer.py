@@ -11,21 +11,26 @@ class KgeOptimizer:
     @staticmethod
     def create(config, model, lapse_worker=None, lapse_indexes=None):
         """ Factory method for optimizer creation """
-        try:
-            if config.get("train.optimizer") == "dist_sgd":
-                optimizer = DistSGD(model, lapse_worker=lapse_worker, lapse_indexes=lapse_indexes, **config.get("train.optimizer_args"))
-                return optimizer
-            if config.get("train.optimizer") == "dist_adagrad":
-                optimizer = DistAdagrad(model, lapse_worker=lapse_worker, lapse_indexes=lapse_indexes, **config.get("train.optimizer_args"))
-                return optimizer
-            optimizer = getattr(torch.optim, config.get("train.optimizer"))
-            return optimizer(
-                [p for p in model.parameters() if p.requires_grad],
-                **config.get("train.optimizer_args")
-            )
-        except:
-            # perhaps TODO: try class with specified name -> extensibility
-            raise ValueError("train.optimizer")
+        if config.get("train.optimizer") == "dist_sgd":
+            optimizer = DistSGD(model, lapse_worker=lapse_worker,
+                                lapse_indexes=lapse_indexes,
+                                **config.get("train.optimizer_args"))
+            return optimizer
+        if config.get("train.optimizer") == "dist_adagrad":
+            optimizer = DistAdagrad(model, lapse_worker=lapse_worker,
+                                    lapse_indexes=lapse_indexes,
+                                    **config.get("train.optimizer_args"))
+            return optimizer
+        else:
+            try:
+                optimizer = getattr(torch.optim, config.get("train.optimizer"))
+                return optimizer(
+                    [p for p in model.parameters() if p.requires_grad],
+                    **config.get("train.optimizer_args")
+                )
+            except:
+                # perhaps TODO: try class with specified name -> extensibility
+                raise ValueError("train.optimizer")
 
 
 class KgeLRScheduler(Configurable):
