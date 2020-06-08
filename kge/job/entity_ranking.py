@@ -218,6 +218,8 @@ class EntityRankingJob(EvaluationJob):
                     ranks_and_ties_for_ranking["o" + ranking][0] += o_rank_chunk
                     ranks_and_ties_for_ranking["o" + ranking][1] += o_num_ties_chunk
 
+                    self.model.push_back()
+
                 # we are done with the chunk
 
             # We are done with all chunks; calculate final ranks from counts

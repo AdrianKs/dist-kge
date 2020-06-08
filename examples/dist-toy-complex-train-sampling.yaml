@@ -8,12 +8,13 @@ train:
   optimizer: dist_adagrad
   optimizer_args:
     lr: 0.6
-    weight_decay: 0.4e-7
+    #weight_decay: 0.4e-7
   loss: margin_ranking
   loss_arg: 2.0  # margin
   batch_size: 512
 
 lookup_embedder.dim: 100
+lookup_embedder.sparse: True
 
 negative_sampling:
   num_samples:
