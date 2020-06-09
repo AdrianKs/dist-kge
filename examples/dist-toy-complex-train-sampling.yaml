@@ -15,6 +15,7 @@ train:
 
 lookup_embedder.dim: 100
 lookup_embedder.sparse: True
+lookup_embedder.regularize_args.weighted: True
 
 negative_sampling:
   num_samples:
