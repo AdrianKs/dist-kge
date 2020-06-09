@@ -11,6 +11,7 @@ job:
 
   # Main device to use for this job (e.g., 'cpu', 'cuda', 'cuda:0')
   device: 'cuda'
+  device_pool: [ ]
 
 # The seeds of the PRNGs can be set manually for (increased) reproducability.
 # Use -1 to use default seed.

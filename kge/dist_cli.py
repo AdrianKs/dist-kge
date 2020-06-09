@@ -52,17 +52,21 @@ def init_server(rank, servers, num_keys, embedding_dim, config, dataset):
     datasets = {}
     processes = []
     start_time = time.time()
+    device_pool: list = config.get("job.device_pool")
+    if len(device_pool) == 0:
+        device_pool.append(config.get("job.device"))
     for w in range(num_workers_per_server):
         print(num_workers_per_server)
         worker_id = rank * num_workers_per_server + w
         configs[w] = deepcopy(config)
+        configs[w].set("job.device", device_pool[w % len(device_pool)])
         configs[w].folder = os.path.join(config.folder, f"worker-{w}")
         configs[w].init_folder()
         datasets[w] = deepcopy(dataset)
-        #datasets[w] = Dataset.create(configs[w],
-        #                                folder=os.path.join(dataset.folder,
-        #                                                    f"partition_{worker_id}"))
-        datasets[w] = Dataset.create(configs[w], dataset.folder)
+        datasets[w] = Dataset.create(configs[w],
+                                        folder=os.path.join(dataset.folder,
+                                                            f"partition_{worker_id}"))
+        #datasets[w] = Dataset.create(configs[w], dataset.folder)
         kv = lapse.Worker(0, worker_id + 1, s)
         job = Job.create(configs[w], datasets[w], lapse_worker=kv)
         #job.run()
@@ -244,6 +248,7 @@ def main():
                     configs[rank] = deepcopy(config)
                     configs[rank].folder = os.path.join(config.folder, f"server-{rank}")
                     configs[rank].init_folder()
+                    print("before init server")
                     p = mp.Process(target=init_server, args=(rank, servers, num_keys, config.get("lookup_embedder.dim"), configs[rank], dataset))
                     p.start()
                     processes.append(p)
