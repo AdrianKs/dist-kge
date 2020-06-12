@@ -85,7 +85,7 @@ class Dataset(Configurable):
             raise IOError("File {} for key {} could not be found".format(os.path.join(self.folder, filename), key))
 
     @staticmethod
-    def create(config: Config, preload_data=True, folder: Optional[str] = None):
+    def create(config: Config, preload_data: bool = True, folder: Optional[str] = None):
         """Loads a dataset.
 
         If preload_data is set, loads entity and relation maps as well as all splits.
@@ -155,7 +155,7 @@ class Dataset(Configurable):
         meta_checkpoint = {}
         for key in meta_keys:
             meta_checkpoint[key] = self.map_indexes(None, key)
-        checkpoint["dataset"]["meta"] = dataset_checkpoint
+        checkpoint["dataset"]["meta"] = meta_checkpoint
         return checkpoint
 
     @staticmethod
@@ -175,7 +175,7 @@ class Dataset(Configurable):
             if triples is not None:
                 return triples
 
-        triples = np.loadtxt(filename, usecols=range(0, 3), dtype=int)
+        triples = np.loadtxt(filename, usecols=range(0, 3), dtype=np.int32)
         triples = torch.from_numpy(triples)
         if use_pickle:
             Dataset._pickle_dump_atomic(triples, pickle_filename)
