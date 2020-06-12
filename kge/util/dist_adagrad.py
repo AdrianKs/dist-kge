@@ -70,10 +70,12 @@ class DistAdagrad(Optimizer):
 
         self.lapse_worker = lapse_worker
         self.optimizer_lapse_indexes = [
+            # entity optimizer indexes
             np.arange(
                 model.dataset.num_entities() + model.dataset.num_relations(),
                 2 * model.dataset.num_entities() + model.dataset.num_relations(),
             ),
+            # relation optimizer indexes
             np.arange(
                 2 * model.dataset.num_entities() + model.dataset.num_relations(),
                 2 * model.dataset.num_entities() + 2 * model.dataset.num_relations(),
@@ -157,11 +159,17 @@ class DistAdagrad(Optimizer):
                     # pull the current internal optimizer parameters
                     if self.lapse_update_tensors[i] is None:
                         self.lapse_update_tensors[i] = np.zeros(size, dtype=np.float32)
+                    # TODO: indexing on numpy update tensor creates a new tensor
+                    #  updates will be written in the wrong tensor
+                    #  sometimes the tensor is even freed before we even write in it
+                    update_mask = np.zeros(len(self.local_to_lapse_mappers[i]), dtype=np.bool)
+                    update_mask[grad_indices_flat.cpu().numpy()] = True
                     self.lapse_worker.pull(
-                        self.local_to_lapse_mappers[i].astype(np.long)
+                        self.local_to_lapse_mappers[i].astype(np.long)[update_mask]
                         + self.lapse_optimizer_index_offset,
-                        self.lapse_update_tensors[i],
+                        self.lapse_update_tensors[i][update_mask],
                     )
+                    # TODO: invalid device ordinal
                     state["sum"][:, :] = torch.from_numpy(
                         self.lapse_update_tensors[i]
                     ).to(state["sum"].device)
@@ -174,7 +182,7 @@ class DistAdagrad(Optimizer):
 
                     sum_update_values = grad_values.pow(2)
                     self.lapse_worker.push(
-                        self.local_to_lapse_mappers[i][grad_indices_flat.cpu().numpy()]
+                        self.local_to_lapse_mappers[i][update_mask]
                         + self.lapse_optimizer_index_offset,
                         sum_update_values.cpu().numpy(),
                     )
@@ -185,7 +193,7 @@ class DistAdagrad(Optimizer):
                     # update_value = make_sparse(grad_values / std_values).mul_(-clr)
                     update_value = (grad_values / std_values).mul_(-clr)
                     self.lapse_worker.push(
-                        self.local_to_lapse_mappers[i][grad_indices_flat.cpu().numpy()],
+                        self.local_to_lapse_mappers[i][update_mask],
                         update_value.cpu().numpy(),
                     )
                     # p.add_(make_sparse(grad_values / std_values), alpha=-clr)
@@ -195,10 +203,12 @@ class DistAdagrad(Optimizer):
                         self.lapse_update_tensors[i] = np.zeros(
                             p.shape, dtype=np.float32
                         )
+                    update_mask = self.local_to_lapse_mappers[i] != -1
+                    # Todo: we write in a new tensor here
                     self.lapse_worker.pull(
-                        self.local_to_lapse_mappers[i].astype(np.long)
-                        + self.lapse_optimizer_index_offset,
-                        self.lapse_update_tensors[i],
+                        (self.local_to_lapse_mappers[i].astype(np.long)
+                         + self.lapse_optimizer_index_offset)[update_mask],
+                        self.lapse_update_tensors[i][update_mask],
                     )
                     state["sum"][:, :] = torch.from_numpy(
                         self.lapse_update_tensors[i]
@@ -208,9 +218,9 @@ class DistAdagrad(Optimizer):
                     # state['sum'].addcmul_(grad, grad, value=1)
                     sum_update = grad * grad
                     self.lapse_worker.push(
-                        self.local_to_lapse_mappers[i]
-                        + self.lapse_optimizer_index_offset,
-                        sum_update.cpu().numpy(),
+                        (self.local_to_lapse_mappers[i]
+                        + self.lapse_optimizer_index_offset)[update_mask],
+                        sum_update.cpu().numpy()[update_mask],
                     )
                     state["sum"].add_(sum_update)
                     std = state["sum"].sqrt().add_(group["eps"])
@@ -220,7 +230,7 @@ class DistAdagrad(Optimizer):
                     # p.addcdiv_(grad, std, value=-clr)
                     update_value = -clr * grad / std
                     self.lapse_worker.push(
-                        self.local_to_lapse_mappers[i], update_value.cpu().numpy()
+                        self.local_to_lapse_mappers[i][update_mask], update_value.cpu().numpy()[update_mask]
                     )
 
         return loss
