@@ -9,21 +9,29 @@ train:
   optimizer_args:
     lr: 0.6
     #weight_decay: 0.4e-7
-  loss: margin_ranking
+  loss: kl
   loss_arg: 2.0  # margin
   batch_size: 512
 
 lookup_embedder.dim: 100
 lookup_embedder.sparse: True
 lookup_embedder.regularize_args.weighted: True
+lookup_embedder.regularize_weight: 0.0
+
+complex:
+  entity_embedder:
+    regularize_weight: 0.0
+  relation_embedder:
+    regularize_weight: 0.0
 
 negative_sampling:
+  shared: True
   num_samples:
-    s: 30
-    p: 30
+    s: 300
+    p: 0
     o: -1  # means: as s
   filtering:
-    s: True
-    o: True
-    p: True
+    s: False
+    o: False
+    p: False
     implementation: fast_if_available
