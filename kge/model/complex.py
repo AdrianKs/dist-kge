@@ -13,7 +13,7 @@ class ComplExScorer(RelationalScorer):
 
     """
 
-    def __init__(self, config: Config, dataset: Dataset, configuration_key=None, lapse_worker=None):
+    def __init__(self, config: Config, dataset: Dataset, configuration_key=None):
         super().__init__(config, dataset, configuration_key)
 
     def score_emb(self, s_emb, p_emb, o_emb, combine: str):

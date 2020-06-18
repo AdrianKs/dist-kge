@@ -57,6 +57,18 @@ class TrainingJob(Job):
         from kge.job import EvaluationJob
 
         super().__init__(config, dataset, parent_job)
+        self.lapse_worker = lapse_worker
+        # here we create one large model to init lapse and remove it afterwards
+        self.lapse_worker.barrier()
+        if self.lapse_worker.worker_id == 1:
+            self.config.set(self.config.get("model") + ".create_complete", True)
+            init_model = KgeModel.create(self.config, self.dataset,
+                                         lapse_worker=self.lapse_worker)
+            init_model.get_s_embedder().push_all()
+            init_model.get_p_embedder().push_all()
+            del init_model
+            self.config.set(self.config.get("model") + ".create_complete", False)
+        self.lapse_worker.barrier()
         if model is None:
             self.model: KgeModel = KgeModel.create(config, dataset, lapse_worker=lapse_worker)
         else:
@@ -197,54 +209,74 @@ class TrainingJob(Job):
             self.model.meta["train_config"] = self.config
             self.model.meta["train_trace_entry"] = trace_entry
 
-            # validate and update learning rate
-            if (
-                self.config.get("valid.every") > 0
-                and self.epoch % self.config.get("valid.every") == 0
-            ):
-                self.valid_job.epoch = self.epoch
-                trace_entry = self.valid_job.run()
-                self.valid_trace.append(trace_entry)
-                for f in self.post_valid_hooks:
-                    f(self, trace_entry)
-                self.model.meta["valid_trace_entry"] = trace_entry
+            print("done worker: ", self.lapse_worker.worker_id)
+            self.lapse_worker.barrier()
+            if self.lapse_worker.worker_id == 1:
+                # move current small model to a tmp model
+                self.model = self.model.cpu()
+                tmp_model = self.model
+                # create a new complete model, to be able to validate and store
+                self.config.set(self.config.get("model") + ".create_complete", True)
+                self.model = KgeModel.create(self.config, self.dataset, lapse_worker=self.lapse_worker)
+                self.model.get_s_embedder().pull_all()
+                self.model.get_p_embedder().pull_all()
+                self.model = self.model.to(self.device)
+                self.valid_job.model = self.model
+                print("device", self.device)
+                # TODO: we also need to create a new optimizer and pull everything
+                #  so that the internal adagrad values will be stored to the checkpoint
+                #  as well
+                # validate and update learning rate
+                if (
+                    self.config.get("valid.every") > 0
+                    and self.epoch % self.config.get("valid.every") == 0
+                ):
+                    self.valid_job.epoch = self.epoch
+                    trace_entry = self.valid_job.run()
+                    self.valid_trace.append(trace_entry)
+                    for f in self.post_valid_hooks:
+                        f(self, trace_entry)
+                    self.model.meta["valid_trace_entry"] = trace_entry
 
-                # metric-based scheduler step
-                self.kge_lr_scheduler.step(trace_entry[metric_name])
-            else:
-                self.kge_lr_scheduler.step()
+                    # metric-based scheduler step
+                    self.kge_lr_scheduler.step(trace_entry[metric_name])
+                else:
+                    self.kge_lr_scheduler.step()
 
-            # create checkpoint and delete old one, if necessary
-            self.save(self.config.checkpoint_file(self.epoch))
-            if self.epoch > 1:
-                delete_checkpoint_epoch = -1
-                if checkpoint_every == 0:
-                    # do not keep any old checkpoints
-                    delete_checkpoint_epoch = self.epoch - 1
-                elif (self.epoch - 1) % checkpoint_every != 0:
-                    # delete checkpoints that are not in the checkpoint.every schedule
-                    delete_checkpoint_epoch = self.epoch - 1
-                elif checkpoint_keep > 0:
-                    # keep a maximum number of checkpoint_keep checkpoints
-                    delete_checkpoint_epoch = (
-                        self.epoch - 1 - checkpoint_every * checkpoint_keep
-                    )
-                if delete_checkpoint_epoch > 0:
-                    if os.path.exists(
-                        self.config.checkpoint_file(delete_checkpoint_epoch)
-                    ):
-                        self.config.log(
-                            "Removing old checkpoint {}...".format(
-                                self.config.checkpoint_file(delete_checkpoint_epoch)
-                            )
+                # create checkpoint and delete old one, if necessary
+                self.save(self.config.checkpoint_file(self.epoch))
+                if self.epoch > 1:
+                    delete_checkpoint_epoch = -1
+                    if checkpoint_every == 0:
+                        # do not keep any old checkpoints
+                        delete_checkpoint_epoch = self.epoch - 1
+                    elif (self.epoch - 1) % checkpoint_every != 0:
+                        # delete checkpoints that are not in the checkpoint.every schedule
+                        delete_checkpoint_epoch = self.epoch - 1
+                    elif checkpoint_keep > 0:
+                        # keep a maximum number of checkpoint_keep checkpoints
+                        delete_checkpoint_epoch = (
+                            self.epoch - 1 - checkpoint_every * checkpoint_keep
                         )
-                        os.remove(self.config.checkpoint_file(delete_checkpoint_epoch))
-                    else:
-                        self.config.log(
-                            "Could not delete old checkpoint {}, does not exits.".format(
-                                self.config.checkpoint_file(delete_checkpoint_epoch)
+                    if delete_checkpoint_epoch > 0:
+                        if os.path.exists(
+                            self.config.checkpoint_file(delete_checkpoint_epoch)
+                        ):
+                            self.config.log(
+                                "Removing old checkpoint {}...".format(
+                                    self.config.checkpoint_file(delete_checkpoint_epoch)
+                                )
                             )
-                        )
+                            os.remove(self.config.checkpoint_file(delete_checkpoint_epoch))
+                        else:
+                            self.config.log(
+                                "Could not delete old checkpoint {}, does not exits.".format(
+                                    self.config.checkpoint_file(delete_checkpoint_epoch)
+                                )
+                            )
+                self.config.set(self.config.get("model") + ".create_complete", False)
+                self.model = tmp_model.to(self.device)
+            self.lapse_worker.barrier()
 
         for f in self.post_train_hooks:
             f(self, trace_entry)
@@ -312,8 +344,11 @@ class TrainingJob(Job):
         backward_time = 0.0
         optimizer_time = 0.0
 
+        print("before batch worker: ", self.lapse_worker.worker_id)
+
         # process each batch
         for batch_index, batch in enumerate(self.loader):
+            print("in batch worker: ", self.lapse_worker.worker_id)
             for f in self.pre_batch_hooks:
                 f(self)
 

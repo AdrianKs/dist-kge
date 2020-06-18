@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 from torch.optim.optimizer import Optimizer
+from copy import deepcopy
 
 # TODO: pull optimizer values from lapse before computing anything
 #  support lapse sparse adagrad
@@ -164,14 +165,15 @@ class DistAdagrad(Optimizer):
                     #  sometimes the tensor is even freed before we even write in it
                     update_mask = np.zeros(len(self.local_to_lapse_mappers[i]), dtype=np.bool)
                     update_mask[grad_indices_flat.cpu().numpy()] = True
+                    update_tensor = np.zeros((np.sum(update_mask), grad.size()[1]), dtype=np.float32)
                     self.lapse_worker.pull(
                         self.local_to_lapse_mappers[i].astype(np.long)[update_mask]
                         + self.lapse_optimizer_index_offset,
-                        self.lapse_update_tensors[i][update_mask],
+                        update_tensor,
                     )
                     # TODO: invalid device ordinal
-                    state["sum"][:, :] = torch.from_numpy(
-                        self.lapse_update_tensors[i]
+                    state["sum"][update_mask] = torch.from_numpy(
+                        update_tensor
                     ).to(state["sum"].device)
 
                     def make_sparse(values):
@@ -199,29 +201,36 @@ class DistAdagrad(Optimizer):
                     # p.add_(make_sparse(grad_values / std_values), alpha=-clr)
                 else:
                     # pull the current internal optimizer parameters
-                    if self.lapse_update_tensors[i] is None:
-                        self.lapse_update_tensors[i] = np.zeros(
-                            p.shape, dtype=np.float32
-                        )
                     update_mask = self.local_to_lapse_mappers[i] != -1
-                    # Todo: we write in a new tensor here
-                    self.lapse_worker.pull(
-                        (self.local_to_lapse_mappers[i].astype(np.long)
-                         + self.lapse_optimizer_index_offset)[update_mask],
-                        self.lapse_update_tensors[i][update_mask],
+                    update_tensor = np.zeros((np.sum(update_mask), p.shape[1]), dtype=np.float32)
+                    keys_optim = deepcopy(((deepcopy(self.local_to_lapse_mappers[i].astype(np.long))
+                                           + self.lapse_optimizer_index_offset)[update_mask]))
+                    keys_optim_2 = deepcopy(keys_optim)
+                    if keys_optim_2.max() > 784:
+                        print("somethings off1")
+                    contains_negative = np.sum(keys_optim < 0)
+                    print("before pull: worker: ", self.lapse_worker.worker_id, "key shape: ", keys_optim.shape, "tensor shape", update_tensor.shape, "contains neg: ", contains_negative, "max key: ", keys_optim.max())
+                    self.lapse_worker.pull(keys_optim,
+                        update_tensor
                     )
-                    state["sum"][:, :] = torch.from_numpy(
-                        self.lapse_update_tensors[i]
+                    print("after pull: ", self.lapse_worker.worker_id)
+                    state["sum"][update_mask] = torch.from_numpy(
+                        update_tensor
                     ).to(state["sum"].device)
 
                     # push the updated internal optimizer parameters to lapse
                     # state['sum'].addcmul_(grad, grad, value=1)
                     sum_update = grad * grad
+                    contains_negative_2 = np.sum(keys_optim_2 < 0)
+                    if keys_optim_2.max() > 784:
+                        print("somethings off2")
+                    print("before push1: worker: ", self.lapse_worker.worker_id, "key shape: ", keys_optim_2.shape, "key type:", keys_optim_2.dtype, "tensor shape", update_tensor.shape, "contains neg: ", contains_negative_2, "max key: ", keys_optim_2.max())
+                    print(keys_optim.__array_interface__['data'], keys_optim_2.__array_interface__['data'])
                     self.lapse_worker.push(
-                        (self.local_to_lapse_mappers[i]
-                        + self.lapse_optimizer_index_offset)[update_mask],
+                        keys_optim_2,
                         sum_update.cpu().numpy()[update_mask],
                     )
+                    print("after push1: ", self.lapse_worker.worker_id)
                     state["sum"].add_(sum_update)
                     std = state["sum"].sqrt().add_(group["eps"])
 
@@ -229,8 +238,10 @@ class DistAdagrad(Optimizer):
                     # updates to lapse
                     # p.addcdiv_(grad, std, value=-clr)
                     update_value = -clr * grad / std
+                    print("before push2: ", self.lapse_worker.worker_id)
                     self.lapse_worker.push(
                         self.local_to_lapse_mappers[i][update_mask], update_value.cpu().numpy()[update_mask]
                     )
+                    print("after push2: ", self.lapse_worker.worker_id)
 
         return loss

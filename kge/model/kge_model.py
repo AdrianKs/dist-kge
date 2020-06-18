@@ -303,7 +303,10 @@ class KgeModel(KgeBase):
         self._relation_embedder: KgeEmbedder
 
         if initialize_embedders:
-            embedding_layer_size = self._calc_embedding_layer_size(config, dataset)
+            if self.get_option("create_complete"):
+                embedding_layer_size = dataset.num_entities()
+            else:
+                embedding_layer_size = self._calc_embedding_layer_size(config, dataset)
             self._entity_embedder = KgeEmbedder.create(
                 config,
                 dataset,
@@ -338,29 +341,20 @@ class KgeModel(KgeBase):
 
     @staticmethod
     def _calc_embedding_layer_size(config, dataset):
-        #if config.get("train.type") == "cpu_gpu":
         num_samples_s = config.get("negative_sampling.num_samples.s")
         if config.get("negative_sampling.num_samples.o") == -1:
             num_samples_o = config.get("negative_sampling.num_samples.s")
         else:
             num_samples_o = config.get("negative_sampling.num_samples.o")
         batch_size = config.get("train.batch_size")
-        #eval_batch_size = config.get("eval.batch_size")
-        #config_chunk_size = config.get("eval.chunk_size")
-        #chunk_size = dataset.num_entities() if config_chunk_size == -1 else config_chunk_size
-        #eval_size = min(chunk_size + 2 * eval_batch_size, dataset.num_entities())
 
         if config.get("negative_sampling.shared"):
             embedding_layer_size = batch_size * 2 + num_samples_s + num_samples_o
         else:
             embedding_layer_size = batch_size * 2 + int(
                 (num_samples_s + num_samples_o) * batch_size)
-        #embedding_layer_size = max(min(embedding_layer_size,
-        #                               dataset.num_entities()), eval_size)
         embedding_layer_size = min(embedding_layer_size,
                                        dataset.num_entities())
-        #else:
-        #    embedding_layer_size = dataset.num_entities()
         return embedding_layer_size
 
     # overridden to also set self.model

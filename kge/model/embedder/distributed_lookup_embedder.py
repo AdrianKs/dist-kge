@@ -68,9 +68,6 @@ class DistributedLookupEmbedder(KgeEmbedder):
         self.local_index_mapper = torch.zeros(complete_vocab_size, dtype=torch.int)-1  # maps the id from the dataset to the id of the embedding here in the embedder
         self.local_to_lapse_mapper = np.zeros(vocab_size, dtype=np.int)-1  # maps the local embeddings to the embeddings in lapse
         self.num_pulled = 0
-        # TODO: here we initialize the values in lapse from every worker
-        #  would be nice, if we could do this once globally for all parameters
-        self.lapse_worker.push(self.lapse_index[np.arange(self.vocab_size)], self._embeddings.weight.detach().numpy())
 
     def prepare_job(self, job: Job, **kwargs):
         super().prepare_job(job, **kwargs)
@@ -91,6 +88,13 @@ class DistributedLookupEmbedder(KgeEmbedder):
 
             job.pre_batch_hooks.append(normalize_embeddings)
 
+    def push_all(self):
+        self.lapse_worker.push(self.lapse_index[np.arange(self.vocab_size)],
+                               self._embeddings.weight.detach().cpu().numpy())
+
+    def pull_all(self):
+        self._pull_embeddings(torch.arange(self.complete_vocab_size))
+
     def _pull_embeddings(self, indexes):
         local_indexes = self.local_index_mapper[indexes]
         missing_mask = local_indexes == -1
@@ -102,7 +106,7 @@ class DistributedLookupEmbedder(KgeEmbedder):
             #self.lapse_worker.localize(keys=self.lapse_index[missing_local_indexes])
             # TODO: we still create a new tensor here. We can not just convert a tensor
             #  to numpy, which needs grad, since grad would have to be dropped
-            current_embeddings = self._embeddings.weight[missing_local_indexes, :].cpu().numpy()
+            current_embeddings = self._embeddings.weight[missing_local_indexes, :].detach().cpu().numpy()
             pull_indexes = self.lapse_index[indexes[missing_mask].cpu()].reshape(-1)
             self.lapse_worker.pull(pull_indexes,
                                    current_embeddings)
