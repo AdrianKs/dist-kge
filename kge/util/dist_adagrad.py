@@ -203,34 +203,32 @@ class DistAdagrad(Optimizer):
                     # pull the current internal optimizer parameters
                     update_mask = self.local_to_lapse_mappers[i] != -1
                     update_tensor = np.zeros((np.sum(update_mask), p.shape[1]), dtype=np.float32)
-                    keys_optim = deepcopy(((deepcopy(self.local_to_lapse_mappers[i].astype(np.long))
-                                           + self.lapse_optimizer_index_offset)[update_mask]))
-                    keys_optim_2 = deepcopy(keys_optim)
-                    if keys_optim_2.max() > 784:
-                        print("somethings off1")
+                    keys_optim = (self.local_to_lapse_mappers[i].astype(np.uint64)
+                                  + self.lapse_optimizer_index_offset)[update_mask]
+                    keys_sort_map = np.argsort(keys_optim)
+                    keys_optim_sorted, keys_sort_inverse_map = np.unique(keys_optim, return_inverse=True)
                     contains_negative = np.sum(keys_optim < 0)
-                    print("before pull: worker: ", self.lapse_worker.worker_id, "key shape: ", keys_optim.shape, "tensor shape", update_tensor.shape, "contains neg: ", contains_negative, "max key: ", keys_optim.max())
-                    self.lapse_worker.pull(keys_optim,
+                    #print("before pull: worker:", self.lapse_worker.worker_id,
+                    #      "key shape:", keys_optim.shape,
+                    #      "unique_keys:", len(np.unique(keys_optim)),
+                    #      "tensor shape:", update_tensor.shape,
+                    #      "contains neg:", contains_negative,
+                    #      "max key: ", keys_optim.max())
+                    self.lapse_worker.pull(keys_optim_sorted,
                         update_tensor
                     )
-                    print("after pull: ", self.lapse_worker.worker_id)
+                    #print("after pull: ", self.lapse_worker.worker_id)
                     state["sum"][update_mask] = torch.from_numpy(
-                        update_tensor
+                        update_tensor[keys_sort_inverse_map]
                     ).to(state["sum"].device)
 
                     # push the updated internal optimizer parameters to lapse
                     # state['sum'].addcmul_(grad, grad, value=1)
                     sum_update = grad * grad
-                    contains_negative_2 = np.sum(keys_optim_2 < 0)
-                    if keys_optim_2.max() > 784:
-                        print("somethings off2")
-                    print("before push1: worker: ", self.lapse_worker.worker_id, "key shape: ", keys_optim_2.shape, "key type:", keys_optim_2.dtype, "tensor shape", update_tensor.shape, "contains neg: ", contains_negative_2, "max key: ", keys_optim_2.max())
-                    print(keys_optim.__array_interface__['data'], keys_optim_2.__array_interface__['data'])
                     self.lapse_worker.push(
-                        keys_optim_2,
-                        sum_update.cpu().numpy()[update_mask],
+                        keys_optim_sorted,
+                        sum_update.cpu().numpy()[update_mask][keys_sort_map],
                     )
-                    print("after push1: ", self.lapse_worker.worker_id)
                     state["sum"].add_(sum_update)
                     std = state["sum"].sqrt().add_(group["eps"])
 
@@ -238,10 +236,9 @@ class DistAdagrad(Optimizer):
                     # updates to lapse
                     # p.addcdiv_(grad, std, value=-clr)
                     update_value = -clr * grad / std
-                    print("before push2: ", self.lapse_worker.worker_id)
                     self.lapse_worker.push(
-                        self.local_to_lapse_mappers[i][update_mask], update_value.cpu().numpy()[update_mask]
+                        self.local_to_lapse_mappers[i][update_mask].astype(np.uint64)[keys_sort_map],
+                        update_value.cpu().numpy()[update_mask][keys_sort_map]
                     )
-                    print("after push2: ", self.lapse_worker.worker_id)
 
         return loss
