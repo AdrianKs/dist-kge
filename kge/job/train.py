@@ -69,6 +69,7 @@ class TrainingJob(Job):
             del init_model
             self.config.set(self.config.get("model") + ".create_complete", False)
         self.lapse_worker.barrier()
+
         if model is None:
             self.model: KgeModel = KgeModel.create(config, dataset, lapse_worker=lapse_worker)
         else:
@@ -344,11 +345,8 @@ class TrainingJob(Job):
         backward_time = 0.0
         optimizer_time = 0.0
 
-        print("before batch worker: ", self.lapse_worker.worker_id)
-
         # process each batch
         for batch_index, batch in enumerate(self.loader):
-            print("in batch worker: ", self.lapse_worker.worker_id)
             for f in self.pre_batch_hooks:
                 f(self)
 
