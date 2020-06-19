@@ -349,7 +349,7 @@ class KgeModel(KgeBase):
         batch_size = config.get("train.batch_size")
 
         if config.get("negative_sampling.shared"):
-            embedding_layer_size = batch_size * 2 + num_samples_s + num_samples_o
+            embedding_layer_size = batch_size * 2 + num_samples_s + 1 + num_samples_o + 1
         else:
             embedding_layer_size = batch_size * 2 + int(
                 (num_samples_s + num_samples_o) * batch_size)
