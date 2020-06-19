@@ -20,11 +20,11 @@ from copy import deepcopy
 from torch import multiprocessing as mp
 import time
 
-servers = 2
+servers = 4
 num_workers_per_server = 1
 localip = "127.0.0.1"
 port = "9091"
-mp.set_start_method('spawn', force=True)
+mp.set_start_method("spawn", force=True)
 
 
 class LapseWorker(lapse.Worker):
@@ -34,20 +34,20 @@ class LapseWorker(lapse.Worker):
 
 
 def init_scheduler(servers, num_keys):
-    os.environ['DMLC_NUM_WORKER'] = '0'
-    os.environ['DMLC_NUM_SERVER'] = str(servers)
-    os.environ['DMLC_ROLE'] = 'scheduler'
-    os.environ['DMLC_PS_ROOT_URI'] = localip
-    os.environ['DMLC_PS_ROOT_PORT'] = port
+    os.environ["DMLC_NUM_WORKER"] = "0"
+    os.environ["DMLC_NUM_SERVER"] = str(servers)
+    os.environ["DMLC_ROLE"] = "scheduler"
+    os.environ["DMLC_PS_ROOT_URI"] = localip
+    os.environ["DMLC_PS_ROOT_PORT"] = port
     lapse.scheduler(num_keys, num_workers_per_server)
 
 
 def init_server(rank, servers, num_keys, embedding_dim, config, dataset):
-    os.environ['DMLC_NUM_WORKER'] = '0'
-    os.environ['DMLC_NUM_SERVER'] = str(servers)
-    os.environ['DMLC_ROLE'] = 'server'
-    os.environ['DMLC_PS_ROOT_URI'] = localip
-    os.environ['DMLC_PS_ROOT_PORT'] = port
+    os.environ["DMLC_NUM_WORKER"] = "0"
+    os.environ["DMLC_NUM_SERVER"] = str(servers)
+    os.environ["DMLC_ROLE"] = "server"
+    os.environ["DMLC_PS_ROOT_URI"] = localip
+    os.environ["DMLC_PS_ROOT_PORT"] = port
 
     lapse.setup(num_keys, num_workers_per_server)
     s = lapse.Server(num_keys, embedding_dim)
@@ -66,21 +66,21 @@ def init_server(rank, servers, num_keys, embedding_dim, config, dataset):
         configs[w].folder = os.path.join(config.folder, f"worker-{w}")
         configs[w].init_folder()
         datasets[w] = deepcopy(dataset)
-        datasets[w] = Dataset.create(configs[w],
-                                     folder=os.path.join(dataset.folder,
-                                                         f"partition_{worker_id}"))
-        #datasets[w] = Dataset.create(configs[w], dataset.folder)
+        datasets[w] = Dataset.create(
+            configs[w], folder=os.path.join(dataset.folder, f"partition_{worker_id}")
+        )
+        # datasets[w] = Dataset.create(configs[w], dataset.folder)
         # kv = lapse.Worker(0, worker_id + 1, s)
         kv = LapseWorker(0, worker_id + 1, s)
         job = Job.create(configs[w], datasets[w], lapse_worker=kv)
         job.run()
-        #p = threading.Thread(target=job.run)
-        #p.start()
-        #processes.append(p)
+        # p = threading.Thread(target=job.run)
+        # p.start()
+        # processes.append(p)
     for p in processes:
         p.join()
     end_time = time.time()
-    print(end_time-start_time)
+    print(end_time - start_time)
 
     # shutdown server
     s.shutdown()
@@ -242,25 +242,34 @@ def main():
             else:
                 configs = {}
                 processes = []
-                p = mp.Process(target=init_scheduler, args=(servers, dataset.num_entities()))
-                p.start()
-                processes.append(p)
                 num_keys = dataset.num_entities() + dataset.num_relations()
                 if config.get("train.optimizer") == "dist_adagrad":
                     num_keys *= 2
-                mp.set_start_method('spawn', force=True)
+                p = mp.Process(target=init_scheduler, args=(servers, num_keys))
+                p.start()
+                processes.append(p)
                 for rank in range(servers):
                     configs[rank] = deepcopy(config)
                     configs[rank].set(config.get("model") + ".create_complete", False)
                     configs[rank].folder = os.path.join(config.folder, f"server-{rank}")
                     configs[rank].init_folder()
                     print("before init server")
-                    p = mp.Process(target=init_server, args=(rank, servers, num_keys, config.get("lookup_embedder.dim"), configs[rank], dataset))
+                    p = mp.Process(
+                        target=init_server,
+                        args=(
+                            rank,
+                            servers,
+                            num_keys,
+                            config.get("lookup_embedder.dim"),
+                            configs[rank],
+                            dataset,
+                        ),
+                    )
                     p.start()
                     processes.append(p)
                 for p in processes:
                     p.join()
-            #job.run()
+            # job.run()
     except BaseException as e:
         tb = traceback.format_exc()
         config.log(tb, echo=False)
