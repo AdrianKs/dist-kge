@@ -121,33 +121,8 @@ class DistributedLookupEmbedder(KgeEmbedder):
     def embed(self, indexes: Tensor) -> Tensor:
         long_indexes = indexes.long()
         with torch.no_grad():
-            #self.lapse_worker.pull(np.array([1,2,3,4]), np.ones(4*100))  # self._embeddings.weight[long_indexes, :].numpy().flatten())
             long_unique_indexes = torch.unique(long_indexes)
             self._pull_embeddings(long_unique_indexes)
-
-            #numpy_unique_indexes = long_unique_indexes.numpy().flatten()
-            # if 0 in numpy_unique_indexes:
-            #     print("before pull")
-            #     print(self._embeddings.weight[long_unique_indexes, :])
-            #self._embeddings.weight.requires_grad=False
-            # TODO: we still create a new tensor here. We can not just convert a tensor
-            #  to numpy, which needs grad, since grad would have to be dropped
-            #current_embeddings = self._embeddings.weight[long_unique_indexes, :].numpy()
-            #self.lapse_worker.pull(self.lapse_index[numpy_unique_indexes], current_embeddings)
-            #self._embeddings.weight[long_unique_indexes, :] = torch.from_numpy(current_embeddings)
-            #self._embeddings.weight.requires_grad=True
-            # if 0 in numpy_unique_indexes:
-            #     print("after pull")
-            #     print(self._embeddings.weight[long_unique_indexes, :])
-            # test_values = torch.ones([2, 100], dtype=torch.float32)
-            # self.lapse_worker.pull([0, 1], test_values.numpy())
-            # print(test_values)
-            #if self.cached_indexes is not None:
-            #    if len(numpy_unique_indexes) == self.vocab_size:
-            #        self.cached_indexes = None
-            #    else:
-            #        self.cached_indexes.append(numpy_unique_indexes)
-
         return self._postprocess(self._embeddings(self.local_index_mapper[long_indexes].to(self._embeddings.weight.device).long()))
 
     def embed_all(self) -> Tensor:
