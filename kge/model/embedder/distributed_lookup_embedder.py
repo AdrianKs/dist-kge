@@ -89,7 +89,7 @@ class DistributedLookupEmbedder(KgeEmbedder):
             job.pre_batch_hooks.append(normalize_embeddings)
 
     def push_all(self):
-        self.lapse_worker.push(self.lapse_index[np.arange(self.vocab_size)],
+        self.lapse_worker.push(self.lapse_index[np.arange(self.vocab_size)].astype(np.uint64),
                                self._embeddings.weight.detach().cpu().numpy())
 
     def pull_all(self):
@@ -108,7 +108,7 @@ class DistributedLookupEmbedder(KgeEmbedder):
             #  to numpy, which needs grad, since grad would have to be dropped
             current_embeddings = self._embeddings.weight[missing_local_indexes, :].detach().cpu().numpy()
             pull_indexes = self.lapse_index[indexes[missing_mask].cpu()].reshape(-1)
-            self.lapse_worker.pull(pull_indexes,
+            self.lapse_worker.pull(pull_indexes.astype(np.uint64),
                                    current_embeddings)
             self._embeddings.weight[missing_local_indexes, :] = torch.from_numpy(
                 current_embeddings).to(self._embeddings.weight.device)
@@ -116,7 +116,7 @@ class DistributedLookupEmbedder(KgeEmbedder):
             # update local index mapper
             self.local_index_mapper[indexes[missing_mask]] = missing_local_indexes.int()
             # update local to lapse mapper
-            self.local_to_lapse_mapper[missing_local_indexes] = pull_indexes
+            self.local_to_lapse_mapper[missing_local_indexes.numpy()] = pull_indexes
 
     def embed(self, indexes: Tensor) -> Tensor:
         long_indexes = indexes.long()
