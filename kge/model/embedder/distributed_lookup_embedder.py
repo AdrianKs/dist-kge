@@ -6,87 +6,24 @@ import numpy as np
 import lapse
 
 from kge import Config, Dataset
-from kge.job import Job
-from kge.model import KgeEmbedder
-from kge.misc import round_to_points
+from kge.model import LookupEmbedder
 
 from typing import List
 
 
-class DistributedLookupEmbedder(KgeEmbedder):
+class DistributedLookupEmbedder(LookupEmbedder):
     def __init__(
         self, config: Config, dataset: Dataset, configuration_key: str, vocab_size: int, lapse_worker: lapse.Worker, lapse_index: np.ndarray, complete_vocab_size
     ):
-        super().__init__(config, dataset, configuration_key)
+        super().__init__(config, dataset, configuration_key, vocab_size)
 
-        # read config
-        self.normalize_p = self.get_option("normalize.p")
-        self.normalize_with_grad = self.get_option("normalize.with_grad")
-        self.regularize = self.check_option("regularize", ["", "lp"])
-        self.sparse = self.get_option("sparse")
-        self.config.check("train.trace_level", ["batch", "epoch"])
-        self.vocab_size = vocab_size
         self.complete_vocab_size = complete_vocab_size
-        self.cached_indexes = []
-
-        round_embedder_dim_to = self.get_option("round_dim_to")
-        if len(round_embedder_dim_to) > 0:
-            self.dim = round_to_points(round_embedder_dim_to, self.dim)
-
-        # setup embedder
-        self._embeddings = torch.nn.Embedding(
-            self.vocab_size, self.dim, sparse=self.sparse
-        )
-
-        # initialize weights
-        init_ = self.get_option("initialize")
-        try:
-            init_args = self.get_option("initialize_args." + init_)
-        except KeyError:
-            init_args = self.get_option("initialize_args")
-
-        # Automatically set arg a (lower bound) for uniform_ if not given
-        if init_ == "uniform_" and "a" not in init_args:
-            init_args["a"] = init_args["b"] * -1
-            self.set_option("initialize_args.a", init_args["a"], log=True)
-
-        self.initialize(self._embeddings.weight.data, init_, init_args)
-
-        # TODO handling negative dropout because using it with ax searches for now
-        dropout = self.get_option("dropout")
-        if dropout < 0:
-            if config.get("train.auto_correct"):
-                config.log(
-                    "Setting {}.dropout to 0, "
-                    "was set to {}.".format(configuration_key, dropout)
-                )
-                dropout = 0
-        self.dropout = torch.nn.Dropout(dropout)
         self.lapse_worker = lapse_worker
         self.lapse_index = lapse_index  # maps the id from the dataset to the id stored in lapse
         #self.local_index_mapper = torch.arange(complete_vocab_size, dtype=torch.int)
-        self.local_index_mapper = torch.zeros(complete_vocab_size, dtype=torch.int)-1  # maps the id from the dataset to the id of the embedding here in the embedder
+        self.local_index_mapper = torch.zeros(self.complete_vocab_size, dtype=torch.int)-1  # maps the id from the dataset to the id of the embedding here in the embedder
         self.local_to_lapse_mapper = np.zeros(vocab_size, dtype=np.int)-1  # maps the local embeddings to the embeddings in lapse
         self.num_pulled = 0
-
-    def prepare_job(self, job: Job, **kwargs):
-        super().prepare_job(job, **kwargs)
-        if self.normalize_p > 0:
-
-            def normalize_embeddings(job):
-                if self.normalize_with_grad:
-                    self._embeddings.weight = torch.nn.functional.normalize(
-                        self._embeddings.weight, p=self.normalize_p, dim=-1
-                    )
-                else:
-                    with torch.no_grad():
-                        self._embeddings.weight = torch.nn.Parameter(
-                            torch.nn.functional.normalize(
-                                self._embeddings.weight, p=self.normalize_p, dim=-1
-                            )
-                        )
-
-            job.pre_batch_hooks.append(normalize_embeddings)
 
     def push_all(self):
         self.lapse_worker.push(self.lapse_index[np.arange(self.vocab_size)].astype(np.uint64),
@@ -141,15 +78,6 @@ class DistributedLookupEmbedder(KgeEmbedder):
 
     def embed_all(self) -> Tensor:
         raise NotImplementedError
-        all_indexes = np.arange(self.vocab_size)
-        with torch.no_grad():
-            self.lapse_worker.localize(keys=all_indexes)
-            self.lapse_worker.pull(all_indexes,
-                                   self._embeddings.weight[all_indexes,
-                                   :].numpy())
-            self.cached_indexes = None
-
-        return self._postprocess(self._embeddings_all())
 
     @torch.no_grad()
     def push_back(self):
@@ -164,20 +92,9 @@ class DistributedLookupEmbedder(KgeEmbedder):
         # self.lapse_worker.push(self.lapse_index[indexes], self._embeddings.weight[indexes, :].numpy())
         # self.cached_indexes = []
 
-    def _postprocess(self, embeddings: Tensor) -> Tensor:
-        if self.dropout.p > 0:
-            embeddings = self.dropout(embeddings)
-        return embeddings
-
     def _embeddings_all(self) -> Tensor:
-        return self._embeddings(
-            torch.arange(
-                self.vocab_size, dtype=torch.long, device=self._embeddings.weight.device
-            )
-        )
-
-    def _get_regularize_weight(self) -> Tensor:
-        return self.get_option("regularize_weight")
+        # TODO: this should not be possible in the distributed lookup embedder
+        raise NotImplementedError
 
     def penalty(self, **kwargs) -> List[Tensor]:
         # TODO factor out to a utility method
