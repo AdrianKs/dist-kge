@@ -211,6 +211,7 @@ class TrainingJob(Job):
             self.model.meta["train_trace_entry"] = trace_entry
 
             print("done worker: ", self.lapse_worker.worker_id)
+            self.model.cpu()
             self.lapse_worker.barrier()
             if self.lapse_worker.worker_id == 1:
                 # move current small model to a tmp model
@@ -276,8 +277,9 @@ class TrainingJob(Job):
                                 )
                             )
                 self.config.set(self.config.get("model") + ".create_complete", False)
-                self.model = tmp_model.to(self.device)
+                self.model = tmp_model
             self.lapse_worker.barrier()
+            self.model.to(self.device)
 
         for f in self.post_train_hooks:
             f(self, trace_entry)
