@@ -6,7 +6,7 @@ import numpy as np
 import lapse
 
 from kge import Config, Dataset
-from kge.model import LookupEmbedder
+from kge.model import LookupEmbedder, KgeEmbedder
 
 from typing import List
 
@@ -98,7 +98,8 @@ class DistributedLookupEmbedder(LookupEmbedder):
 
     def penalty(self, **kwargs) -> List[Tensor]:
         # TODO factor out to a utility method
-        result = super().penalty(**kwargs)
+        # Avoid calling lookup embedder penalty and instead call KgeEmbedder penalty
+        result = KgeEmbedder.penalty(self, **kwargs)
         if self.regularize == "" or self.get_option("regularize_weight") == 0.0:
             pass
         elif self.regularize == "lp":
