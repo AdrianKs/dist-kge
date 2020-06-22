@@ -118,6 +118,20 @@ class DistributedLookupEmbedder(KgeEmbedder):
             # update local to lapse mapper
             self.local_to_lapse_mapper[missing_local_indexes.numpy()] = pull_indexes
 
+    def localize(self, indexes: Tensor):
+        unique_indexes = torch.unique(indexes).cpu().numpy().astype(np.uint64)
+        self.lapse_worker.localize(unique_indexes)
+        # TODO: also pull the embeddings and store in a tensor on gpu
+        #  this needs to be handled in the background somehow
+        #  to device can be done in background, but this needs to wait for localize
+
+    def _embed(self, indexes: Tensor) -> Tensor:
+        long_indexes = indexes.long()
+        with torch.no_grad():
+            long_unique_indexes = torch.unique(long_indexes)
+            self._pull_embeddings(long_unique_indexes)
+        return self._embeddings(self.local_index_mapper[long_indexes].to(self._embeddings.weight.device).long())
+
     def embed(self, indexes: Tensor) -> Tensor:
         long_indexes = indexes.long()
         with torch.no_grad():
@@ -191,7 +205,7 @@ class DistributedLookupEmbedder(KgeEmbedder):
                 unique_indexes, counts = torch.unique(
                     kwargs["indexes"], return_counts=True
                 )
-                parameters = self._embeddings(unique_indexes)
+                parameters = self._embed(unique_indexes)
                 if p % 2 == 1:
                     parameters = torch.abs(parameters)
                 result += [
