@@ -219,3 +219,25 @@ class DistAdagrad(Optimizer):
                     )
 
         return loss
+
+    def pull_all(self):
+        # get all optimizer parameters out of lapse
+        for group in self.param_groups:
+            for i, p in enumerate(group["params"]):
+                if p.grad is None:
+                    continue
+                state = self.state[p]
+                update_tensor = np.zeros_like(p)
+                keys_optim = np.arange(p.shape[0]) + self.lapse_optimizer_index_offset[i]
+                self.lapse_worker.pull(keys_optim, update_tensor)
+                state['sum'][:, :] = torch.from_numpy(update_tensor)
+
+    def push_all(self):
+        # push all optimizer parameters into lapse
+        for group in self.param_groups:
+            for i, p in enumerate(group["params"]):
+                if p.grad is None:
+                    continue
+                state = self.state[p]
+                keys_optim = np.arange(p.shape[0]) + self.lapse_optimizer_index_offset[i]
+                self.lapse_worker.push(keys_optim, state['sum'].cpu().numpy())

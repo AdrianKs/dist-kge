@@ -6,6 +6,7 @@ import traceback
 import yaml
 
 import lapse
+import numpy as np
 
 from kge import Dataset
 from kge import Config
@@ -19,8 +20,9 @@ from kge.normal_cli import create_parser, process_meta_command, argparse_bool_ty
 from copy import deepcopy
 from torch import multiprocessing as mp
 import time
+from typing import Optional, Dict
 
-servers = 4
+servers = 2
 num_workers_per_server = 1
 localip = "127.0.0.1"
 port = "9091"
@@ -28,9 +30,23 @@ mp.set_start_method("spawn", force=True)
 
 
 class LapseWorker(lapse.Worker):
-    def __init__(self, customer_id: int, worker_id: int, lapse_server: lapse.Server):
+    def __init__(self, customer_id: int, worker_id: int, lapse_server: lapse.Server, num_meta_keys):
         super(LapseWorker, self).__init__(customer_id, worker_id, lapse_server)
         self.worker_id = worker_id
+        self.num_meta_keys = num_meta_keys
+        self._stop_key = self.num_keys - self.num_meta_keys
+        self._stop_value_tensor = np.zeros((1, self.key_size), dtype=np.float32)
+        self.meta_key_tensor = np.zeros((self.num_meta_keys, self.key_size), dtype=np.float32)
+
+    def stop(self):
+        self.push(np.array([self._stop_key], dtype=np.uint64), np.ones((1, self.key_size), dtype=np.float32))
+
+    def is_stopped(self) -> bool:
+        self.pull(np.array([self._stop_key], dtype=np.uint64), self._stop_value_tensor)
+        if np.any(self._stop_value_tensor[0] == 1):
+            return True
+        else:
+            return False
 
 
 def init_scheduler(servers, num_keys):
@@ -42,7 +58,7 @@ def init_scheduler(servers, num_keys):
     lapse.scheduler(num_keys, num_workers_per_server)
 
 
-def init_server(rank, servers, num_keys, embedding_dim, config, dataset):
+def init_server(rank, servers, num_keys, num_meta_keys, embedding_dim, config, dataset, checkpoint: Optional[Dict] = None):
     os.environ["DMLC_NUM_WORKER"] = "0"
     os.environ["DMLC_NUM_SERVER"] = str(servers)
     os.environ["DMLC_ROLE"] = "server"
@@ -71,8 +87,17 @@ def init_server(rank, servers, num_keys, embedding_dim, config, dataset):
         )
         # datasets[w] = Dataset.create(configs[w], dataset.folder)
         # kv = lapse.Worker(0, worker_id + 1, s)
-        kv = LapseWorker(0, worker_id + 1, s)
-        job = Job.create(configs[w], datasets[w], lapse_worker=kv)
+        kv = LapseWorker(0, worker_id + 1, s, num_meta_keys)
+        init_for_load_only = False
+        if kv.worker_id == 1 and checkpoint is not None:
+            # Todo: we still create a complete new job after creating the resume job
+            #  therefore epoch numbers will not be handled correctly, for example
+            job = Job.create_from(checkpoint)
+            job.model.get_s_embedder().push_all()
+            job.model.get_p_embedder().push_all()
+            job.optimizer.push_all()
+            init_for_load_only = True
+        job = Job.create(configs[w], datasets[w], lapse_worker=kv, init_for_load_only=init_for_load_only)
         job.run()
         # p = threading.Thread(target=job.run)
         # p.start()
@@ -225,50 +250,57 @@ def main():
             # load data
             dataset = Dataset.create(config)
 
+            checkpoint = None
             # let's go
             if args.command == "resume":
                 if checkpoint_file is not None:
                     checkpoint = load_checkpoint(
                         checkpoint_file, config.get("job.device")
                     )
-                    job = Job.create_from(
-                        checkpoint, new_config=config, dataset=dataset
-                    )
-                else:
-                    job = Job.create(config, dataset)
-                    job.config.log(
-                        "No checkpoint found or specified, starting from scratch..."
-                    )
-            else:
-                configs = {}
-                processes = []
-                num_keys = dataset.num_entities() + dataset.num_relations()
-                if config.get("train.optimizer") == "dist_adagrad":
-                    num_keys *= 2
-                p = mp.Process(target=init_scheduler, args=(servers, num_keys))
+                #     job = Job.create_from(
+                #         checkpoint, new_config=config, dataset=dataset
+                #     )
+                # else:
+                #     job = Job.create(config, dataset)
+                #     job.config.log(
+                #         "No checkpoint found or specified, starting from scratch..."
+                #     )
+            # else:
+            configs = {}
+            processes = []
+            num_keys = dataset.num_entities() + dataset.num_relations()
+            if config.get("train.optimizer") == "dist_adagrad":
+                num_keys *= 2
+            # meta keys. contains for example a variable indicating whether to stop or
+            #  not
+            num_meta_keys = 1
+            num_keys += num_meta_keys
+            p = mp.Process(target=init_scheduler, args=(servers, num_keys))
+            p.start()
+            processes.append(p)
+            for rank in range(servers):
+                configs[rank] = deepcopy(config)
+                configs[rank].set(config.get("model") + ".create_complete", False)
+                configs[rank].folder = os.path.join(config.folder, f"server-{rank}")
+                configs[rank].init_folder()
+                print("before init server")
+                p = mp.Process(
+                    target=init_server,
+                    args=(
+                        rank,
+                        servers,
+                        num_keys,
+                        num_meta_keys,
+                        config.get("lookup_embedder.dim"),
+                        configs[rank],
+                        dataset,
+                        checkpoint,
+                    ),
+                )
                 p.start()
                 processes.append(p)
-                for rank in range(servers):
-                    configs[rank] = deepcopy(config)
-                    configs[rank].set(config.get("model") + ".create_complete", False)
-                    configs[rank].folder = os.path.join(config.folder, f"server-{rank}")
-                    configs[rank].init_folder()
-                    print("before init server")
-                    p = mp.Process(
-                        target=init_server,
-                        args=(
-                            rank,
-                            servers,
-                            num_keys,
-                            config.get("lookup_embedder.dim"),
-                            configs[rank],
-                            dataset,
-                        ),
-                    )
-                    p.start()
-                    processes.append(p)
-                for p in processes:
-                    p.join()
+            for p in processes:
+                p.join()
             # job.run()
     except BaseException as e:
         tb = traceback.format_exc()

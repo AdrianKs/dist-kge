@@ -53,7 +53,7 @@ class TrainingJob(Job):
     """
 
     def __init__(
-        self, config: Config, dataset: Dataset, parent_job: Job = None, model=None, lapse_worker=None
+        self, config: Config, dataset: Dataset, parent_job: Job = None, model=None, lapse_worker=None, init_for_load_only=False
     ) -> None:
         from kge.job import EvaluationJob
 
@@ -61,7 +61,7 @@ class TrainingJob(Job):
         self.lapse_worker = lapse_worker
         # here we create one large model to init lapse and remove it afterwards
         self.lapse_worker.barrier()
-        if self.lapse_worker.worker_id == 1:
+        if self.lapse_worker.worker_id == 1 and not init_for_load_only:
             self.config.set(self.config.get("model") + ".create_complete", True)
             init_model = KgeModel.create(self.config, self.dataset,
                                          lapse_worker=self.lapse_worker)
@@ -135,13 +135,13 @@ class TrainingJob(Job):
 
     @staticmethod
     def create(
-        config: Config, dataset: Dataset, parent_job: Job = None, model=None, lapse_worker=None
+        config: Config, dataset: Dataset, parent_job: Job = None, model=None, lapse_worker=None, init_for_load_only=False
     ) -> "TrainingJob":
         """Factory method to create a training job."""
         if config.get("train.type") == "KvsAll":
             return TrainingJobKvsAll(config, dataset, parent_job, model=model, lapse_worker=lapse_worker)
         elif config.get("train.type") == "negative_sampling":
-            return TrainingJobNegativeSampling(config, dataset, parent_job, model=model, lapse_worker=lapse_worker)
+            return TrainingJobNegativeSampling(config, dataset, parent_job, model=model, lapse_worker=lapse_worker, init_for_load_only=False)
         elif config.get("train.type") == "1vsAll":
             return TrainingJob1vsAll(config, dataset, parent_job, model=model, lapse_worker=lapse_worker)
         else:
@@ -179,7 +179,8 @@ class TrainingJob(Job):
                         )
                         + "in the last {} validation runs).".format(patience)
                     )
-                    break
+                    self.lapse_worker.stop()
+                    #break
                 if self.epoch > self.config.get(
                     "valid.early_stopping.min_threshold.epochs"
                 ) and self.valid_trace[best_index][metric_name] < self.config.get(
@@ -190,11 +191,16 @@ class TrainingJob(Job):
                             metric_name, self.epoch
                         )
                     )
-                    break
+                    self.lapse_worker.stop()
+                    #break
 
             # should we stop?
             if self.epoch >= self.config.get("train.max_epochs"):
                 self.config.log("Maximum number of epochs reached.")
+                break
+
+            self.lapse_worker.barrier()
+            if self.lapse_worker.is_stopped():
                 break
 
             # start a new epoch
@@ -219,18 +225,21 @@ class TrainingJob(Job):
                 # move current small model to a tmp model
                 self.model = self.model.cpu()
                 tmp_model = self.model
+                tmp_optimizer = self.optimizer
+                # TODO: we also need to handle the learning rate scheduler somehow
+                #  in the checkpoint
                 # create a new complete model, to be able to validate and store
                 self.config.set(self.config.get("model") + ".create_complete", True)
                 self.config.set("job.device", "cpu")
                 self.model = KgeModel.create(self.config, self.dataset, lapse_worker=self.lapse_worker)
                 self.model.get_s_embedder().pull_all()
                 self.model.get_p_embedder().pull_all()
+                self.optimizer = KgeOptimizer.create(self.config, self.model,
+                                                     lapse_worker=self.lapse_worker)
+                self.optimizer.pull_all()
                 self.config.set("job.device", self.device)
                 self.model = self.model.to(self.device)
                 self.valid_job.model = self.model
-                # TODO: we also need to create a new optimizer and pull everything
-                #  so that the internal adagrad values will be stored to the checkpoint
-                #  as well
                 # validate and update learning rate
                 if (
                     self.config.get("valid.every") > 0
@@ -281,9 +290,13 @@ class TrainingJob(Job):
                             )
                 self.config.set(self.config.get("model") + ".create_complete", False)
                 self.model = self.model.cpu()
+                del self.optimizer
                 del self.model
                 gc.collect()
                 self.model = tmp_model
+                self.optimizer = tmp_optimizer
+            else:
+                self.kge_lr_scheduler.step()
             self.lapse_worker.barrier()
             self.model = self.model.to(self.device)
 
@@ -805,8 +818,8 @@ class TrainingJobKvsAll(TrainingJob):
 
 
 class TrainingJobNegativeSampling(TrainingJob):
-    def __init__(self, config, dataset, parent_job=None, model=None, lapse_worker=None):
-        super().__init__(config, dataset, parent_job, model=model, lapse_worker=lapse_worker)
+    def __init__(self, config, dataset, parent_job=None, model=None, lapse_worker=None, init_for_load_only=False):
+        super().__init__(config, dataset, parent_job, model=model, lapse_worker=lapse_worker, init_for_load_only=init_for_load_only)
         self._sampler = KgeSampler.create(config, "negative_sampling", dataset)
         self.is_prepared = False
         self._implementation = self.config.check(
