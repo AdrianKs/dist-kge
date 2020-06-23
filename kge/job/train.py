@@ -3,6 +3,7 @@ import os
 import math
 import time
 import sys
+import gc
 from collections import defaultdict
 
 from dataclasses import dataclass
@@ -211,7 +212,8 @@ class TrainingJob(Job):
             self.model.meta["train_trace_entry"] = trace_entry
 
             print("done worker: ", self.lapse_worker.worker_id)
-            self.model.cpu()
+            self.model = self.model.cpu()
+            torch.cuda.empty_cache()
             self.lapse_worker.barrier()
             if self.lapse_worker.worker_id == 1:
                 # move current small model to a tmp model
@@ -219,12 +221,13 @@ class TrainingJob(Job):
                 tmp_model = self.model
                 # create a new complete model, to be able to validate and store
                 self.config.set(self.config.get("model") + ".create_complete", True)
+                self.config.set("job.device", "cpu")
                 self.model = KgeModel.create(self.config, self.dataset, lapse_worker=self.lapse_worker)
                 self.model.get_s_embedder().pull_all()
                 self.model.get_p_embedder().pull_all()
+                self.config.set("job.device", self.device)
                 self.model = self.model.to(self.device)
                 self.valid_job.model = self.model
-                print("device", self.device)
                 # TODO: we also need to create a new optimizer and pull everything
                 #  so that the internal adagrad values will be stored to the checkpoint
                 #  as well
@@ -277,9 +280,12 @@ class TrainingJob(Job):
                                 )
                             )
                 self.config.set(self.config.get("model") + ".create_complete", False)
+                self.model = self.model.cpu()
+                del self.model
+                gc.collect()
                 self.model = tmp_model
             self.lapse_worker.barrier()
-            self.model.to(self.device)
+            self.model = self.model.to(self.device)
 
         for f in self.post_train_hooks:
             f(self, trace_entry)

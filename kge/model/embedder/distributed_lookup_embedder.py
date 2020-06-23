@@ -32,6 +32,7 @@ class DistributedLookupEmbedder(LookupEmbedder):
     def pull_all(self):
         self._pull_embeddings(torch.arange(self.complete_vocab_size))
 
+    @torch.no_grad()
     def _pull_embeddings(self, indexes):
         local_indexes = self.local_index_mapper[indexes]
         missing_mask = local_indexes == -1
