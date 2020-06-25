@@ -124,8 +124,10 @@ class DistAdagrad(Optimizer):
 
                 grad = p.grad
                 state = self.state[p]
+                self.lapse_worker.step_optim(i)
+                state["step"] = self.lapse_worker.get_step_optim(i)
 
-                state["step"] += 1
+                #state["step"] += 1
 
                 if group["weight_decay"] != 0:
                     if p.grad.is_sparse:

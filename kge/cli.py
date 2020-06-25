@@ -34,19 +34,38 @@ class LapseWorker(lapse.Worker):
         super(LapseWorker, self).__init__(customer_id, worker_id, lapse_server)
         self.worker_id = worker_id
         self.num_meta_keys = num_meta_keys
-        self._stop_key = self.num_keys - self.num_meta_keys
+        self._stop_key = np.array([self.num_keys - self.num_meta_keys], dtype=np.uint64)
+        self._optim_entity_step_key = np.array([self.num_keys - self.num_meta_keys + 1], dtype=np.uint64)
+        self._optim_relation_step_key = np.array([self.num_keys - self.num_meta_keys + 2], dtype=np.uint64)
         self._stop_value_tensor = np.zeros((1, self.key_size), dtype=np.float32)
+        self._optim_entity_step_value_tensor = np.zeros((1, self.key_size), dtype=np.float32)
+        self._optim_relation_step_value_tensor = np.zeros((1, self.key_size), dtype=np.float32)
         self.meta_key_tensor = np.zeros((self.num_meta_keys, self.key_size), dtype=np.float32)
 
     def stop(self):
-        self.push(np.array([self._stop_key], dtype=np.uint64), np.ones((1, self.key_size), dtype=np.float32))
+        self.push(self._stop_key, np.ones((1, self.key_size), dtype=np.float32))
 
     def is_stopped(self) -> bool:
-        self.pull(np.array([self._stop_key], dtype=np.uint64), self._stop_value_tensor)
+        self.pull(self._stop_key, self._stop_value_tensor)
         if np.any(self._stop_value_tensor[0] == 1):
             return True
         else:
             return False
+
+    def step_optim(self, parameter_index):
+        if parameter_index == 0:
+            self.push(self._optim_entity_step_key, np.ones((1, self.key_size), dtype=np.float32))
+        else:
+            self.push(self._optim_relation_step_key, np.ones((1, self.key_size), dtype=np.float32))
+
+    def get_step_optim(self, parameter_index):
+        if parameter_index == 0:
+            self.pull(self._optim_entity_step_key, self._optim_entity_step_value_tensor)
+            return self._optim_relation_step_value_tensor[0, 0].item()
+        else:
+            self.pull(self._optim_relation_step_key, self._optim_relation_step_value_tensor)
+            return self._optim_relation_step_value_tensor[0, 0].item()
+
 
 
 def init_scheduler(servers, num_keys):
@@ -269,11 +288,12 @@ def main():
             configs = {}
             processes = []
             num_keys = dataset.num_entities() + dataset.num_relations()
+            num_meta_keys = 1
             if config.get("train.optimizer") == "dist_adagrad":
                 num_keys *= 2
+                num_meta_keys += 2
             # meta keys. contains for example a variable indicating whether to stop or
             #  not
-            num_meta_keys = 1
             num_keys += num_meta_keys
             p = mp.Process(target=init_scheduler, args=(servers, num_keys))
             p.start()
