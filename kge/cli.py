@@ -4,6 +4,7 @@ import os
 import sys
 import traceback
 import yaml
+import gc
 
 import lapse
 import numpy as np
@@ -126,6 +127,9 @@ def init_server(rank, servers, num_keys, num_meta_keys, embedding_dim, config, d
     end_time = time.time()
     print(end_time - start_time)
 
+    del job
+    del kv
+    gc.collect()
     # shutdown server
     s.shutdown()
 
