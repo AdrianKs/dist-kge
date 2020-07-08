@@ -7,18 +7,19 @@ import lapse
 
 from kge import Config, Dataset
 from kge.model import LookupEmbedder, KgeEmbedder
+from kge.util import KgeParameterClient
 
 from typing import List
 
 
 class DistributedLookupEmbedder(LookupEmbedder):
     def __init__(
-        self, config: Config, dataset: Dataset, configuration_key: str, vocab_size: int, lapse_worker: lapse.Worker, lapse_index: np.ndarray, complete_vocab_size
+        self, config: Config, dataset: Dataset, configuration_key: str, vocab_size: int, parameter_client: KgeParameterClient, lapse_index: np.ndarray, complete_vocab_size
     ):
         super().__init__(config, dataset, configuration_key, vocab_size)
 
         self.complete_vocab_size = complete_vocab_size
-        self.lapse_worker = lapse_worker
+        self.parameter_client = parameter_client
         self.lapse_index = lapse_index  # maps the id from the dataset to the id stored in lapse
         #self.local_index_mapper = torch.arange(complete_vocab_size, dtype=torch.int)
         self.local_index_mapper = torch.zeros(self.complete_vocab_size, dtype=torch.int)-1  # maps the id from the dataset to the id of the embedding here in the embedder
@@ -26,8 +27,8 @@ class DistributedLookupEmbedder(LookupEmbedder):
         self.num_pulled = 0
 
     def push_all(self):
-        self.lapse_worker.push(self.lapse_index[np.arange(self.vocab_size)].astype(np.uint64),
-                               self._embeddings.weight.detach().cpu().numpy())
+        self.parameter_client.push(self.lapse_index[np.arange(self.vocab_size)].astype(np.uint64),
+                                   self._embeddings.weight.detach().cpu().numpy())
 
     def pull_all(self):
         self._pull_embeddings(torch.arange(self.complete_vocab_size))
@@ -46,8 +47,8 @@ class DistributedLookupEmbedder(LookupEmbedder):
             #  to numpy, which needs grad, since grad would have to be dropped
             current_embeddings = self._embeddings.weight[missing_local_indexes, :].detach().cpu().numpy()
             pull_indexes = self.lapse_index[indexes[missing_mask].cpu()].reshape(-1)
-            self.lapse_worker.pull(pull_indexes.astype(np.uint64),
-                                   current_embeddings)
+            self.parameter_client.pull(pull_indexes.astype(np.uint64),
+                                       current_embeddings)
             self._embeddings.weight[missing_local_indexes, :] = torch.from_numpy(
                 current_embeddings).to(self._embeddings.weight.device)
 
@@ -58,7 +59,7 @@ class DistributedLookupEmbedder(LookupEmbedder):
 
     def localize(self, indexes: Tensor):
         unique_indexes = torch.unique(indexes).cpu().numpy().astype(np.uint64)
-        self.lapse_worker.localize(unique_indexes)
+        self.parameter_client.localize(unique_indexes)
         # TODO: also pull the embeddings and store in a tensor on gpu
         #  this needs to be handled in the background somehow
         #  to device can be done in background, but this needs to wait for localize

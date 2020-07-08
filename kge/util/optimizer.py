@@ -9,15 +9,15 @@ class KgeOptimizer:
     """ Wraps torch optimizers """
 
     @staticmethod
-    def create(config, model, lapse_worker=None, lapse_indexes=None):
+    def create(config, model, parameter_client=None, lapse_indexes=None):
         """ Factory method for optimizer creation """
         if config.get("train.optimizer") == "dist_sgd":
-            optimizer = DistSGD(model, lapse_worker=lapse_worker,
+            optimizer = DistSGD(model, parameter_client=parameter_client,
                                 lapse_indexes=lapse_indexes,
                                 **config.get("train.optimizer_args"))
             return optimizer
         if config.get("train.optimizer") == "dist_adagrad":
-            optimizer = DistAdagrad(model, lapse_worker=lapse_worker,
+            optimizer = DistAdagrad(model, parameter_client=parameter_client,
                                     lapse_indexes=lapse_indexes,
                                     **config.get("train.optimizer_args"))
             return optimizer

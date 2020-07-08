@@ -53,7 +53,7 @@ class DistSGD(Optimizer):
     """
 
     def __init__(self, model, lr=required, momentum=0, dampening=0,
-                 weight_decay=0, nesterov=False, lapse_worker=None, lapse_indexes=None, local_index_mappers=None):
+                 weight_decay=0, nesterov=False, parameter_client=None, lapse_indexes=None, local_index_mappers=None):
         params = [p for p in model.parameters() if p.requires_grad]
         if lr is not required and lr < 0.0:
             raise ValueError("Invalid learning rate: {}".format(lr))
@@ -68,7 +68,7 @@ class DistSGD(Optimizer):
         #self.local_index_mappers = local_index_mappers
         self.local_index_mappers = [model._entity_embedder.local_index_mapper, model._relation_embedder.local_index_mapper]
         self.local_to_lapse_mappers = [model._entity_embedder.local_to_lapse_mapper, model._relation_embedder.local_to_lapse_mapper]
-        self.lapse_worker = lapse_worker
+        self.parameter_client = parameter_client
         if nesterov and (momentum <= 0 or dampening != 0):
             raise ValueError("Nesterov momentum requires a momentum and zero dampening")
         super(DistSGD, self).__init__(params, defaults)
@@ -124,7 +124,7 @@ class DistSGD(Optimizer):
                 #self.lapse_worker.push(self.lapse_indexes[i][indexes_to_push_mask], (-group['lr']*d_p).cpu().to_dense()[indexes_to_push_mask].numpy())
                 # TODO: this does not yet work with penalize
                 #  the mapping in penalize is still wrong -> take patricks freeze code as soon as ready
-                self.lapse_worker.push(self.local_to_lapse_mappers[i][indexes_to_push_mask].astype(np.uint64), (-group['lr']*d_p).cpu().to_dense()[indexes_to_push_mask].numpy())
+                self.parameter_client.push(self.local_to_lapse_mappers[i][indexes_to_push_mask].astype(np.uint64), (-group['lr'] * d_p).cpu().to_dense()[indexes_to_push_mask].numpy())
                 #self.lapse_worker.push(self.lapse_indexes[i], (-group['lr']*d_p).cpu().to_dense().numpy())
                 p.add_(d_p, alpha=-group['lr'])
 

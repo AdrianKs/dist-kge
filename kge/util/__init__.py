@@ -3,3 +3,4 @@ from kge.util.optimizer import KgeOptimizer
 from kge.util.optimizer import KgeLRScheduler
 from kge.util.sampler import KgeSampler
 from kge.util.io import load_checkpoint
+from kge.util.parameter_client import KgeParameterClient, LapseParameterClient

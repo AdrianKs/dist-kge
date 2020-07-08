@@ -240,7 +240,7 @@ class KgeEmbedder(KgeBase):
 
     @staticmethod
     def create(
-        config: Config, dataset: Dataset, configuration_key: str, vocab_size: int, lapse_worker=None, lapse_index=None, complete_vocab_size=None
+        config: Config, dataset: Dataset, configuration_key: str, vocab_size: int, parameter_client=None, lapse_index=None, complete_vocab_size=None
     ) -> "KgeEmbedder":
         """Factory method for embedder creation."""
         if complete_vocab_size is None:
@@ -259,7 +259,7 @@ class KgeEmbedder(KgeBase):
                 embedder = getattr(module, class_name)(
                     config, dataset, configuration_key,
                     vocab_size=vocab_size,
-                    lapse_worker=lapse_worker,
+                    parameter_client=parameter_client,
                     lapse_index=lapse_index,
                     complete_vocab_size=complete_vocab_size
                 )
@@ -308,7 +308,7 @@ class KgeModel(KgeBase):
         scorer: Union[RelationalScorer, type],
         initialize_embedders=True,
         configuration_key=None,
-        lapse_worker=None
+        parameter_client=None
     ):
         super().__init__(config, dataset, configuration_key)
 
@@ -331,7 +331,7 @@ class KgeModel(KgeBase):
                 self.configuration_key + ".entity_embedder",
                 #dataset.num_entities(),
                 embedding_layer_size,
-                lapse_worker=lapse_worker,
+                parameter_client=parameter_client,
                 lapse_index=np.arange(dataset.num_entities(), dtype=np.int),
                 complete_vocab_size=dataset.num_entities()
             )
@@ -343,7 +343,7 @@ class KgeModel(KgeBase):
                 dataset,
                 self.configuration_key + ".relation_embedder",
                 num_relations,
-                lapse_worker=lapse_worker,
+                parameter_client=parameter_client,
                 lapse_index=np.arange(dataset.num_relations(), dtype=np.int)+dataset.num_entities()
             )
 
@@ -387,7 +387,7 @@ class KgeModel(KgeBase):
 
     @staticmethod
     def create(
-        config: Config, dataset: Dataset, configuration_key: Optional[str] = None, lapse_worker=None
+        config: Config, dataset: Dataset, configuration_key: Optional[str] = None, parameter_client=None
     ) -> "KgeModel":
         """Factory method for model creation."""
 
@@ -402,7 +402,7 @@ class KgeModel(KgeBase):
             raise Exception("Can't find {}.type in config".format(configuration_key))
 
         try:
-            model = getattr(module, class_name)(config, dataset, configuration_key, lapse_worker=lapse_worker)
+            model = getattr(module, class_name)(config, dataset, configuration_key, parameter_client=parameter_client)
             model.to(config.get("job.device"))
             return model
         except ImportError:

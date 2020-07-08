@@ -36,7 +36,7 @@ class DistAdagrad(Optimizer):
         weight_decay=0,
         initial_accumulator_value=0,
         eps=1e-10,
-        lapse_worker=None,
+        parameter_client=None,
         lapse_indexes=None,
     ):
         params = [p for p in model.parameters() if p.requires_grad]
@@ -69,7 +69,7 @@ class DistAdagrad(Optimizer):
             model._relation_embedder.local_to_lapse_mapper,
         ]
 
-        self.lapse_worker = lapse_worker
+        self.parameter_client = parameter_client
         # these are numpy tensors in which we pull the current values from lapse to
         # update the optimizer
         # TODO: find a way that we don't have to store these parameters multiple times
@@ -124,8 +124,8 @@ class DistAdagrad(Optimizer):
 
                 grad = p.grad
                 state = self.state[p]
-                self.lapse_worker.step_optim(i)
-                state["step"] = self.lapse_worker.get_step_optim(i)
+                self.parameter_client.step_optim(i)
+                state["step"] = self.parameter_client.get_step_optim(i)
 
                 #state["step"] += 1
 
@@ -158,7 +158,7 @@ class DistAdagrad(Optimizer):
                     update_tensor = np.zeros((np.sum(update_mask), grad.size()[1]), dtype=np.float32)
                     keys_optim = (self.local_to_lapse_mappers[i].astype(np.uint64)
                                   + self.lapse_optimizer_index_offset)[update_mask]
-                    self.lapse_worker.pull(
+                    self.parameter_client.pull(
                         keys_optim,
                         update_tensor,
                     )
@@ -174,7 +174,7 @@ class DistAdagrad(Optimizer):
                         return constructor(grad_indices, values, size)
 
                     sum_update_values = grad_values.pow(2)
-                    self.lapse_worker.push(
+                    self.parameter_client.push(
                         keys_optim,
                         sum_update_values.cpu().numpy(),
                     )
@@ -183,7 +183,7 @@ class DistAdagrad(Optimizer):
                     std = state["sum"].sparse_mask(grad)
                     std_values = std._values().sqrt_().add_(group["eps"])
                     update_value = (grad_values / std_values).mul_(-clr)
-                    self.lapse_worker.push(
+                    self.parameter_client.push(
                         self.local_to_lapse_mappers[i][update_mask].astype(np.uint64),
                         update_value.cpu().numpy(),
                     )
@@ -194,9 +194,9 @@ class DistAdagrad(Optimizer):
                     update_tensor = np.zeros((np.sum(update_mask), p.shape[1]), dtype=np.float32)
                     keys_optim = (self.local_to_lapse_mappers[i].astype(np.uint64)
                                   + self.lapse_optimizer_index_offset)[update_mask]
-                    self.lapse_worker.pull(keys_optim,
-                        update_tensor
-                    )
+                    self.parameter_client.pull(keys_optim,
+                                               update_tensor
+                                               )
                     state["sum"][update_mask] = torch.from_numpy(
                         update_tensor
                     ).to(state["sum"].device)
@@ -204,7 +204,7 @@ class DistAdagrad(Optimizer):
                     # push the updated internal optimizer parameters to lapse
                     # state['sum'].addcmul_(grad, grad, value=1)
                     sum_update = grad * grad
-                    self.lapse_worker.push(
+                    self.parameter_client.push(
                         keys_optim,
                         sum_update.cpu().numpy()[update_mask],
                     )
@@ -215,7 +215,7 @@ class DistAdagrad(Optimizer):
                     # updates to lapse
                     # p.addcdiv_(grad, std, value=-clr)
                     update_value = -clr * grad / std
-                    self.lapse_worker.push(
+                    self.parameter_client.push(
                         self.local_to_lapse_mappers[i][update_mask].astype(np.uint64),
                         update_value.cpu().numpy()[update_mask]
                     )
@@ -231,7 +231,7 @@ class DistAdagrad(Optimizer):
                 state = self.state[p]
                 update_tensor = np.zeros_like(p)
                 keys_optim = np.arange(p.shape[0]) + self.lapse_optimizer_index_offset[i]
-                self.lapse_worker.pull(keys_optim, update_tensor)
+                self.parameter_client.pull(keys_optim, update_tensor)
                 state['sum'][:, :] = torch.from_numpy(update_tensor)
 
     def push_all(self):
@@ -242,4 +242,4 @@ class DistAdagrad(Optimizer):
                     continue
                 state = self.state[p]
                 keys_optim = np.arange(p.shape[0]) + self.lapse_optimizer_index_offset[i]
-                self.lapse_worker.push(keys_optim, state['sum'].cpu().numpy())
+                self.parameter_client.push(keys_optim, state['sum'].cpu().numpy())

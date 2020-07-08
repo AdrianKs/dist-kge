@@ -60,7 +60,7 @@ class Job:
 
     @staticmethod
     def create(
-        config: Config, dataset: Optional[Dataset] = None, parent_job=None, model=None, lapse_worker=None, init_for_load_only=False
+        config: Config, dataset: Optional[Dataset] = None, parent_job=None, model=None, parameter_client=None, init_for_load_only=False
     ):
         "Create a new job."
         from kge.job import TrainingJob, EvaluationJob, SearchJob
@@ -71,7 +71,7 @@ class Job:
         job_type = config.get("job.type")
         if job_type == "train":
             return TrainingJob.create(
-                config, dataset, parent_job=parent_job, model=model, lapse_worker=lapse_worker, init_for_load_only=init_for_load_only
+                config, dataset, parent_job=parent_job, model=model, parameter_client=parameter_client, init_for_load_only=init_for_load_only
             )
         elif job_type == "search":
             return SearchJob.create(config, dataset, parent_job=parent_job)
@@ -89,7 +89,7 @@ class Job:
         new_config: Config = None,
         dataset: Dataset = None,
         parent_job=None,
-        lapse_worker=None
+        parameter_client=None
     ) -> Job:
         """
         Creates a Job based on a checkpoint
@@ -118,7 +118,7 @@ class Job:
             if new_config:
                 config.load_config(new_config)
             dataset = Dataset.create_from(checkpoint, config, dataset)
-        job = Job.create(config, dataset, parent_job, model, lapse_worker=lapse_worker, init_for_load_only=True)
+        job = Job.create(config, dataset, parent_job, model, parameter_client=parameter_client, init_for_load_only=True)
         job._load(checkpoint)
         job.config.log("Loaded checkpoint from {}...".format(checkpoint["file"]))
         return job

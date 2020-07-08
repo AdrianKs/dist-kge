@@ -17,6 +17,7 @@ from kge.util.dump import add_dump_parsers, dump
 from kge.util.io import get_checkpoint_file, load_checkpoint
 from kge.util.package import package_model, add_package_parser
 from kge.normal_cli import create_parser, process_meta_command, argparse_bool_type
+from kge.util import KgeParameterClient
 
 from copy import deepcopy
 from torch import multiprocessing as mp
@@ -30,45 +31,6 @@ port = "9091"
 mp.set_start_method("spawn", force=True)
 
 
-class LapseWorker(lapse.Worker):
-    def __init__(self, customer_id: int, worker_id: int, lapse_server: lapse.Server, num_meta_keys):
-        super(LapseWorker, self).__init__(customer_id, worker_id, lapse_server)
-        self.worker_id = worker_id
-        self.num_meta_keys = num_meta_keys
-        self._stop_key = np.array([self.num_keys - self.num_meta_keys], dtype=np.uint64)
-        self._optim_entity_step_key = np.array([self.num_keys - self.num_meta_keys + 1], dtype=np.uint64)
-        self._optim_relation_step_key = np.array([self.num_keys - self.num_meta_keys + 2], dtype=np.uint64)
-        self._stop_value_tensor = np.zeros((1, self.key_size), dtype=np.float32)
-        self._optim_entity_step_value_tensor = np.zeros((1, self.key_size), dtype=np.float32)
-        self._optim_relation_step_value_tensor = np.zeros((1, self.key_size), dtype=np.float32)
-        self.meta_key_tensor = np.zeros((self.num_meta_keys, self.key_size), dtype=np.float32)
-
-    def stop(self):
-        self.push(self._stop_key, np.ones((1, self.key_size), dtype=np.float32))
-
-    def is_stopped(self) -> bool:
-        self.pull(self._stop_key, self._stop_value_tensor)
-        if np.any(self._stop_value_tensor[0] == 1):
-            return True
-        else:
-            return False
-
-    def step_optim(self, parameter_index):
-        if parameter_index == 0:
-            self.push(self._optim_entity_step_key, np.ones((1, self.key_size), dtype=np.float32))
-        else:
-            self.push(self._optim_relation_step_key, np.ones((1, self.key_size), dtype=np.float32))
-
-    def get_step_optim(self, parameter_index):
-        if parameter_index == 0:
-            self.pull(self._optim_entity_step_key, self._optim_entity_step_value_tensor)
-            return self._optim_relation_step_value_tensor[0, 0].item()
-        else:
-            self.pull(self._optim_relation_step_key, self._optim_relation_step_value_tensor)
-            return self._optim_relation_step_value_tensor[0, 0].item()
-
-
-
 def init_scheduler(servers, num_keys):
     os.environ["DMLC_NUM_WORKER"] = "0"
     os.environ["DMLC_NUM_SERVER"] = str(servers)
@@ -78,7 +40,16 @@ def init_scheduler(servers, num_keys):
     lapse.scheduler(num_keys, num_workers_per_server)
 
 
-def init_server(rank, servers, num_keys, num_meta_keys, embedding_dim, config, dataset, checkpoint: Optional[Dict] = None):
+def init_server(
+    rank,
+    servers,
+    num_keys,
+    num_meta_keys,
+    embedding_dim,
+    config,
+    dataset,
+    checkpoint: Optional[Dict] = None,
+):
     os.environ["DMLC_NUM_WORKER"] = "0"
     os.environ["DMLC_NUM_SERVER"] = str(servers)
     os.environ["DMLC_ROLE"] = "server"
@@ -107,9 +78,16 @@ def init_server(rank, servers, num_keys, num_meta_keys, embedding_dim, config, d
         )
         # datasets[w] = Dataset.create(configs[w], dataset.folder)
         # kv = lapse.Worker(0, worker_id + 1, s)
-        kv = LapseWorker(0, worker_id + 1, s, num_meta_keys)
+        # kv = LapseWorker(0, worker_id + 1, s, num_meta_keys)
+        parameter_client = KgeParameterClient.create(
+            client_type="lapse",
+            customer_id=0,
+            client_id=worker_id + 1,
+            server=s,
+            num_meta_keys=num_meta_keys,
+        )
         init_for_load_only = False
-        if kv.worker_id == 1 and checkpoint is not None:
+        if parameter_client.worker_id == 1 and checkpoint is not None:
             # Todo: we still create a complete new job after creating the resume job
             #  therefore epoch numbers will not be handled correctly, for example
             job = Job.create_from(checkpoint)
@@ -117,7 +95,12 @@ def init_server(rank, servers, num_keys, num_meta_keys, embedding_dim, config, d
             job.model.get_p_embedder().push_all()
             job.optimizer.push_all()
             init_for_load_only = True
-        job = Job.create(configs[w], datasets[w], lapse_worker=kv, init_for_load_only=init_for_load_only)
+        job = Job.create(
+            configs[w],
+            datasets[w],
+            parameter_client=parameter_client,
+            init_for_load_only=init_for_load_only,
+        )
         job.run()
         # p = threading.Thread(target=job.run)
         # p.start()
@@ -128,7 +111,7 @@ def init_server(rank, servers, num_keys, num_meta_keys, embedding_dim, config, d
     print(end_time - start_time)
 
     del job
-    del kv
+    del parameter_client
     gc.collect()
     # shutdown server
     s.shutdown()

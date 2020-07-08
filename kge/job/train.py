@@ -16,7 +16,7 @@ from kge import Config, Dataset
 from kge.job import Job
 from kge.model import KgeModel
 
-from kge.util import KgeLoss, KgeOptimizer, KgeSampler, KgeLRScheduler
+from kge.util import KgeLoss, KgeOptimizer, KgeSampler, KgeLRScheduler, KgeParameterClient
 from typing import Any, Callable, Dict, List, Optional, Union
 import kge.job.util
 
@@ -53,30 +53,30 @@ class TrainingJob(Job):
     """
 
     def __init__(
-        self, config: Config, dataset: Dataset, parent_job: Job = None, model=None, lapse_worker=None, init_for_load_only=False
+        self, config: Config, dataset: Dataset, parent_job: Job = None, model=None, parameter_client: Optional[KgeParameterClient] = None, init_for_load_only=False
     ) -> None:
         from kge.job import EvaluationJob
 
         super().__init__(config, dataset, parent_job)
-        self.lapse_worker = lapse_worker
+        self.parameter_client = parameter_client
         # here we create one large model to init lapse and remove it afterwards
-        self.lapse_worker.barrier()
-        if self.lapse_worker.worker_id == 1 and not init_for_load_only:
+        self.parameter_client.barrier()
+        if self.parameter_client.worker_id == 1 and not init_for_load_only:
             self.config.set(self.config.get("model") + ".create_complete", True)
             init_model = KgeModel.create(self.config, self.dataset,
-                                         lapse_worker=self.lapse_worker)
+                                         parameter_client=self.parameter_client)
             init_model.get_s_embedder().push_all()
             init_model.get_p_embedder().push_all()
             del init_model
             self.config.set(self.config.get("model") + ".create_complete", False)
-        self.lapse_worker.barrier()
+        self.parameter_client.barrier()
 
         if model is None:
-            self.model: KgeModel = KgeModel.create(config, dataset, lapse_worker=lapse_worker)
+            self.model: KgeModel = KgeModel.create(config, dataset, parameter_client=parameter_client)
         else:
             self.model: KgeModel = model
         lapse_indexes = [np.arange(dataset.num_entities(), dtype=np.int), np.arange(dataset.num_relations(), dtype=np.int) + dataset.num_entities()]
-        self.optimizer = KgeOptimizer.create(config, self.model, lapse_worker=lapse_worker, lapse_indexes=lapse_indexes)
+        self.optimizer = KgeOptimizer.create(config, self.model, parameter_client=parameter_client, lapse_indexes=lapse_indexes)
         self.kge_lr_scheduler = KgeLRScheduler(config, self.optimizer)
         self.loss = KgeLoss.create(config)
         self.abort_on_nan: bool = config.get("train.abort_on_nan")
@@ -135,15 +135,15 @@ class TrainingJob(Job):
 
     @staticmethod
     def create(
-        config: Config, dataset: Dataset, parent_job: Job = None, model=None, lapse_worker=None, init_for_load_only=False
+        config: Config, dataset: Dataset, parent_job: Job = None, model=None, parameter_client=None, init_for_load_only=False
     ) -> "TrainingJob":
         """Factory method to create a training job."""
         if config.get("train.type") == "KvsAll":
-            return TrainingJobKvsAll(config, dataset, parent_job, model=model, lapse_worker=lapse_worker)
+            return TrainingJobKvsAll(config, dataset, parent_job, model=model, parameter_client=parameter_client)
         elif config.get("train.type") == "negative_sampling":
-            return TrainingJobNegativeSampling(config, dataset, parent_job, model=model, lapse_worker=lapse_worker, init_for_load_only=False)
+            return TrainingJobNegativeSampling(config, dataset, parent_job, model=model, parameter_client=parameter_client, init_for_load_only=False)
         elif config.get("train.type") == "1vsAll":
-            return TrainingJob1vsAll(config, dataset, parent_job, model=model, lapse_worker=lapse_worker)
+            return TrainingJob1vsAll(config, dataset, parent_job, model=model, parameter_client=parameter_client)
         else:
             # perhaps TODO: try class with specified name -> extensibility
             raise ValueError("train.type")
@@ -179,7 +179,7 @@ class TrainingJob(Job):
                         )
                         + "in the last {} validation runs).".format(patience)
                     )
-                    self.lapse_worker.stop()
+                    self.parameter_client.stop()
                     #break
                 if self.epoch > self.config.get(
                     "valid.early_stopping.min_threshold.epochs"
@@ -191,7 +191,7 @@ class TrainingJob(Job):
                             metric_name, self.epoch
                         )
                     )
-                    self.lapse_worker.stop()
+                    self.parameter_client.stop()
                     #break
 
             # should we stop?
@@ -199,8 +199,8 @@ class TrainingJob(Job):
                 self.config.log("Maximum number of epochs reached.")
                 break
 
-            self.lapse_worker.barrier()
-            if self.lapse_worker.is_stopped():
+            self.parameter_client.barrier()
+            if self.parameter_client.is_stopped():
                 break
 
             # start a new epoch
@@ -217,11 +217,11 @@ class TrainingJob(Job):
             self.model.meta["train_config"] = self.config
             self.model.meta["train_trace_entry"] = trace_entry
 
-            print("done worker: ", self.lapse_worker.worker_id)
+            print("done worker: ", self.parameter_client.worker_id)
             self.model = self.model.cpu()
             torch.cuda.empty_cache()
-            self.lapse_worker.barrier()
-            if self.lapse_worker.worker_id == 1:
+            self.parameter_client.barrier()
+            if self.parameter_client.worker_id == 1:
                 # move current small model to a tmp model
                 self.model = self.model.cpu()
                 tmp_model = self.model
@@ -231,11 +231,11 @@ class TrainingJob(Job):
                 # create a new complete model, to be able to validate and store
                 self.config.set(self.config.get("model") + ".create_complete", True)
                 self.config.set("job.device", "cpu")
-                self.model = KgeModel.create(self.config, self.dataset, lapse_worker=self.lapse_worker)
+                self.model = KgeModel.create(self.config, self.dataset, parameter_client=self.parameter_client)
                 self.model.get_s_embedder().pull_all()
                 self.model.get_p_embedder().pull_all()
                 self.optimizer = KgeOptimizer.create(self.config, self.model,
-                                                     lapse_worker=self.lapse_worker)
+                                                     parameter_client=self.parameter_client)
                 self.optimizer.pull_all()
                 self.config.set("job.device", self.device)
                 self.model = self.model.to(self.device)
@@ -297,7 +297,7 @@ class TrainingJob(Job):
                 self.optimizer = tmp_optimizer
             else:
                 self.kge_lr_scheduler.step()
-            self.lapse_worker.barrier()
+            self.parameter_client.barrier()
             self.model = self.model.to(self.device)
 
         for f in self.post_train_hooks:
@@ -565,8 +565,8 @@ class TrainingJobKvsAll(TrainingJob):
 
     from kge.indexing import KvsAllIndex
 
-    def __init__(self, config, dataset, parent_job=None, model=None, lapse_worker=None):
-        super().__init__(config, dataset, parent_job, model=model, lapse_worker=lapse_worker)
+    def __init__(self, config, dataset, parent_job=None, model=None, parameter_client=None):
+        super().__init__(config, dataset, parent_job, model=model, parameter_client=parameter_client)
         self.label_smoothing = config.check_range(
             "KvsAll.label_smoothing", float("-inf"), 1.0, max_inclusive=False
         )
@@ -818,8 +818,8 @@ class TrainingJobKvsAll(TrainingJob):
 
 
 class TrainingJobNegativeSampling(TrainingJob):
-    def __init__(self, config, dataset, parent_job=None, model=None, lapse_worker=None, init_for_load_only=False):
-        super().__init__(config, dataset, parent_job, model=model, lapse_worker=lapse_worker, init_for_load_only=init_for_load_only)
+    def __init__(self, config, dataset, parent_job=None, model=None, parameter_client=None, init_for_load_only=False):
+        super().__init__(config, dataset, parent_job, model=model, parameter_client=parameter_client, init_for_load_only=init_for_load_only)
         self._sampler = KgeSampler.create(config, "negative_sampling", dataset)
         self.is_prepared = False
         self._implementation = self.config.check(
@@ -1068,8 +1068,8 @@ class TrainingJobNegativeSampling(TrainingJob):
 class TrainingJob1vsAll(TrainingJob):
     """Samples SPO pairs and queries sp_ and _po, treating all other entities as negative."""
 
-    def __init__(self, config, dataset, parent_job=None, model=None, lapse_worker=None):
-        super().__init__(config, dataset, parent_job, model=model, lapse_worker=lapse_worker)
+    def __init__(self, config, dataset, parent_job=None, model=None, parameter_client=None):
+        super().__init__(config, dataset, parent_job, model=model, parameter_client=parameter_client)
         self.is_prepared = False
         config.log("Initializing spo training job...")
         self.type_str = "1vsAll"
