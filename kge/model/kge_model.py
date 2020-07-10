@@ -332,7 +332,7 @@ class KgeModel(KgeBase):
                 #dataset.num_entities(),
                 embedding_layer_size,
                 parameter_client=parameter_client,
-                lapse_index=np.arange(dataset.num_entities(), dtype=np.int),
+                lapse_index=torch.arange(dataset.num_entities(), dtype=torch.long),
                 complete_vocab_size=dataset.num_entities()
             )
 
@@ -344,7 +344,7 @@ class KgeModel(KgeBase):
                 self.configuration_key + ".relation_embedder",
                 num_relations,
                 parameter_client=parameter_client,
-                lapse_index=np.arange(dataset.num_relations(), dtype=np.int)+dataset.num_entities()
+                lapse_index= torch.arange(dataset.num_relations(), dtype=torch.long)+dataset.num_entities()
             )
 
         #: Scorer

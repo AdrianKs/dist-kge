@@ -61,7 +61,7 @@ class TrainingJob(Job):
         self.parameter_client = parameter_client
         # here we create one large model to init lapse and remove it afterwards
         self.parameter_client.barrier()
-        if self.parameter_client.worker_id == 1 and not init_for_load_only:
+        if self.parameter_client.rank == 1 and not init_for_load_only:
             self.config.set(self.config.get("model") + ".create_complete", True)
             init_model = KgeModel.create(self.config, self.dataset,
                                          parameter_client=self.parameter_client)
@@ -179,7 +179,7 @@ class TrainingJob(Job):
                         )
                         + "in the last {} validation runs).".format(patience)
                     )
-                    self.parameter_client.stop()
+                    self.parameter_client.shutdown()
                     #break
                 if self.epoch > self.config.get(
                     "valid.early_stopping.min_threshold.epochs"
@@ -191,7 +191,7 @@ class TrainingJob(Job):
                             metric_name, self.epoch
                         )
                     )
-                    self.parameter_client.stop()
+                    self.parameter_client.shutdown()
                     #break
 
             # should we stop?
@@ -217,11 +217,11 @@ class TrainingJob(Job):
             self.model.meta["train_config"] = self.config
             self.model.meta["train_trace_entry"] = trace_entry
 
-            print("done worker: ", self.parameter_client.worker_id)
+            print("done worker: ", self.parameter_client.rank)
             self.model = self.model.cpu()
             torch.cuda.empty_cache()
             self.parameter_client.barrier()
-            if self.parameter_client.worker_id == 1:
+            if self.parameter_client.rank == 1:
                 # move current small model to a tmp model
                 self.model = self.model.cpu()
                 tmp_model = self.model

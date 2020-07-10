@@ -124,7 +124,8 @@ class DistSGD(Optimizer):
                 #self.lapse_worker.push(self.lapse_indexes[i][indexes_to_push_mask], (-group['lr']*d_p).cpu().to_dense()[indexes_to_push_mask].numpy())
                 # TODO: this does not yet work with penalize
                 #  the mapping in penalize is still wrong -> take patricks freeze code as soon as ready
-                self.parameter_client.push(self.local_to_lapse_mappers[i][indexes_to_push_mask].astype(np.uint64), (-group['lr'] * d_p).cpu().to_dense()[indexes_to_push_mask].numpy())
+                self.parameter_client.push(self.local_to_lapse_mappers[i][indexes_to_push_mask],
+                                           (-group['lr'] * d_p).cpu().to_dense()[indexes_to_push_mask])
                 #self.lapse_worker.push(self.lapse_indexes[i], (-group['lr']*d_p).cpu().to_dense().numpy())
                 p.add_(d_p, alpha=-group['lr'])
 

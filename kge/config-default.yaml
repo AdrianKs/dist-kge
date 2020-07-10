@@ -12,6 +12,11 @@ job:
   # Main device to use for this job (e.g., 'cpu', 'cuda', 'cuda:0')
   device: 'cuda'
   device_pool: [ ]
+  distributed:
+    num_workers: 1
+    parameter_server: 'lapse'  # options: lapse, torch
+    master_ip: '127.0.0.1'
+    master_port: '8888'
 
 # The seeds of the PRNGs can be set manually for (increased) reproducability.
 # Use -1 to use default seed.

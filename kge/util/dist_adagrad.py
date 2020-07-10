@@ -153,19 +153,16 @@ class DistAdagrad(Optimizer):
                     # TODO: indexing on numpy update tensor creates a new tensor
                     #  updates will be written in the wrong tensor
                     #  sometimes the tensor is even freed before we even write in it
-                    update_mask = np.zeros(len(self.local_to_lapse_mappers[i]), dtype=np.bool)
+                    update_mask = torch.zeros(len(self.local_to_lapse_mappers[i]), dtype=torch.bool)
                     update_mask[grad_indices_flat.cpu().numpy()] = True
-                    update_tensor = np.zeros((np.sum(update_mask), grad.size()[1]), dtype=np.float32)
-                    keys_optim = (self.local_to_lapse_mappers[i].astype(np.uint64)
+                    update_tensor = torch.zeros((torch.sum(update_mask).item(), grad.size()[1]), dtype=torch.float32)
+                    keys_optim = (self.local_to_lapse_mappers[i]
                                   + self.lapse_optimizer_index_offset)[update_mask]
                     self.parameter_client.pull(
                         keys_optim,
                         update_tensor,
                     )
-                    # TODO: invalid device ordinal
-                    state["sum"][update_mask] = torch.from_numpy(
-                        update_tensor
-                    ).to(state["sum"].device)
+                    state["sum"][update_mask] = update_tensor.to(state["sum"].device)
 
                     def make_sparse(values):
                         constructor = grad.new
@@ -176,7 +173,7 @@ class DistAdagrad(Optimizer):
                     sum_update_values = grad_values.pow(2)
                     self.parameter_client.push(
                         keys_optim,
-                        sum_update_values.cpu().numpy(),
+                        sum_update_values.cpu(),
                     )
                     state["sum"].add_(make_sparse(sum_update_values))
 
@@ -184,29 +181,27 @@ class DistAdagrad(Optimizer):
                     std_values = std._values().sqrt_().add_(group["eps"])
                     update_value = (grad_values / std_values).mul_(-clr)
                     self.parameter_client.push(
-                        self.local_to_lapse_mappers[i][update_mask].astype(np.uint64),
-                        update_value.cpu().numpy(),
+                        self.local_to_lapse_mappers[i][update_mask],
+                        update_value.cpu(),
                     )
                     # p.add_(make_sparse(grad_values / std_values), alpha=-clr)
                 else:
                     # pull the current internal optimizer parameters
                     update_mask = self.local_to_lapse_mappers[i] != -1
-                    update_tensor = np.zeros((np.sum(update_mask), p.shape[1]), dtype=np.float32)
-                    keys_optim = (self.local_to_lapse_mappers[i].astype(np.uint64)
+                    update_tensor = torch.zeros((torch.sum(update_mask).item(), p.shape[1]), dtype=torch.float32)
+                    keys_optim = (self.local_to_lapse_mappers[i]
                                   + self.lapse_optimizer_index_offset)[update_mask]
                     self.parameter_client.pull(keys_optim,
                                                update_tensor
                                                )
-                    state["sum"][update_mask] = torch.from_numpy(
-                        update_tensor
-                    ).to(state["sum"].device)
+                    state["sum"][update_mask] = update_tensor.to(state["sum"].device)
 
                     # push the updated internal optimizer parameters to lapse
                     # state['sum'].addcmul_(grad, grad, value=1)
                     sum_update = grad * grad
                     self.parameter_client.push(
                         keys_optim,
-                        sum_update.cpu().numpy()[update_mask],
+                        sum_update.cpu()[update_mask],
                     )
                     state["sum"].add_(sum_update)
                     std = state["sum"].sqrt().add_(group["eps"])
@@ -217,7 +212,7 @@ class DistAdagrad(Optimizer):
                     update_value = -clr * grad / std
                     self.parameter_client.push(
                         self.local_to_lapse_mappers[i][update_mask].astype(np.uint64),
-                        update_value.cpu().numpy()[update_mask]
+                        update_value.cpu()[update_mask]
                     )
 
         return loss
@@ -229,10 +224,10 @@ class DistAdagrad(Optimizer):
                 if p.grad is None:
                     continue
                 state = self.state[p]
-                update_tensor = np.zeros_like(p)
-                keys_optim = np.arange(p.shape[0]) + self.lapse_optimizer_index_offset[i]
+                update_tensor = torch.zeros_like(p)
+                keys_optim = torch.arange(p.shape[0]) + self.lapse_optimizer_index_offset[i]
                 self.parameter_client.pull(keys_optim, update_tensor)
-                state['sum'][:, :] = torch.from_numpy(update_tensor)
+                state['sum'][:, :] = update_tensor
 
     def push_all(self):
         # push all optimizer parameters into lapse
@@ -241,5 +236,5 @@ class DistAdagrad(Optimizer):
                 if p.grad is None:
                     continue
                 state = self.state[p]
-                keys_optim = np.arange(p.shape[0]) + self.lapse_optimizer_index_offset[i]
-                self.parameter_client.push(keys_optim, state['sum'].cpu().numpy())
+                keys_optim = torch.arange(p.shape[0]) + self.lapse_optimizer_index_offset[i]
+                self.parameter_client.push(keys_optim, state['sum'].cpu())
