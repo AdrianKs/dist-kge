@@ -254,7 +254,7 @@ class KgeEmbedder(KgeBase):
             raise Exception("Can't find {}.type in config".format(configuration_key))
 
         try:
-            if config.get("num_workers") > 1:
+            if config.get("job.distributed.num_workers") > 0:
                 class_name = "Distributed" + class_name
                 embedder = getattr(module, class_name)(
                     config, dataset, configuration_key,
