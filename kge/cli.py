@@ -17,15 +17,10 @@ from kge.util.dump import add_dump_parsers, dump
 from kge.util.io import get_checkpoint_file, load_checkpoint
 from kge.util.package import package_model, add_package_parser
 from kge.normal_cli import create_parser, process_meta_command, argparse_bool_type
-from kge.util import KgeParameterClient, TorchParameterServer
+from kge.distributed import WorkerProcessPool, TorchParameterServer
 
-from copy import deepcopy
 from torch import multiprocessing as mp
 from torch import distributed as dist
-import time
-from typing import Optional, Dict
-
-mp.set_start_method("spawn", force=True)
 
 
 def init_lapse_scheduler(servers, num_keys, master_ip, master_port):
@@ -40,100 +35,12 @@ def init_lapse_scheduler(servers, num_keys, master_ip, master_port):
 
 def init_torch_server(num_clients, num_keys, dim, master_ip, master_port):
     world_size = num_clients + 1
-    os.environ['MASTER_ADDR'] = master_ip
-    os.environ['MASTER_PORT'] = master_port
+    os.environ["MASTER_ADDR"] = master_ip
+    os.environ["MASTER_PORT"] = master_port
     dist.init_process_group(
-        backend="gloo",
-        init_method="env://",
-        world_size=world_size,
-        rank=0,
+        backend="gloo", init_method="env://", world_size=world_size, rank=0,
     )
     TorchParameterServer(world_size, num_keys, dim)
-
-
-def run_worker(
-    rank,
-    num_workers,
-    num_keys,
-    num_meta_keys,
-    embedding_dim,
-    config,
-    dataset,
-    checkpoint: Optional[Dict] = None,
-):
-    server = None
-    if config.get("job.distributed.parameter_server") == "lapse":
-        os.environ["DMLC_NUM_WORKER"] = "0"
-        os.environ["DMLC_NUM_SERVER"] = str(num_workers)
-        os.environ["DMLC_ROLE"] = "server"
-        os.environ["DMLC_PS_ROOT_URI"] = config.get("job.distributed.master_ip")
-        os.environ["DMLC_PS_ROOT_PORT"] = config.get("job.distributed.master_port")
-
-        num_workers_per_server = 1
-        lapse.setup(num_keys, num_workers_per_server)
-        server = lapse.Server(num_keys, embedding_dim)
-    else:
-        os.environ['MASTER_ADDR'] = config.get("job.distributed.master_ip")
-        os.environ['MASTER_PORT'] = config.get("job.distributed.master_port")
-        dist.init_process_group(
-            backend="gloo",
-            init_method="env://",
-            world_size=num_workers + 1,
-            rank=rank + 1,
-        )
-    configs = {}
-    datasets = {}
-    w = 0
-    start_time = time.time()
-    device_pool: list = config.get("job.device_pool")
-    if len(device_pool) == 0:
-        device_pool.append(config.get("job.device"))
-    worker_id = rank
-    configs[w] = deepcopy(config)
-    configs[w].set("job.device", device_pool[worker_id % len(device_pool)])
-    configs[w].folder = os.path.join(config.folder, f"worker-{w}")
-    configs[w].init_folder()
-    datasets[w] = deepcopy(dataset)
-    datasets[w] = Dataset.create(
-        configs[w], folder=os.path.join(dataset.folder, f"partition_{worker_id}")
-    )
-    # datasets[w] = Dataset.create(configs[w], dataset.folder)
-    # kv = lapse.Worker(0, worker_id + 1, s)
-    # kv = LapseWorker(0, worker_id + 1, s, num_meta_keys)
-    parameter_client = KgeParameterClient.create(
-        client_type=config.get("job.distributed.parameter_server"),
-        server_id=0,
-        client_id=worker_id + 1,
-        embedding_dim=embedding_dim,
-        server=server,
-        num_meta_keys=num_meta_keys,
-    )
-    init_for_load_only = False
-    if parameter_client.rank == 1 and checkpoint is not None:
-        # Todo: we still create a complete new job after creating the resume job
-        #  therefore epoch numbers will not be handled correctly, for example
-        job = Job.create_from(checkpoint)
-        job.model.get_s_embedder().push_all()
-        job.model.get_p_embedder().push_all()
-        job.optimizer.push_all()
-        init_for_load_only = True
-    job = Job.create(
-        configs[w],
-        datasets[w],
-        parameter_client=parameter_client,
-        init_for_load_only=init_for_load_only,
-    )
-    job.run()
-    end_time = time.time()
-    print(end_time - start_time)
-
-    parameter_client.shutdown()
-    del job
-    del parameter_client
-    gc.collect()
-    # shutdown server
-    if server is not None:
-        server.shutdown()
 
 
 def main():
@@ -291,7 +198,6 @@ def main():
                 #         "No checkpoint found or specified, starting from scratch..."
                 #     )
             # else:
-            configs = {}
             processes = []
             num_keys = dataset.num_entities() + dataset.num_relations()
             num_meta_keys = 1
@@ -305,36 +211,28 @@ def main():
             # meta keys. contains for example a variable indicating whether to stop or
             #  not
             num_keys += num_meta_keys
-            if config.get("job.distributed.parameter_server") == 'lapse':
-                p = mp.Process(target=init_lapse_scheduler, args=(num_workers, num_keys, master_ip, master_port))
-                p.start()
-                processes.append(p)
-            else:
-                p = mp.Process(target=init_torch_server, args=(num_workers, num_keys, dim, master_ip, master_port))
-                p.start()
-                processes.append(p)
-            for rank in range(config.get("job.distributed.num_workers")):
-                configs[rank] = deepcopy(config)
-                configs[rank].set(config.get("model") + ".create_complete", False)
-                configs[rank].folder = os.path.join(config.folder, f"server-{rank}")
-                configs[rank].init_folder()
+            if config.get("job.distributed.parameter_server") == "lapse":
                 p = mp.Process(
-                    target=run_worker,
-                    args=(
-                        rank,
-                        num_workers,
-                        num_keys,
-                        num_meta_keys,
-                        dim,
-                        configs[rank],
-                        dataset,
-                        checkpoint,
-                    ),
+                    target=init_lapse_scheduler,
+                    args=(num_workers, num_keys, master_ip, master_port),
                 )
                 p.start()
                 processes.append(p)
+            else:
+                p = mp.Process(
+                    target=init_torch_server,
+                    args=(num_workers, num_keys, dim, master_ip, master_port),
+                )
+                p.start()
+                processes.append(p)
+            num_workers = config.get("job.distributed.num_workers")
+            worker_process_pool = WorkerProcessPool(
+                num_workers, num_keys, num_meta_keys, dim, config, dataset, checkpoint
+            )
+            worker_process_pool.join()
             for p in processes:
                 p.join()
+
             # job.run()
     except BaseException as e:
         tb = traceback.format_exc()

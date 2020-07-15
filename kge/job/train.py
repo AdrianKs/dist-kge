@@ -16,7 +16,8 @@ from kge import Config, Dataset
 from kge.job import Job
 from kge.model import KgeModel
 
-from kge.util import KgeLoss, KgeOptimizer, KgeSampler, KgeLRScheduler, KgeParameterClient
+from kge.util import KgeLoss, KgeOptimizer, KgeSampler, KgeLRScheduler
+from kge.distributed import KgeParameterClient
 from typing import Any, Callable, Dict, List, Optional, Union
 import kge.job.util
 

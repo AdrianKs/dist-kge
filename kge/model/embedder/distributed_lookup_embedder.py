@@ -8,7 +8,7 @@ import lapse
 
 from kge import Config, Dataset
 from kge.model import LookupEmbedder, KgeEmbedder
-from kge.util import KgeParameterClient
+from kge.distributed import KgeParameterClient
 
 from typing import List
 
