@@ -32,7 +32,7 @@ class LapseParameterServer:
 class TorchParameterServer:
     def __init__(self, world_size: int, num_keys: int, dim: int):
         self.rank = 0
-        self.num_clients = world_size - 1
+        self.num_clients = world_size - 2
         self.dim = dim
         self.data_type = torch.float32
         self.data = torch.zeros((num_keys, dim), dtype=self.data_type)

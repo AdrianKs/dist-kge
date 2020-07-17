@@ -17,7 +17,11 @@ from kge.job import Job
 from kge.model import KgeModel
 
 from kge.util import KgeLoss, KgeOptimizer, KgeSampler, KgeLRScheduler
-from kge.distributed import KgeParameterClient
+# fixme: for some reason python from console cries about circular imports if loaded
+#  from init. But directly it works (partially initialized model)
+from kge.distributed.work_scheduler import SchedulerClient
+from kge.distributed.parameter_client import KgeParameterClient
+#from kge.distributed import KgeParameterClient, SchedulerClient
 from typing import Any, Callable, Dict, List, Optional, Union
 import kge.job.util
 
@@ -41,6 +45,20 @@ def _generate_worker_init_fn(config):
             np.random.seed()
 
     return worker_init_fn
+
+
+class NumberDataset(torch.utils.data.Dataset):
+    def __init__(self, num_samples):
+        self.samples = list(range(num_samples))
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        return self.samples[idx]
+
+    def set_samples(self, samples):
+        self.samples = samples
 
 
 class TrainingJob(Job):
@@ -76,6 +94,7 @@ class TrainingJob(Job):
             self.model: KgeModel = KgeModel.create(config, dataset, parameter_client=parameter_client)
         else:
             self.model: KgeModel = model
+        self.work_scheduler_client = SchedulerClient()
         lapse_indexes = [np.arange(dataset.num_entities(), dtype=np.int), np.arange(dataset.num_relations(), dtype=np.int) + dataset.num_entities()]
         self.optimizer = KgeOptimizer.create(config, self.model, parameter_client=parameter_client, lapse_indexes=lapse_indexes)
         self.kge_lr_scheduler = KgeLRScheduler(config, self.optimizer)
@@ -181,6 +200,7 @@ class TrainingJob(Job):
                         + "in the last {} validation runs).".format(patience)
                     )
                     self.parameter_client.shutdown()
+                    self.work_scheduler_client.shutdown()
                     #break
                 if self.epoch > self.config.get(
                     "valid.early_stopping.min_threshold.epochs"
@@ -193,6 +213,7 @@ class TrainingJob(Job):
                         )
                     )
                     self.parameter_client.shutdown()
+                    self.work_scheduler_client.shutdown()
                     #break
 
             # should we stop?
@@ -357,171 +378,182 @@ class TrainingJob(Job):
             self.model.prepare_job(self)  # let the model add some hooks
             self.is_prepared = True
 
-        # variables that record various statitics
-        sum_loss = 0.0
-        sum_penalty = 0.0
-        sum_penalties = defaultdict(lambda: 0.0)
-        epoch_time = -time.time()
-        prepare_time = 0.0
-        forward_time = 0.0
-        backward_time = 0.0
-        optimizer_time = 0.0
+        while True:
+            # load new work package
+            work = self.work_scheduler_client.get_work()
+            if work is None:
+                break
+            #if work is not None:
+            self.dataloader_dataset.set_samples(work)
 
-        # process each batch
-        for batch_index, batch in enumerate(self.loader):
-            for f in self.pre_batch_hooks:
-                f(self)
+            # variables that record various statitics
+            sum_loss = 0.0
+            sum_penalty = 0.0
+            sum_penalties = defaultdict(lambda: 0.0)
+            epoch_time = -time.time()
+            prepare_time = 0.0
+            forward_time = 0.0
+            backward_time = 0.0
+            optimizer_time = 0.0
 
-            # process batch (preprocessing + forward pass + backward pass on loss)
-            self.optimizer.zero_grad()
-            batch_result: TrainingJob._ProcessBatchResult = self._process_batch(
-                batch_index, batch
-            )
-            sum_loss += batch_result.avg_loss * batch_result.size
+            # process each batch
+            for batch_index, batch in enumerate(self.loader):
+                for f in self.pre_batch_hooks:
+                    f(self)
 
-            # determine penalty terms (forward pass)
-            batch_forward_time = batch_result.forward_time - time.time()
-            penalties_torch = self.model.penalty(
-                epoch=self.epoch,
-                batch_index=batch_index,
-                num_batches=len(self.loader),
-                batch=batch,
-            )
-            batch_forward_time += time.time()
+                # process batch (preprocessing + forward pass + backward pass on loss)
+                self.optimizer.zero_grad()
+                batch_result: TrainingJob._ProcessBatchResult = self._process_batch(
+                    batch_index, batch
+                )
+                sum_loss += batch_result.avg_loss * batch_result.size
 
-            # backward pass on penalties
-            batch_backward_time = batch_result.backward_time - time.time()
-            penalty = 0.0
-            for index, (penalty_key, penalty_value_torch) in enumerate(penalties_torch):
-                penalty_value_torch.backward()
-                penalty += penalty_value_torch.item()
-                sum_penalties[penalty_key] += penalty_value_torch.item()
-            sum_penalty += penalty
-            batch_backward_time += time.time()
+                # determine penalty terms (forward pass)
+                batch_forward_time = batch_result.forward_time - time.time()
+                penalties_torch = self.model.penalty(
+                    epoch=self.epoch,
+                    batch_index=batch_index,
+                    num_batches=len(self.loader),
+                    batch=batch,
+                )
+                batch_forward_time += time.time()
 
-            # determine full cost
-            cost_value = batch_result.avg_loss + penalty
+                # backward pass on penalties
+                batch_backward_time = batch_result.backward_time - time.time()
+                penalty = 0.0
+                for index, (penalty_key, penalty_value_torch) in enumerate(penalties_torch):
+                    penalty_value_torch.backward()
+                    penalty += penalty_value_torch.item()
+                    sum_penalties[penalty_key] += penalty_value_torch.item()
+                sum_penalty += penalty
+                batch_backward_time += time.time()
 
-            # abort on nan
-            if self.abort_on_nan and math.isnan(cost_value):
-                raise FloatingPointError("Cost became nan, aborting training job")
+                # determine full cost
+                cost_value = batch_result.avg_loss + penalty
 
-            # TODO # visualize graph
-            # if (
-            #     self.epoch == 1
-            #     and batch_index == 0
-            #     and self.config.get("train.visualize_graph")
-            # ):
-            #     from torchviz import make_dot
+                # abort on nan
+                if self.abort_on_nan and math.isnan(cost_value):
+                    raise FloatingPointError("Cost became nan, aborting training job")
 
-            #     f = os.path.join(self.config.folder, "cost_value")
-            #     graph = make_dot(cost_value, params=dict(self.model.named_parameters()))
-            #     graph.save(f"{f}.gv")
-            #     graph.render(f)  # needs graphviz installed
-            #     self.config.log("Exported compute graph to " + f + ".{gv,pdf}")
+                # TODO # visualize graph
+                # if (
+                #     self.epoch == 1
+                #     and batch_index == 0
+                #     and self.config.get("train.visualize_graph")
+                # ):
+                #     from torchviz import make_dot
 
-            # print memory stats
-            if self.epoch == 1 and batch_index == 0:
-                if self.device.startswith("cuda"):
-                    self.config.log(
-                        "CUDA memory after first batch: allocated={:14,} "
-                        "cached={:14,} max_allocated={:14,}".format(
-                            torch.cuda.memory_allocated(self.device),
-                            torch.cuda.memory_cached(self.device),
-                            torch.cuda.max_memory_allocated(self.device),
+                #     f = os.path.join(self.config.folder, "cost_value")
+                #     graph = make_dot(cost_value, params=dict(self.model.named_parameters()))
+                #     graph.save(f"{f}.gv")
+                #     graph.render(f)  # needs graphviz installed
+                #     self.config.log("Exported compute graph to " + f + ".{gv,pdf}")
+
+                # print memory stats
+                if self.epoch == 1 and batch_index == 0:
+                    if self.device.startswith("cuda"):
+                        self.config.log(
+                            "CUDA memory after first batch: allocated={:14,} "
+                            "cached={:14,} max_allocated={:14,}".format(
+                                torch.cuda.memory_allocated(self.device),
+                                torch.cuda.memory_cached(self.device),
+                                torch.cuda.max_memory_allocated(self.device),
+                            )
                         )
-                    )
 
-            # update parameters
-            batch_optimizer_time = -time.time()
-            self.optimizer.step()
-            batch_optimizer_time += time.time()
+                # update parameters
+                batch_optimizer_time = -time.time()
+                self.optimizer.step()
+                batch_optimizer_time += time.time()
 
-            self.model.push_back()
+                self.model.push_back()
 
-            # tracing/logging
-            if self.trace_batch:
-                batch_trace = {
-                    "type": self.type_str,
-                    "scope": "batch",
-                    "epoch": self.epoch,
-                    "split": self.train_split,
-                    "batch": batch_index,
-                    "size": batch_result.size,
-                    "batches": len(self.loader),
-                    "lr": [group["lr"] for group in self.optimizer.param_groups],
-                    "avg_loss": batch_result.avg_loss,
-                    "penalties": [p.item() for k, p in penalties_torch],
-                    "penalty": penalty,
-                    "cost": cost_value,
-                    "prepare_time": batch_result.prepare_time,
-                    "forward_time": batch_forward_time,
-                    "backward_time": batch_backward_time,
-                    "optimizer_time": batch_optimizer_time,
-                }
-                for f in self.post_batch_trace_hooks:
-                    f(self, batch_trace)
-                self.trace(**batch_trace, event="batch_completed")
-            self.config.print(
-                (
-                    "\r"  # go back
-                    + "{}  batch{: "
-                    + str(1 + int(math.ceil(math.log10(len(self.loader)))))
-                    + "d}/{}"
-                    + ", avg_loss {:.4E}, penalty {:.4E}, cost {:.4E}, time {:6.2f}s"
-                    + "\033[K"  # clear to right
-                ).format(
-                    self.config.log_prefix,
-                    batch_index,
-                    len(self.loader) - 1,
-                    batch_result.avg_loss,
-                    penalty,
-                    cost_value,
-                    batch_result.prepare_time
-                    + batch_forward_time
-                    + batch_backward_time
-                    + batch_optimizer_time,
-                ),
-                end="",
-                flush=True,
+                # tracing/logging
+                if self.trace_batch:
+                    batch_trace = {
+                        "type": self.type_str,
+                        "scope": "batch",
+                        "epoch": self.epoch,
+                        "split": self.train_split,
+                        "batch": batch_index,
+                        "size": batch_result.size,
+                        "batches": len(self.loader),
+                        "lr": [group["lr"] for group in self.optimizer.param_groups],
+                        "avg_loss": batch_result.avg_loss,
+                        "penalties": [p.item() for k, p in penalties_torch],
+                        "penalty": penalty,
+                        "cost": cost_value,
+                        "prepare_time": batch_result.prepare_time,
+                        "forward_time": batch_forward_time,
+                        "backward_time": batch_backward_time,
+                        "optimizer_time": batch_optimizer_time,
+                    }
+                    for f in self.post_batch_trace_hooks:
+                        f(self, batch_trace)
+                    self.trace(**batch_trace, event="batch_completed")
+                self.config.print(
+                    (
+                        "\r"  # go back
+                        + "{}  batch{: "
+                        + str(1 + int(math.ceil(math.log10(len(self.loader)))))
+                        + "d}/{}"
+                        + ", avg_loss {:.4E}, penalty {:.4E}, cost {:.4E}, time {:6.2f}s"
+                        + "\033[K"  # clear to right
+                    ).format(
+                        self.config.log_prefix,
+                        batch_index,
+                        len(self.loader) - 1,
+                        batch_result.avg_loss,
+                        penalty,
+                        cost_value,
+                        batch_result.prepare_time
+                        + batch_forward_time
+                        + batch_backward_time
+                        + batch_optimizer_time,
+                    ),
+                    end="",
+                    flush=True,
+                )
+
+                # update times
+                prepare_time += batch_result.prepare_time
+                forward_time += batch_forward_time
+                backward_time += batch_backward_time
+                optimizer_time += batch_optimizer_time
+
+            # all done; now trace and log
+            epoch_time += time.time()
+            self.config.print("\033[2K\r", end="", flush=True)  # clear line and go back
+
+            other_time = (
+                epoch_time - prepare_time - forward_time - backward_time - optimizer_time
             )
+            trace_entry = dict(
+                type=self.type_str,
+                scope="epoch",
+                epoch=self.epoch,
+                split=self.train_split,
+                batches=len(self.loader),
+                size=self.num_examples,
+                lr=[group["lr"] for group in self.optimizer.param_groups],
+                avg_loss=sum_loss / self.num_examples,
+                avg_penalty=sum_penalty / len(self.loader),
+                avg_penalties={k: p / len(self.loader) for k, p in sum_penalties.items()},
+                avg_cost=sum_loss / self.num_examples + sum_penalty / len(self.loader),
+                epoch_time=epoch_time,
+                prepare_time=prepare_time,
+                forward_time=forward_time,
+                backward_time=backward_time,
+                optimizer_time=optimizer_time,
+                other_time=other_time,
+                event="epoch_completed",
+            )
+            for f in self.post_epoch_trace_hooks:
+                f(self, trace_entry)
+            trace_entry = self.trace(**trace_entry, echo=True, echo_prefix="  ", log=True)
 
-            # update times
-            prepare_time += batch_result.prepare_time
-            forward_time += batch_forward_time
-            backward_time += batch_backward_time
-            optimizer_time += batch_optimizer_time
-
-        # all done; now trace and log
-        epoch_time += time.time()
-        self.config.print("\033[2K\r", end="", flush=True)  # clear line and go back
-
-        other_time = (
-            epoch_time - prepare_time - forward_time - backward_time - optimizer_time
-        )
-        trace_entry = dict(
-            type=self.type_str,
-            scope="epoch",
-            epoch=self.epoch,
-            split=self.train_split,
-            batches=len(self.loader),
-            size=self.num_examples,
-            lr=[group["lr"] for group in self.optimizer.param_groups],
-            avg_loss=sum_loss / self.num_examples,
-            avg_penalty=sum_penalty / len(self.loader),
-            avg_penalties={k: p / len(self.loader) for k, p in sum_penalties.items()},
-            avg_cost=sum_loss / self.num_examples + sum_penalty / len(self.loader),
-            epoch_time=epoch_time,
-            prepare_time=prepare_time,
-            forward_time=forward_time,
-            backward_time=backward_time,
-            optimizer_time=optimizer_time,
-            other_time=other_time,
-            event="epoch_completed",
-        )
-        for f in self.post_epoch_trace_hooks:
-            f(self, trace_entry)
-        trace_entry = self.trace(**trace_entry, echo=True, echo_prefix="  ", log=True)
+            print("work done", self.parameter_client.rank)
+            self.work_scheduler_client.work_done()
         return trace_entry
 
     def _prepare(self):
@@ -853,8 +885,10 @@ class TrainingJobNegativeSampling(TrainingJob):
             return
 
         self.num_examples = self.dataset.split(self.train_split).size(0)
+        self.dataloader_dataset = NumberDataset(self.num_examples)
         self.loader = torch.utils.data.DataLoader(
-            range(self.num_examples),
+            # range(self.num_examples),
+            self.dataloader_dataset,
             collate_fn=self._get_collate_fun(),
             shuffle=True,
             batch_size=self.batch_size,

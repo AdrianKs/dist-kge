@@ -8,14 +8,14 @@ import lapse
 
 from kge import Config, Dataset
 from kge.model import LookupEmbedder, KgeEmbedder
-from kge.distributed import KgeParameterClient
+#from kge.distributed import KgeParameterClient
 
 from typing import List
 
 
 class DistributedLookupEmbedder(LookupEmbedder):
     def __init__(
-        self, config: Config, dataset: Dataset, configuration_key: str, vocab_size: int, parameter_client: KgeParameterClient, lapse_index: torch.Tensor, complete_vocab_size
+        self, config: Config, dataset: Dataset, configuration_key: str, vocab_size: int, parameter_client: "KgeParameterClient", lapse_index: torch.Tensor, complete_vocab_size
     ):
         super().__init__(config, dataset, configuration_key, vocab_size)
 

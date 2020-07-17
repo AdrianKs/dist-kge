@@ -3,6 +3,7 @@ import lapse
 import numpy as np
 from typing import Optional
 from torch import distributed as dist
+from .work_scheduler import SCHEDULER_CMDS
 
 PULL_CMD = 0
 PUSH_CMD = 1
@@ -132,6 +133,7 @@ class LapseParameterClient(lapse.Worker, KgeParameterClient):
 class TorchParameterClient(KgeParameterClient):
     def __init__(self, server_rank, rank, dim):
         self.server_rank = server_rank
+        self.scheduler_rank = 1  # fixme: needs to be a parameter
         self.rank = rank
         self.dim = dim
         self.data_type = torch.float32
@@ -156,6 +158,11 @@ class TorchParameterClient(KgeParameterClient):
     def barrier(self):
         cmd = torch.LongTensor([BARRIER_CMD, 0])
         dist.send(cmd, dst=self.server_rank)
+        # TODO: this is still very hacky. The parameter client should not have to tell
+        #  the scheduler to have to set a barrier
+        #  can we somehow ignore the scheduler in the barrier?
+        cmd = torch.LongTensor([SCHEDULER_CMDS.BARRIER, 0])
+        dist.send(cmd, dst=self.scheduler_rank)
         dist.barrier()
 
     def shutdown(self):

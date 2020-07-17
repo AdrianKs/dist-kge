@@ -25,7 +25,7 @@ class WorkerProcessPool:
     ):
         self.workers = []
         configs = {}
-        for rank in range(config.get("job.distributed.num_workers")):
+        for rank in range(num_total_workers):
             configs[rank] = deepcopy(config)
             configs[rank].set(config.get("model") + ".create_complete", False)
             configs[rank].folder = os.path.join(config.folder, f"server-{rank}")
@@ -61,7 +61,7 @@ class WorkerProcess(mp.get_context("spawn").Process):
         checkpoint: Optional[Dict] = None,
     ):
         # rank = rank + 1
-        super().__init__(daemon=True, name=f"GPU #{rank}")
+        super().__init__(daemon=True, name=f"Worker #{rank}")
         self.rank = rank
         self.num_total_workers = num_total_workers
         self.num_keys = num_keys
@@ -81,21 +81,23 @@ class WorkerProcess(mp.get_context("spawn").Process):
                 "job.distributed.master_ip"
             )
             os.environ["DMLC_PS_ROOT_PORT"] = self.config.get(
-                "job.distributed.master_port"
+                "job.distributed.lapse_port"
             )
 
             num_workers_per_server = 1
             lapse.setup(self.num_keys, num_workers_per_server)
             server = lapse.Server(self.num_keys, self.embedding_dim)
-        else:
-            os.environ["MASTER_ADDR"] = self.config.get("job.distributed.master_ip")
-            os.environ["MASTER_PORT"] = self.config.get("job.distributed.master_port")
-            dist.init_process_group(
-                backend="gloo",
-                init_method="env://",
-                world_size=self.num_total_workers + 1,
-                rank=self.rank + 1,
-            )
+
+        os.environ["MASTER_ADDR"] = self.config.get("job.distributed.master_ip")
+        os.environ["MASTER_PORT"] = self.config.get("job.distributed.master_port")
+        print("before init", self.rank + 2)
+        dist.init_process_group(
+            backend="gloo",
+            init_method="env://",
+            world_size=self.num_total_workers + 2,
+            rank=self.rank + 2,
+        )
+
         configs = {}
         datasets = {}
         w = 0
@@ -108,17 +110,17 @@ class WorkerProcess(mp.get_context("spawn").Process):
         configs[w].folder = os.path.join(self.config.folder, f"worker-{w}")
         configs[w].init_folder()
         datasets[w] = deepcopy(self.dataset)
-        datasets[w] = Dataset.create(
-            configs[w],
-            folder=os.path.join(self.dataset.folder, f"partition_{worker_id}"),
-        )
+        # datasets[w] = Dataset.create(
+        #     configs[w],
+        #     folder=os.path.join(self.dataset.folder, f"partition_{worker_id}"),
+        # )
         # datasets[w] = Dataset.create(configs[w], dataset.folder)
         # kv = lapse.Worker(0, worker_id + 1, s)
         # kv = LapseWorker(0, worker_id + 1, s, num_meta_keys)
         self.parameter_client = KgeParameterClient.create(
             client_type=self.config.get("job.distributed.parameter_server"),
             server_id=0,
-            client_id=worker_id + 1,
+            client_id=worker_id + 1,  # we may increase the number due to the scheduler
             embedding_dim=self.embedding_dim,
             server=server,
             num_meta_keys=self.num_meta_keys,
@@ -132,6 +134,7 @@ class WorkerProcess(mp.get_context("spawn").Process):
             job.model.get_p_embedder().push_all()
             job.optimizer.push_all()
             init_for_load_only = True
+            del self.checkpoint
         self.job = Job.create(
             configs[w],
             datasets[w],
@@ -140,6 +143,7 @@ class WorkerProcess(mp.get_context("spawn").Process):
         )
         self.job.run()
 
+        self.job.work_scheduler_client.shutdown()
         self.parameter_client.shutdown()
         del self.job
         del self.parameter_client

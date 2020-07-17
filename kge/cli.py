@@ -4,7 +4,7 @@ import os
 import sys
 import traceback
 import yaml
-import gc
+import time
 
 import torch
 import lapse
@@ -17,24 +17,39 @@ from kge.util.dump import add_dump_parsers, dump
 from kge.util.io import get_checkpoint_file, load_checkpoint
 from kge.util.package import package_model, add_package_parser
 from kge.normal_cli import create_parser, process_meta_command, argparse_bool_type
-from kge.distributed import WorkerProcessPool, TorchParameterServer
+from kge.distributed import WorkerProcessPool, TorchParameterServer, WorkScheduler
 
 from torch import multiprocessing as mp
 from torch import distributed as dist
 
 
-def init_lapse_scheduler(servers, num_keys, master_ip, master_port):
+def init_lapse_scheduler(servers, num_keys, master_ip, master_port, lapse_port):
     os.environ["DMLC_NUM_WORKER"] = "0"
     os.environ["DMLC_NUM_SERVER"] = str(servers)
     os.environ["DMLC_ROLE"] = "scheduler"
     os.environ["DMLC_PS_ROOT_URI"] = master_ip
-    os.environ["DMLC_PS_ROOT_PORT"] = master_port
+    os.environ["DMLC_PS_ROOT_PORT"] = lapse_port
     num_workers_per_server = 1
     lapse.scheduler(num_keys, num_workers_per_server)
 
 
+def mock_process(master_ip, master_port, dist_world_size):
+    """
+    This is currently just a helper method to have the same ranks for the processes
+    with lapse as with other ps
+    """
+    os.environ["MASTER_ADDR"] = master_ip
+    os.environ["MASTER_PORT"] = master_port
+    print("before init mock process, world_size", dist_world_size)
+    dist.init_process_group(
+        backend="gloo", init_method="env://", world_size=dist_world_size, rank=0,
+    )
+    # the mock process needs to stay alive until all other processes are initialized
+    time.sleep(120)
+
+
 def init_torch_server(num_clients, num_keys, dim, master_ip, master_port):
-    world_size = num_clients + 1
+    world_size = num_clients + 2
     os.environ["MASTER_ADDR"] = master_ip
     os.environ["MASTER_PORT"] = master_port
     dist.init_process_group(
@@ -204,6 +219,9 @@ def main():
             num_workers = config.get("job.distributed.num_workers")
             master_ip = config.get("job.distributed.master_ip")
             master_port = config.get("job.distributed.master_port")
+            lapse_port = config.get("job.distributed.lapse_port")
+            num_partitions = config.get("job.distributed.num_partitions")
+            dist_world_size = num_workers + 2
             dim = config.get("lookup_embedder.dim")
             if config.get("train.optimizer") == "dist_adagrad":
                 num_keys *= 2
@@ -211,20 +229,48 @@ def main():
             # meta keys. contains for example a variable indicating whether to stop or
             #  not
             num_keys += num_meta_keys
+            # todo: we should define server, scheduler and worker ranks here
+            #  then create a extra dist worker group after every init
+            #  we can create the scheduler-clients in the worker generation
+            #  and provide them with the scheduler rank
+            #  then we can remove this ugly mock process and can have a barrier
+            #  for the workers only
             if config.get("job.distributed.parameter_server") == "lapse":
                 p = mp.Process(
                     target=init_lapse_scheduler,
-                    args=(num_workers, num_keys, master_ip, master_port),
+                    args=(num_workers, num_keys, master_ip, master_port, lapse_port),
+                    daemon=True,
                 )
                 p.start()
                 processes.append(p)
+                p = mp.Process(
+                    target=mock_process,
+                    args=(master_ip, master_port, dist_world_size),
+                    daemon=True,
+                )
+                p.start()
             else:
                 p = mp.Process(
                     target=init_torch_server,
                     args=(num_workers, num_keys, dim, master_ip, master_port),
+                    daemon=True,
                 )
                 p.start()
                 processes.append(p)
+
+            # create a work scheduler
+            partition_type = config.get("job.distributed.partition_type")
+            scheduler = WorkScheduler.create(
+                partition_type=partition_type,
+                world_size=num_workers + 2,
+                master_ip=master_ip,
+                master_port=master_port,
+                num_partitions=num_partitions,
+                num_clients=num_workers,
+                dataset_folder=dataset.folder,
+            )
+            scheduler.start()
+            processes.append(scheduler)
             num_workers = config.get("job.distributed.num_workers")
             worker_process_pool = WorkerProcessPool(
                 num_workers, num_keys, num_meta_keys, dim, config, dataset, checkpoint
