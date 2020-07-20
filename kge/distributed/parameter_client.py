@@ -4,11 +4,7 @@ import numpy as np
 from typing import Optional
 from torch import distributed as dist
 from .work_scheduler import SCHEDULER_CMDS
-
-PULL_CMD = 0
-PUSH_CMD = 1
-BARRIER_CMD = 2
-SHUTDOWN_CMD = 3
+from .parameter_server import TORCH_PARAMETER_SERVER_CMDS
 
 
 class KgeParameterClient:
@@ -31,7 +27,9 @@ class KgeParameterClient:
         return False
 
     @staticmethod
-    def create(client_type, server_id, client_id, embedding_dim, server=None, num_meta_keys=0):
+    def create(
+        client_type, server_id, client_id, embedding_dim, server=None, num_meta_keys=0
+    ):
         if client_type == "lapse":
             return LapseParameterClient(
                 server_id,
@@ -49,11 +47,7 @@ class KgeParameterClient:
 
 class LapseParameterClient(lapse.Worker, KgeParameterClient):
     def __init__(
-        self,
-        customer_id: int,
-        rank: int,
-        lapse_server: lapse.Server,
-        num_meta_keys,
+        self, customer_id: int, rank: int, lapse_server: lapse.Server, num_meta_keys,
     ):
         super(LapseParameterClient, self).__init__(customer_id, rank, lapse_server)
         self.rank = rank
@@ -65,9 +59,7 @@ class LapseParameterClient(lapse.Worker, KgeParameterClient):
         self._optim_relation_step_key = torch.LongTensor(
             [self.num_keys - self.num_meta_keys + 2]
         )
-        self._lr_key = torch.LongTensor(
-            [self.num_keys - self.num_meta_keys + 3]
-        )
+        self._lr_key = torch.LongTensor([self.num_keys - self.num_meta_keys + 3])
         self._stop_value_tensor = torch.zeros((1, self.key_size), dtype=torch.float32)
         self._optim_entity_step_value_tensor = torch.zeros(
             (1, self.key_size), dtype=torch.float32
@@ -75,9 +67,7 @@ class LapseParameterClient(lapse.Worker, KgeParameterClient):
         self._optim_relation_step_value_tensor = torch.zeros(
             (1, self.key_size), dtype=torch.float32
         )
-        self._lr_tensor = torch.zeros(
-            (1, self.key_size), dtype=torch.float32
-        )
+        self._lr_tensor = torch.zeros((1, self.key_size), dtype=torch.float32)
         self.meta_key_tensor = torch.zeros(
             (self.num_meta_keys, self.key_size), dtype=torch.float32
         )
@@ -136,9 +126,7 @@ class LapseParameterClient(lapse.Worker, KgeParameterClient):
             return self._optim_relation_step_value_tensor[0, 0].item()
 
     def get_lr(self):
-        super(LapseParameterClient, self).pull(
-            self._lr_key, self._lr_tensor
-        )
+        super(LapseParameterClient, self).pull(self._lr_key, self._lr_tensor)
         return self._lr_tensor[0, 0].item()
 
     def set_lr(self, lr):
@@ -159,7 +147,7 @@ class TorchParameterClient(KgeParameterClient):
         self.data_type = torch.float32
 
     def pull(self, keys, pull_tensor=None, asynchronous=False):
-        cmd = torch.LongTensor([PULL_CMD, len(keys)])
+        cmd = torch.LongTensor([TORCH_PARAMETER_SERVER_CMDS.PULL_CMD, len(keys)])
         dist.send(cmd, dst=self.server_rank)
         dist.send(keys, dst=self.server_rank)
         if pull_tensor is None:
@@ -167,7 +155,7 @@ class TorchParameterClient(KgeParameterClient):
         dist.recv(pull_tensor, src=self.server_rank)
 
     def push(self, keys, push_tensor, asynchronous=False):
-        cmd = torch.LongTensor([PUSH_CMD, len(keys)])
+        cmd = torch.LongTensor([TORCH_PARAMETER_SERVER_CMDS.PUSH_CMD, len(keys)])
         dist.send(cmd, dst=self.server_rank)
         dist.send(keys, dst=self.server_rank)
         dist.send(push_tensor, dst=self.server_rank)
@@ -176,7 +164,7 @@ class TorchParameterClient(KgeParameterClient):
         pass
 
     def barrier(self):
-        cmd = torch.LongTensor([BARRIER_CMD, 0])
+        cmd = torch.LongTensor([TORCH_PARAMETER_SERVER_CMDS.BARRIER_CMD, 0])
         dist.send(cmd, dst=self.server_rank)
         # TODO: this is still very hacky. The parameter client should not have to tell
         #  the scheduler to have to set a barrier
@@ -186,21 +174,29 @@ class TorchParameterClient(KgeParameterClient):
         dist.barrier()
 
     def shutdown(self):
-        cmd = torch.LongTensor([SHUTDOWN_CMD, 0])
+        cmd = torch.LongTensor([TORCH_PARAMETER_SERVER_CMDS.SHUTDOWN_CMD, 0])
         dist.send(cmd, dst=self.server_rank)
 
     def step_optim(self, parameter_index):
-        # todo we still need to implement the handling of optimizer steps
-        pass
+        cmd = torch.LongTensor(
+            [TORCH_PARAMETER_SERVER_CMDS.STEP_OPTIM_CMD, parameter_index]
+        )
+        dist.send(cmd, dst=self.server_rank)
 
     def get_step_optim(self, parameter_index):
-        # todo we still need to implement the handling of optimizer steps
-        return 1
+        cmd = torch.LongTensor(
+            [TORCH_PARAMETER_SERVER_CMDS.GET_OPTIM_STEP_CMD, parameter_index]
+        )
+        dist.send(cmd, dst=self.server_rank)
+        dist.recv(cmd, src=self.server_rank)
+        return cmd[1].item()
 
     def get_lr(self):
-        # todo we still need to implement lr handling
-        return 1
+        cmd = torch.LongTensor([TORCH_PARAMETER_SERVER_CMDS.GET_LR_CMD, 0])
+        dist.send(cmd, dst=self.server_rank)
+        dist.recv(cmd, src=self.server_rank)
+        return cmd[1].item()
 
-    def set_lr(self):
-        # todo we still need to implement lr handling
-        pass
+    def set_lr(self, lr):
+        cmd = torch.LongTensor([TORCH_PARAMETER_SERVER_CMDS.SET_LR_CMD, lr])
+        dist.send(cmd, dst=self.server_rank)

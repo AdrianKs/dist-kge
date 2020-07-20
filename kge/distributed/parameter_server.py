@@ -1,12 +1,18 @@
 import os
 import torch
 import lapse
+from enum import IntEnum
 from torch import distributed as dist
 
-PULL_CMD = 0
-PUSH_CMD = 1
-BARRIER_CMD = 2
-SHUTDOWN_CMD = 3
+class TORCH_PARAMETER_SERVER_CMDS(IntEnum):
+    PULL_CMD = 0
+    PUSH_CMD = 1
+    GET_LR_CMD = 2
+    SET_LR_CMD = 3
+    GET_OPTIM_STEP_CMD = 4
+    STEP_OPTIM_CMD = 5
+    BARRIER_CMD = 6
+    SHUTDOWN_CMD = 7
 
 
 class KgeParameterServer:
@@ -36,6 +42,9 @@ class TorchParameterServer:
         self.dim = dim
         self.data_type = torch.float32
         self.data = torch.zeros((num_keys, dim), dtype=self.data_type)
+        self.lr = 0
+        self.entity_optim_step = 0
+        self.relation_optim_step = 0
         self.start()
 
     def start(self):
@@ -46,20 +55,40 @@ class TorchParameterServer:
             cmd_buffer = torch.full((2,), -1, dtype=torch.long)
             rank = dist.recv(cmd_buffer)
             cmd = cmd_buffer[0].item()
-            key_len = cmd_buffer[1].item()
-            if cmd == PULL_CMD:
+            if cmd == TORCH_PARAMETER_SERVER_CMDS.PULL_CMD:
+                key_len = cmd_buffer[1].item()
                 keys = self._receive_keys(rank, key_len)
                 data = self.data[keys, :]
                 dist.send(data, dst=rank)
-            if cmd == PUSH_CMD:
+            if cmd == TORCH_PARAMETER_SERVER_CMDS.PUSH_CMD:
+                key_len = cmd_buffer[1].item()
                 keys = self._receive_keys(rank, key_len)
                 self._handle_push(rank, keys)
-            if cmd == BARRIER_CMD:
+            if cmd == TORCH_PARAMETER_SERVER_CMDS.GET_LR_CMD:
+                cmd_buffer[1] = self.lr
+                dist.send(cmd_buffer, rank)
+            if cmd == TORCH_PARAMETER_SERVER_CMDS.SET_LR_CMD:
+                lr = cmd_buffer[1]
+                self.lr = lr
+            if cmd == TORCH_PARAMETER_SERVER_CMDS.GET_OPTIM_STEP_CMD:
+                parameter_index = cmd_buffer[1].item()
+                if parameter_index == 0:
+                    cmd_buffer[1] = self.entity_optim_step
+                elif parameter_index == 1:
+                    cmd_buffer[1] = self.relation_optim_step
+                dist.send(cmd_buffer, rank)
+            if cmd == TORCH_PARAMETER_SERVER_CMDS.STEP_OPTIM_CMD:
+                parameter_index = cmd_buffer[1].item()
+                if parameter_index == 0:
+                    self.entity_optim_step += 1
+                elif parameter_index == 1:
+                    self.relation_optim_step += 1
+            if cmd == TORCH_PARAMETER_SERVER_CMDS.BARRIER_CMD:
                 barrier_count += 1
                 if barrier_count == self.num_clients:
                     barrier_count = 0
                     dist.barrier()
-            if cmd == SHUTDOWN_CMD:
+            if cmd == TORCH_PARAMETER_SERVER_CMDS.SHUTDOWN_CMD:
                 shutdown_count += 1
                 if shutdown_count == self.num_clients:
                     print("shutting down parameter server")
