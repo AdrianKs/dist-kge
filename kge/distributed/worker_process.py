@@ -72,6 +72,15 @@ class WorkerProcess(mp.get_context("spawn").Process):
         self.checkpoint = checkpoint
 
     def run(self):
+        os.environ["MASTER_ADDR"] = self.config.get("job.distributed.master_ip")
+        os.environ["MASTER_PORT"] = self.config.get("job.distributed.master_port")
+        print("before init", self.rank + 2)
+        dist.init_process_group(
+            backend="gloo",
+            init_method="env://",
+            world_size=self.num_total_workers + 2,
+            rank=self.rank + 2,
+        )
         server = None
         if self.config.get("job.distributed.parameter_server") == "lapse":
             os.environ["DMLC_NUM_WORKER"] = "0"
@@ -87,16 +96,6 @@ class WorkerProcess(mp.get_context("spawn").Process):
             num_workers_per_server = 1
             lapse.setup(self.num_keys, num_workers_per_server)
             server = lapse.Server(self.num_keys, self.embedding_dim)
-
-        os.environ["MASTER_ADDR"] = self.config.get("job.distributed.master_ip")
-        os.environ["MASTER_PORT"] = self.config.get("job.distributed.master_port")
-        print("before init", self.rank + 2)
-        dist.init_process_group(
-            backend="gloo",
-            init_method="env://",
-            world_size=self.num_total_workers + 2,
-            rank=self.rank + 2,
-        )
 
         configs = {}
         datasets = {}
@@ -117,16 +116,16 @@ class WorkerProcess(mp.get_context("spawn").Process):
         # datasets[w] = Dataset.create(configs[w], dataset.folder)
         # kv = lapse.Worker(0, worker_id + 1, s)
         # kv = LapseWorker(0, worker_id + 1, s, num_meta_keys)
-        self.parameter_client = KgeParameterClient.create(
+        parameter_client = KgeParameterClient.create(
             client_type=self.config.get("job.distributed.parameter_server"),
             server_id=0,
-            client_id=worker_id + 1,  # we may increase the number due to the scheduler
+            client_id=worker_id + 2,
             embedding_dim=self.embedding_dim,
             server=server,
             num_meta_keys=self.num_meta_keys,
         )
         init_for_load_only = False
-        if self.parameter_client.rank == 1 and self.checkpoint is not None:
+        if parameter_client.rank == 2 and self.checkpoint is not None:
             # Todo: we still create a complete new job after creating the resume job
             #  therefore epoch numbers will not be handled correctly, for example
             job = Job.create_from(self.checkpoint)
@@ -135,18 +134,18 @@ class WorkerProcess(mp.get_context("spawn").Process):
             job.optimizer.push_all()
             init_for_load_only = True
             del self.checkpoint
-        self.job = Job.create(
+        job = Job.create(
             configs[w],
             datasets[w],
-            parameter_client=self.parameter_client,
+            parameter_client=parameter_client,
             init_for_load_only=init_for_load_only,
         )
-        self.job.run()
+        job.run()
 
-        self.job.work_scheduler_client.shutdown()
-        self.parameter_client.shutdown()
-        del self.job
-        del self.parameter_client
+        job.work_scheduler_client.shutdown()
+        parameter_client.shutdown()
+        del job
+        del parameter_client
         gc.collect()  # make sure lapse-worker destructor is called
         # shutdown server
         if server is not None:

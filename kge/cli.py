@@ -23,7 +23,15 @@ from torch import multiprocessing as mp
 from torch import distributed as dist
 
 
-def init_lapse_scheduler(servers, num_keys, master_ip, master_port, lapse_port):
+def init_lapse_scheduler(servers, num_keys, master_ip, master_port, lapse_port, dist_world_size):
+    # we are only initializing dist here to have the same ranks for lapse and torch
+    os.environ["MASTER_ADDR"] = master_ip
+    os.environ["MASTER_PORT"] = master_port
+    print("before init mock process, world_size", dist_world_size)
+    dist.init_process_group(
+        backend="gloo", init_method="env://", world_size=dist_world_size, rank=0,
+    )
+    print("after init mock")
     os.environ["DMLC_NUM_WORKER"] = "0"
     os.environ["DMLC_NUM_SERVER"] = str(servers)
     os.environ["DMLC_ROLE"] = "scheduler"
@@ -31,21 +39,6 @@ def init_lapse_scheduler(servers, num_keys, master_ip, master_port, lapse_port):
     os.environ["DMLC_PS_ROOT_PORT"] = lapse_port
     num_workers_per_server = 1
     lapse.scheduler(num_keys, num_workers_per_server)
-
-
-def mock_process(master_ip, master_port, dist_world_size):
-    """
-    This is currently just a helper method to have the same ranks for the processes
-    with lapse as with other ps
-    """
-    os.environ["MASTER_ADDR"] = master_ip
-    os.environ["MASTER_PORT"] = master_port
-    print("before init mock process, world_size", dist_world_size)
-    dist.init_process_group(
-        backend="gloo", init_method="env://", world_size=dist_world_size, rank=0,
-    )
-    # the mock process needs to stay alive until all other processes are initialized
-    time.sleep(120)
 
 
 def init_torch_server(num_clients, num_keys, dim, master_ip, master_port):
@@ -238,17 +231,11 @@ def main():
             if config.get("job.distributed.parameter_server") == "lapse":
                 p = mp.Process(
                     target=init_lapse_scheduler,
-                    args=(num_workers, num_keys, master_ip, master_port, lapse_port),
+                    args=(num_workers, num_keys, master_ip, master_port, lapse_port, dist_world_size),
                     daemon=True,
                 )
                 p.start()
                 processes.append(p)
-                p = mp.Process(
-                    target=mock_process,
-                    args=(master_ip, master_port, dist_world_size),
-                    daemon=True,
-                )
-                p.start()
             else:
                 p = mp.Process(
                     target=init_torch_server,
