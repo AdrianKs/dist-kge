@@ -71,6 +71,8 @@ class KgeSampler(Configurable):
             return KgeUniformSampler(config, configuration_key, dataset)
         elif sampling_type == "frequency":
             return KgeFrequencySampler(config, configuration_key, dataset)
+        elif sampling_type == "pooled":
+            return KgePooledSampler(config, configuration_key, dataset)
         else:
             # perhaps TODO: try class with specified name -> extensibility
             raise ValueError(configuration_key + ".sampling_type")
@@ -121,9 +123,7 @@ class KgeSampler(Configurable):
 
     def _sample(self, positive_triples: torch.Tensor, slot: int, num_samples: int):
         """Sample negative examples."""
-        raise NotImplementedError(
-            "The selected sampler is not implemented."
-        )
+        raise NotImplementedError("The selected sampler is not implemented.")
 
     def _sample_shared(
         self, positive_triples: torch.Tensor, slot: int, num_samples: int
@@ -231,9 +231,7 @@ class KgeUniformSampler(KgeSampler):
         # contain its positive, drop that positive. For all other rows, drop a random
         # position.
         shared_samples_index = {s: j for j, s in enumerate(shared_samples)}
-        replacement = np.random.choice(
-            num_distinct + 1, batch_size, replace=True
-        )
+        replacement = np.random.choice(num_distinct + 1, batch_size, replace=True)
         drop = torch.tensor(
             [
                 shared_samples_index.get(s, replacement[i])
@@ -353,3 +351,45 @@ class KgeFrequencySampler(KgeSampler):
                 positive_triples.size(0) * num_samples,
             ).view(positive_triples.size(0), num_samples)
         return result
+
+
+class KgePooledSampler(KgeSampler):
+    def __init__(self, config, configuration_key, dataset):
+        super().__init__(config, configuration_key, dataset)
+        self.pool_size_s = 5000
+        self.pool_size_p = 1
+        self.pool_size_o = 5000
+        self.sample_pools = dict()
+        self.sample_pools[S] = torch.randperm(self.vocabulary_size[S])[
+            : self.pool_size_s
+        ]
+        self.sample_pools[P] = torch.randperm(self.vocabulary_size[P])[
+            : self.pool_size_p
+        ]
+        self.sample_pools[O] = self.sample_pools[S]
+
+    def _sample(self, positive_triples: torch.Tensor, slot: int, num_samples: int):
+        return self.sample_pools[slot][
+            torch.randint(
+                len(self.sample_pools[slot]), (positive_triples.size(0), num_samples)
+            )
+        ]
+
+    def _sample_shared(
+        self, positive_triples: torch.Tensor, slot: int, num_samples: int
+    ):
+        return self._sample(
+            positive_triples[0, :].view(1, 3), slot, num_samples
+        ).expand((len(positive_triples), num_samples))
+
+    def update_pools(self):
+        self.sample_pools[S] = torch.randperm(self.vocabulary_size[S])[
+            : self.pool_size_s
+        ]
+        self.sample_pools[P] = torch.randperm(self.vocabulary_size[P])[
+            : self.pool_size_p
+        ]
+        self.sample_pools[O] = self.sample_pools[S]
+
+    def set_pool(self, pool: torch.Tensor, slot: int):
+        self.sample_pools[slot] = pool

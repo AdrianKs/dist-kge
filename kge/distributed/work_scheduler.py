@@ -127,19 +127,28 @@ class WorkScheduler(mp.get_context("spawn").Process):
                     print("shutting down work scheduler")
                     break
 
-    def _next_work(self, rank) -> Tuple[Optional[torch.Tensor], bool]:
+    def _next_work(
+        self, rank
+    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], bool]:
         raise NotImplementedError()
 
     def _refill_work(self):
         self.work_to_do = deque(list(range(self.num_partitions)))
 
     def _send_work(self, rank, cmd_buffer):
-        work, wait = self._next_work(rank)
+        work, entities, wait = self._next_work(rank)
         if work is not None:
             cmd_buffer[0] = SCHEDULER_CMDS.WORK
             cmd_buffer[1] = len(work)
             dist.send(cmd_buffer, dst=rank)
             dist.send(work, dst=rank)
+            if entities is None:
+                cmd_buffer[1] = 0
+                dist.send(cmd_buffer, dst=rank)
+            else:
+                cmd_buffer[1] = len(entities)
+                dist.send(cmd_buffer, dst=rank)
+                dist.send(entities, dst=rank)
         elif wait:
             cmd_buffer[0] = SCHEDULER_CMDS.WAIT
             cmd_buffer[1] = self.wait_time
@@ -194,6 +203,47 @@ class WorkScheduler(mp.get_context("spawn").Process):
             )
         return partition_assignment
 
+    @staticmethod
+    def _load_entities_to_partitions_file(
+        partition_type, dataset_folder, num_partitions
+    ):
+        if os.path.exists(
+            os.path.join(
+                dataset_folder,
+                partition_type,
+                f"num_{num_partitions}",
+                "entity_to_partitions.del.npy",
+            )
+        ):
+            partition_assignment = np.load(
+                os.path.join(
+                    dataset_folder,
+                    partition_type,
+                    f"num_{num_partitions}",
+                    "entity_to_partitions.del.npy",
+                )
+            )
+        else:
+            partition_assignment = np.loadtxt(
+                os.path.join(
+                    dataset_folder,
+                    partition_type,
+                    f"num_{num_partitions}",
+                    "entity_to_partitions.del",
+                ),
+                dtype=np.long,
+            )
+            np.save(
+                os.path.join(
+                    dataset_folder,
+                    partition_type,
+                    f"num_{num_partitions}",
+                    "entity_to_partitions.del",
+                ),
+                partition_assignment,
+            )
+        return partition_assignment
+
 
 class BlockWorkScheduler(WorkScheduler):
     def __init__(
@@ -215,12 +265,14 @@ class BlockWorkScheduler(WorkScheduler):
             dataset_folder,
         )
 
-    def _next_work(self, rank) -> Tuple[Optional[torch.Tensor], bool]:
+    def _next_work(
+        self, rank
+    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], bool]:
         """add work/partitions to the list of work to do"""
         try:
-            return self.partitions[self.work_to_do.pop()], False
+            return self.partitions[self.work_to_do.pop()], None, False
         except IndexError:
-            return None, False
+            return None, None, False
 
     def _load_partitions(self, dataset_folder, num_partitions):
         partition_assignment = self._load_partition_file(
@@ -262,11 +314,18 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         self.running_blocks: Dict[int, Tuple[int, int]] = {}
         self.work_to_do = deepcopy(self.partitions)
         self._initialized_entity_blocks = set()
+        self.entities_to_partition = self._load_entities_to_partitions_file(
+            self.partition_type, dataset_folder, num_partitions
+        )
 
-    def _next_work(self, rank) -> Tuple[Optional[torch.Tensor], bool]:
+    def _next_work(
+        self, rank
+    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], bool]:
         return self._acquire_bucket(rank)
 
-    def _acquire_bucket(self, rank) -> Tuple[Optional[torch.Tensor], bool]:
+    def _acquire_bucket(
+        self, rank
+    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], bool]:
         """
         Finds a (lhs, rhs) partition pair that has not already been acquired
         this epoch, and where neither the lhs nor rhs partitions are currently
@@ -302,11 +361,11 @@ class TwoDBlockWorkScheduler(WorkScheduler):
                     self._initialized_entity_blocks.add(object_entity_block)
                     block_data = self.work_to_do[bucket]
                     del self.work_to_do[bucket]
-                    return block_data, False
+                    return block_data, self._get_entities_in_bucket(bucket), False
         if len(self.work_to_do) > 0:
             wait = True
             print("work to do", self.work_to_do.keys())
-        return None, wait
+        return None, None, wait
 
     def _is_initialized(self, bucket: Tuple[int, int]):
         # at least one side of the partition block needs to be initialized to ensure
@@ -317,6 +376,16 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         return (
             bucket[0] in self._initialized_entity_blocks
             or bucket[1] in self._initialized_entity_blocks
+        )
+
+    def _get_entities_in_bucket(self, bucket):
+        return torch.from_numpy(
+            np.where(
+                np.ma.mask_or(
+                    (self.entities_to_partition == bucket[0]),
+                    (self.entities_to_partition == bucket[1]),
+                )
+            )[0]
         )
 
     def _handle_work_done(self, rank):
@@ -347,7 +416,7 @@ class SchedulerClient:
     def __init__(self, scheduler_rank=1):
         self.scheduler_rank = scheduler_rank
 
-    def get_work(self) -> Optional[torch.Tensor]:
+    def get_work(self) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
         while True:
             cmd = torch.LongTensor([SCHEDULER_CMDS.GET_WORK, 0])
             dist.send(cmd, dst=self.scheduler_rank)
@@ -355,12 +424,20 @@ class SchedulerClient:
             if cmd[0] == SCHEDULER_CMDS.WORK:
                 work_buffer = torch.full((cmd[1].item(),), -1, dtype=torch.long)
                 dist.recv(work_buffer, src=self.scheduler_rank)
-                return work_buffer
+                # get partition entities
+                dist.recv(cmd, src=self.scheduler_rank)
+                num_entities = cmd[1].item()
+                if num_entities == 0:
+                    return work_buffer, None
+                else:
+                    entity_buffer = torch.full((num_entities,), -1, dtype=torch.long)
+                    dist.recv(entity_buffer, src=self.scheduler_rank)
+                    return work_buffer, entity_buffer
             elif cmd[0] == SCHEDULER_CMDS.WAIT:
                 print("waiting for a block")
                 time.sleep(cmd[1].item())
             else:
-                return None
+                return None, None
 
     def work_done(self):
         cmd = torch.LongTensor([SCHEDULER_CMDS.WORK_DONE, 0])

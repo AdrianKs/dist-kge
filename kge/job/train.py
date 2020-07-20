@@ -17,11 +17,13 @@ from kge.job import Job
 from kge.model import KgeModel
 
 from kge.util import KgeLoss, KgeOptimizer, KgeSampler, KgeLRScheduler
+
 # fixme: for some reason python from console cries about circular imports if loaded
 #  from init. But directly it works (partially initialized model)
 from kge.distributed.work_scheduler import SchedulerClient
 from kge.distributed.parameter_client import KgeParameterClient
-#from kge.distributed import KgeParameterClient, SchedulerClient
+
+# from kge.distributed import KgeParameterClient, SchedulerClient
 from typing import Any, Callable, Dict, List, Optional, Union
 import kge.job.util
 
@@ -72,7 +74,13 @@ class TrainingJob(Job):
     """
 
     def __init__(
-        self, config: Config, dataset: Dataset, parent_job: Job = None, model=None, parameter_client: Optional[KgeParameterClient] = None, init_for_load_only=False
+        self,
+        config: Config,
+        dataset: Dataset,
+        parent_job: Job = None,
+        model=None,
+        parameter_client: Optional[KgeParameterClient] = None,
+        init_for_load_only=False,
     ) -> None:
         from kge.job import EvaluationJob
 
@@ -82,8 +90,9 @@ class TrainingJob(Job):
         self.parameter_client.barrier()
         if self.parameter_client.rank == 2 and not init_for_load_only:
             self.config.set(self.config.get("model") + ".create_complete", True)
-            init_model = KgeModel.create(self.config, self.dataset,
-                                         parameter_client=self.parameter_client)
+            init_model = KgeModel.create(
+                self.config, self.dataset, parameter_client=self.parameter_client
+            )
             init_model.get_s_embedder().push_all()
             init_model.get_p_embedder().push_all()
             del init_model
@@ -91,12 +100,22 @@ class TrainingJob(Job):
         self.parameter_client.barrier()
 
         if model is None:
-            self.model: KgeModel = KgeModel.create(config, dataset, parameter_client=parameter_client)
+            self.model: KgeModel = KgeModel.create(
+                config, dataset, parameter_client=parameter_client
+            )
         else:
             self.model: KgeModel = model
         self.work_scheduler_client = SchedulerClient()
-        lapse_indexes = [np.arange(dataset.num_entities(), dtype=np.int), np.arange(dataset.num_relations(), dtype=np.int) + dataset.num_entities()]
-        self.optimizer = KgeOptimizer.create(config, self.model, parameter_client=parameter_client, lapse_indexes=lapse_indexes)
+        lapse_indexes = [
+            np.arange(dataset.num_entities(), dtype=np.int),
+            np.arange(dataset.num_relations(), dtype=np.int) + dataset.num_entities(),
+        ]
+        self.optimizer = KgeOptimizer.create(
+            config,
+            self.model,
+            parameter_client=parameter_client,
+            lapse_indexes=lapse_indexes,
+        )
         self.kge_lr_scheduler = KgeLRScheduler(config, self.optimizer)
         self.loss = KgeLoss.create(config)
         self.abort_on_nan: bool = config.get("train.abort_on_nan")
@@ -155,15 +174,39 @@ class TrainingJob(Job):
 
     @staticmethod
     def create(
-        config: Config, dataset: Dataset, parent_job: Job = None, model=None, parameter_client=None, init_for_load_only=False
+        config: Config,
+        dataset: Dataset,
+        parent_job: Job = None,
+        model=None,
+        parameter_client=None,
+        init_for_load_only=False,
     ) -> "TrainingJob":
         """Factory method to create a training job."""
         if config.get("train.type") == "KvsAll":
-            return TrainingJobKvsAll(config, dataset, parent_job, model=model, parameter_client=parameter_client)
+            return TrainingJobKvsAll(
+                config,
+                dataset,
+                parent_job,
+                model=model,
+                parameter_client=parameter_client,
+            )
         elif config.get("train.type") == "negative_sampling":
-            return TrainingJobNegativeSampling(config, dataset, parent_job, model=model, parameter_client=parameter_client, init_for_load_only=False)
+            return TrainingJobNegativeSampling(
+                config,
+                dataset,
+                parent_job,
+                model=model,
+                parameter_client=parameter_client,
+                init_for_load_only=False,
+            )
         elif config.get("train.type") == "1vsAll":
-            return TrainingJob1vsAll(config, dataset, parent_job, model=model, parameter_client=parameter_client)
+            return TrainingJob1vsAll(
+                config,
+                dataset,
+                parent_job,
+                model=model,
+                parameter_client=parameter_client,
+            )
         else:
             # perhaps TODO: try class with specified name -> extensibility
             raise ValueError("train.type")
@@ -201,7 +244,7 @@ class TrainingJob(Job):
                     )
                     self.parameter_client.shutdown()
                     self.work_scheduler_client.shutdown()
-                    #break
+                    # break
                 if self.epoch > self.config.get(
                     "valid.early_stopping.min_threshold.epochs"
                 ) and self.valid_trace[best_index][metric_name] < self.config.get(
@@ -214,7 +257,7 @@ class TrainingJob(Job):
                     )
                     self.parameter_client.shutdown()
                     self.work_scheduler_client.shutdown()
-                    #break
+                    # break
 
             # should we stop?
             if self.epoch >= self.config.get("train.max_epochs"):
@@ -253,11 +296,14 @@ class TrainingJob(Job):
                 # create a new complete model, to be able to validate and store
                 self.config.set(self.config.get("model") + ".create_complete", True)
                 self.config.set("job.device", "cpu")
-                self.model = KgeModel.create(self.config, self.dataset, parameter_client=self.parameter_client)
+                self.model = KgeModel.create(
+                    self.config, self.dataset, parameter_client=self.parameter_client
+                )
                 self.model.get_s_embedder().pull_all()
                 self.model.get_p_embedder().pull_all()
-                self.optimizer = KgeOptimizer.create(self.config, self.model,
-                                                     parameter_client=self.parameter_client)
+                self.optimizer = KgeOptimizer.create(
+                    self.config, self.model, parameter_client=self.parameter_client
+                )
                 self.optimizer.pull_all()
                 self.config.set("job.device", self.device)
                 self.model = self.model.to(self.device)
@@ -303,7 +349,9 @@ class TrainingJob(Job):
                                     self.config.checkpoint_file(delete_checkpoint_epoch)
                                 )
                             )
-                            os.remove(self.config.checkpoint_file(delete_checkpoint_epoch))
+                            os.remove(
+                                self.config.checkpoint_file(delete_checkpoint_epoch)
+                            )
                         else:
                             self.config.log(
                                 "Could not delete old checkpoint {}, does not exits.".format(
@@ -380,11 +428,16 @@ class TrainingJob(Job):
 
         while True:
             # load new work package
-            work = self.work_scheduler_client.get_work()
+            work, work_entities = self.work_scheduler_client.get_work()
             if work is None:
                 break
-            #if work is not None:
             self.dataloader_dataset.set_samples(work)
+            if (
+                work_entities is not None
+                and self.config.get("negative_sampling.sampling_type") == "pooled"
+            ):
+                self._sampler.set_pool(work_entities, S)
+                self._sampler.set_pool(work_entities, O)
 
             # variables that record various statitics
             sum_loss = 0.0
@@ -421,7 +474,9 @@ class TrainingJob(Job):
                 # backward pass on penalties
                 batch_backward_time = batch_result.backward_time - time.time()
                 penalty = 0.0
-                for index, (penalty_key, penalty_value_torch) in enumerate(penalties_torch):
+                for index, (penalty_key, penalty_value_torch) in enumerate(
+                    penalties_torch
+                ):
                     penalty_value_torch.backward()
                     penalty += penalty_value_torch.item()
                     sum_penalties[penalty_key] += penalty_value_torch.item()
@@ -526,7 +581,11 @@ class TrainingJob(Job):
             self.config.print("\033[2K\r", end="", flush=True)  # clear line and go back
 
             other_time = (
-                epoch_time - prepare_time - forward_time - backward_time - optimizer_time
+                epoch_time
+                - prepare_time
+                - forward_time
+                - backward_time
+                - optimizer_time
             )
             trace_entry = dict(
                 type=self.type_str,
@@ -538,7 +597,9 @@ class TrainingJob(Job):
                 lr=[group["lr"] for group in self.optimizer.param_groups],
                 avg_loss=sum_loss / self.num_examples,
                 avg_penalty=sum_penalty / len(self.loader),
-                avg_penalties={k: p / len(self.loader) for k, p in sum_penalties.items()},
+                avg_penalties={
+                    k: p / len(self.loader) for k, p in sum_penalties.items()
+                },
                 avg_cost=sum_loss / self.num_examples + sum_penalty / len(self.loader),
                 epoch_time=epoch_time,
                 prepare_time=prepare_time,
@@ -550,7 +611,9 @@ class TrainingJob(Job):
             )
             for f in self.post_epoch_trace_hooks:
                 f(self, trace_entry)
-            trace_entry = self.trace(**trace_entry, echo=True, echo_prefix="  ", log=True)
+            trace_entry = self.trace(
+                **trace_entry, echo=True, echo_prefix="  ", log=True
+            )
 
             print("work done", self.parameter_client.rank)
             self.work_scheduler_client.work_done()
@@ -598,8 +661,12 @@ class TrainingJobKvsAll(TrainingJob):
 
     from kge.indexing import KvsAllIndex
 
-    def __init__(self, config, dataset, parent_job=None, model=None, parameter_client=None):
-        super().__init__(config, dataset, parent_job, model=model, parameter_client=parameter_client)
+    def __init__(
+        self, config, dataset, parent_job=None, model=None, parameter_client=None
+    ):
+        super().__init__(
+            config, dataset, parent_job, model=model, parameter_client=parameter_client
+        )
         self.label_smoothing = config.check_range(
             "KvsAll.label_smoothing", float("-inf"), 1.0, max_inclusive=False
         )
@@ -851,8 +918,23 @@ class TrainingJobKvsAll(TrainingJob):
 
 
 class TrainingJobNegativeSampling(TrainingJob):
-    def __init__(self, config, dataset, parent_job=None, model=None, parameter_client=None, init_for_load_only=False):
-        super().__init__(config, dataset, parent_job, model=model, parameter_client=parameter_client, init_for_load_only=init_for_load_only)
+    def __init__(
+        self,
+        config,
+        dataset,
+        parent_job=None,
+        model=None,
+        parameter_client=None,
+        init_for_load_only=False,
+    ):
+        super().__init__(
+            config,
+            dataset,
+            parent_job,
+            model=model,
+            parameter_client=parameter_client,
+            init_for_load_only=init_for_load_only,
+        )
         self._sampler = KgeSampler.create(config, "negative_sampling", dataset)
         self.is_prepared = False
         self._implementation = self.config.check(
@@ -1103,8 +1185,12 @@ class TrainingJobNegativeSampling(TrainingJob):
 class TrainingJob1vsAll(TrainingJob):
     """Samples SPO pairs and queries sp_ and _po, treating all other entities as negative."""
 
-    def __init__(self, config, dataset, parent_job=None, model=None, parameter_client=None):
-        super().__init__(config, dataset, parent_job, model=model, parameter_client=parameter_client)
+    def __init__(
+        self, config, dataset, parent_job=None, model=None, parameter_client=None
+    ):
+        super().__init__(
+            config, dataset, parent_job, model=model, parameter_client=parameter_client
+        )
         self.is_prepared = False
         config.log("Initializing spo training job...")
         self.type_str = "1vsAll"
