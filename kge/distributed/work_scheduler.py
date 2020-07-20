@@ -105,8 +105,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
                 continue
 
             # fixme: this will time out if the epoch takes too long
-            #  maybe we can fix it with a try and catch --> RuntimeError
-            #  timeout is after 30min
+            #  we set the timeout to 2h for now
             rank = dist.recv(cmd_buffer)
             cmd = cmd_buffer[0].item()
             key_len = cmd_buffer[1].item()
@@ -182,7 +181,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
                     f"num_{num_partitions}",
                     "train_assign_partitions.del",
                 ),
-                dtype=np.long
+                dtype=np.long,
             )
             np.save(
                 os.path.join(
@@ -262,6 +261,7 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         # dictionary: key=worker_rank, value=block
         self.running_blocks: Dict[int, Tuple[int, int]] = {}
         self.work_to_do = deepcopy(self.partitions)
+        self._initialized_entity_blocks = set()
 
     def _next_work(self, rank) -> Tuple[Optional[torch.Tensor], bool]:
         return self._acquire_bucket(rank)
@@ -282,7 +282,6 @@ class TwoDBlockWorkScheduler(WorkScheduler):
             remaining: The number of pairs remaining. When this is 0 then the
                        epoch is done.
         """
-        #while len(self.work_to_do) > 0:
         wait = False
         locked_entity_blocks = {}
         for worker_rank, bucket in self.running_blocks.items():
@@ -297,8 +296,10 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         for subject_entity_block in acquirable_entity_blocks:
             for object_entity_block in acquirable_entity_blocks:
                 bucket = (subject_entity_block, object_entity_block)
-                if bucket in self.work_to_do:
+                if bucket in self.work_to_do and self._is_initialized(bucket):
                     self.running_blocks[rank] = bucket
+                    self._initialized_entity_blocks.add(subject_entity_block)
+                    self._initialized_entity_blocks.add(object_entity_block)
                     block_data = self.work_to_do[bucket]
                     del self.work_to_do[bucket]
                     return block_data, False
@@ -306,6 +307,17 @@ class TwoDBlockWorkScheduler(WorkScheduler):
             wait = True
             print("work to do", self.work_to_do.keys())
         return None, wait
+
+    def _is_initialized(self, bucket: Tuple[int, int]):
+        # at least one side of the partition block needs to be initialized to ensure
+        #  all embeddings are in the same embedding space
+        #  if nothing is initialized start with anything
+        if len(self._initialized_entity_blocks) == 0:
+            return True
+        return (
+            bucket[0] in self._initialized_entity_blocks
+            or bucket[1] in self._initialized_entity_blocks
+        )
 
     def _handle_work_done(self, rank):
         del self.running_blocks[rank]
@@ -321,7 +333,9 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         #  this is only the case with our R partition script
         partition_indexes = np.unique(partition_assignment, axis=0)
         partitions_data = [
-            torch.from_numpy(np.where(np.all(partition_assignment == i, axis=1))[0]).contiguous()
+            torch.from_numpy(
+                np.where(np.all(partition_assignment == i, axis=1))[0]
+            ).contiguous()
             for i in partition_indexes
         ]
         partition_indexes = [(i[0], i[1]) for i in partition_indexes]
