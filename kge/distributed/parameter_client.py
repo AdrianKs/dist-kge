@@ -14,6 +14,9 @@ class KgeParameterClient:
     def push(self, keys, push_tensor, asynchronous=False):
         raise NotImplementedError()
 
+    def set(self, keys, set_tensor, asynchronous=False):
+        raise NotImplementedError()
+
     def localize(self, keys, asynchronous=False):
         raise NotImplementedError()
 
@@ -83,6 +86,9 @@ class LapseParameterClient(lapse.Worker, KgeParameterClient):
 
     def push(self, keys, push_tensor: torch.Tensor, asynchronous=False):
         super(LapseParameterClient, self).push(keys, push_tensor)
+
+    def set(self, keys, set_tensor, asynchronous=False):
+        raise NotImplementedError()
 
     def localize(self, keys, asynchronous=False):
         if type(keys) is torch.Tensor:
@@ -159,6 +165,12 @@ class TorchParameterClient(KgeParameterClient):
         dist.send(cmd, dst=self.server_rank)
         dist.send(keys, dst=self.server_rank)
         dist.send(push_tensor, dst=self.server_rank)
+
+    def set(self, keys, set_tensor, asynchronous=False):
+        cmd = torch.LongTensor([TORCH_PARAMETER_SERVER_CMDS.SET_CMD, len(keys)])
+        dist.send(cmd, dst=self.server_rank)
+        dist.send(keys, dst=self.server_rank)
+        dist.send(set_tensor, dst=self.server_rank)
 
     def localize(self, keys, asynchronous=False):
         pass

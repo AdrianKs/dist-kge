@@ -7,12 +7,13 @@ from torch import distributed as dist
 class TORCH_PARAMETER_SERVER_CMDS(IntEnum):
     PULL_CMD = 0
     PUSH_CMD = 1
-    GET_LR_CMD = 2
-    SET_LR_CMD = 3
-    GET_OPTIM_STEP_CMD = 4
-    STEP_OPTIM_CMD = 5
-    BARRIER_CMD = 6
-    SHUTDOWN_CMD = 7
+    SET_CMD = 2
+    GET_LR_CMD = 3
+    SET_LR_CMD = 4
+    GET_OPTIM_STEP_CMD = 5
+    STEP_OPTIM_CMD = 6
+    BARRIER_CMD = 7
+    SHUTDOWN_CMD = 8
 
 
 class KgeParameterServer:
@@ -64,6 +65,10 @@ class TorchParameterServer:
                 key_len = cmd_buffer[1].item()
                 keys = self._receive_keys(rank, key_len)
                 self._handle_push(rank, keys)
+            if cmd == TORCH_PARAMETER_SERVER_CMDS.SET_CMD:
+                key_len = cmd_buffer[1].item()
+                keys = self._receive_keys(rank, key_len)
+                self._handle_set(rank, keys)
             if cmd == TORCH_PARAMETER_SERVER_CMDS.GET_LR_CMD:
                 cmd_buffer[1] = self.lr
                 dist.send(cmd_buffer, rank)
@@ -104,3 +109,8 @@ class TorchParameterServer:
         push_data = torch.zeros((len(keys), self.dim), dtype=self.data_type)
         dist.recv(push_data, src=rank)
         self.data[keys, :] += push_data
+
+    def _handle_set(self, rank, keys):
+        set_data = torch.zeros((len(keys), self.dim), dtype=self.data_type)
+        dist.recv(set_data, src=rank)
+        self.data[keys, :] = set_data
