@@ -208,7 +208,7 @@ def main():
             # else:
             processes = []
             num_keys = dataset.num_entities() + dataset.num_relations()
-            num_meta_keys = 1
+            num_meta_keys = 2
             num_workers = config.get("job.distributed.num_workers")
             master_ip = config.get("job.distributed.master_ip")
             master_port = config.get("job.distributed.master_port")

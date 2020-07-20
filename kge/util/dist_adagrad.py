@@ -86,6 +86,8 @@ class DistAdagrad(Optimizer):
         super(DistAdagrad, self).__init__(params, defaults)
 
         for group in self.param_groups:
+            if parameter_client.rank == 2 and parameter_client.get_lr == 0:
+                self.parameter_client.set_lr(group["lr"])
             for i, p in enumerate(group["params"]):
                 state = self.state[p]
                 state["step"] = 0
@@ -126,6 +128,9 @@ class DistAdagrad(Optimizer):
                 state = self.state[p]
                 self.parameter_client.step_optim(i)
                 state["step"] = self.parameter_client.get_step_optim(i)
+                if self.parameter_client.rank == 2:
+                    self.parameter_client.set_lr(group["lr"])
+                group["lr"] = self.parameter_client.get_lr()
 
                 #state["step"] += 1
 

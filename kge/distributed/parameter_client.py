@@ -65,11 +65,17 @@ class LapseParameterClient(lapse.Worker, KgeParameterClient):
         self._optim_relation_step_key = torch.LongTensor(
             [self.num_keys - self.num_meta_keys + 2]
         )
+        self._lr_key = torch.LongTensor(
+            [self.num_keys - self.num_meta_keys + 3]
+        )
         self._stop_value_tensor = torch.zeros((1, self.key_size), dtype=torch.float32)
         self._optim_entity_step_value_tensor = torch.zeros(
             (1, self.key_size), dtype=torch.float32
         )
         self._optim_relation_step_value_tensor = torch.zeros(
+            (1, self.key_size), dtype=torch.float32
+        )
+        self._lr_tensor = torch.zeros(
             (1, self.key_size), dtype=torch.float32
         )
         self.meta_key_tensor = torch.zeros(
@@ -129,6 +135,20 @@ class LapseParameterClient(lapse.Worker, KgeParameterClient):
             )
             return self._optim_relation_step_value_tensor[0, 0].item()
 
+    def get_lr(self):
+        super(LapseParameterClient, self).pull(
+            self._lr_key, self._lr_tensor
+        )
+        return self._lr_tensor[0, 0].item()
+
+    def set_lr(self, lr):
+        # todo: change this to set as soon as available
+        if self._lr_tensor[0, 0].item() == 0:
+            self._lr_tensor[:] = lr
+        else:
+            self._lr_tensor[:] = self._lr_tensor[:] - lr
+        super(LapseParameterClient, self).push(self._lr_key, self._lr_tensor)
+
 
 class TorchParameterClient(KgeParameterClient):
     def __init__(self, server_rank, rank, dim):
@@ -176,3 +196,11 @@ class TorchParameterClient(KgeParameterClient):
     def get_step_optim(self, parameter_index):
         # todo we still need to implement the handling of optimizer steps
         return 1
+
+    def get_lr(self):
+        # todo we still need to implement lr handling
+        return 1
+
+    def set_lr(self):
+        # todo we still need to implement lr handling
+        pass
