@@ -17,6 +17,7 @@ from kge.job import Job
 from kge.model import KgeModel
 
 from kge.util import KgeLoss, KgeOptimizer, KgeSampler, KgeLRScheduler
+from kge.util.io import load_checkpoint
 
 # fixme: for some reason python from console cries about circular imports if loaded
 #  from init. But directly it works (partially initialized model)
@@ -135,7 +136,6 @@ class TrainingJob(Job):
         self.valid_job = EvaluationJob.create(
             valid_conf, dataset, parent_job=self, model=self.model
         )
-        self.is_prepared = False
 
         # attributes filled in by implementing classes
         self.loader = None
@@ -211,7 +211,7 @@ class TrainingJob(Job):
             # perhaps TODO: try class with specified name -> extensibility
             raise ValueError("train.type")
 
-    def run(self) -> None:
+    def _run(self) -> None:
         """Start/resume the training job and run to completion."""
         self.config.log("Starting training...")
         checkpoint_every = self.config.get("train.checkpoint.every")
@@ -420,12 +420,6 @@ class TrainingJob(Job):
     def run_epoch(self) -> Dict[str, Any]:
         "Runs an epoch and returns a trace entry."
 
-        # prepare the job is not done already
-        if not self.is_prepared:
-            self._prepare()
-            self.model.prepare_job(self)  # let the model add some hooks
-            self.is_prepared = True
-
         while True:
             # load new work package
             work, work_entities = self.work_scheduler_client.get_work()
@@ -629,7 +623,8 @@ class TrainingJob(Job):
         Guaranteed to be called exactly once before running the first epoch.
 
         """
-        raise NotImplementedError
+        super()._prepare()
+        self.model.prepare_job(self)  # let the model add some hooks
 
     @dataclass
     class _ProcessBatchResult:
@@ -710,6 +705,7 @@ class TrainingJobKvsAll(TrainingJob):
                 f(self)
 
     def _prepare(self):
+        super()._prepare()
         # determine enabled query types
         self.query_types = [
             key
@@ -936,7 +932,6 @@ class TrainingJobNegativeSampling(TrainingJob):
             init_for_load_only=init_for_load_only,
         )
         self._sampler = KgeSampler.create(config, "negative_sampling", dataset)
-        self.is_prepared = False
         self._implementation = self.config.check(
             "negative_sampling.implementation", ["triple", "all", "batch", "auto"],
         )
@@ -962,9 +957,7 @@ class TrainingJobNegativeSampling(TrainingJob):
 
     def _prepare(self):
         """Construct dataloader"""
-
-        if self.is_prepared:
-            return
+        super()._prepare()
 
         self.num_examples = self.dataset.split(self.train_split).size(0)
         self.dataloader_dataset = NumberDataset(self.num_examples)
@@ -978,8 +971,6 @@ class TrainingJobNegativeSampling(TrainingJob):
             worker_init_fn=_generate_worker_init_fn(self.config),
             pin_memory=self.config.get("train.pin_memory"),
         )
-
-        self.is_prepared = True
 
     def _get_collate_fun(self):
         # create the collate function
@@ -1191,7 +1182,6 @@ class TrainingJob1vsAll(TrainingJob):
         super().__init__(
             config, dataset, parent_job, model=model, parameter_client=parameter_client
         )
-        self.is_prepared = False
         config.log("Initializing spo training job...")
         self.type_str = "1vsAll"
 
@@ -1201,9 +1191,7 @@ class TrainingJob1vsAll(TrainingJob):
 
     def _prepare(self):
         """Construct dataloader"""
-
-        if self.is_prepared:
-            return
+        super()._prepare()
 
         self.num_examples = self.dataset.split(self.train_split).size(0)
         self.loader = torch.utils.data.DataLoader(
@@ -1218,7 +1206,6 @@ class TrainingJob1vsAll(TrainingJob):
             pin_memory=self.config.get("train.pin_memory"),
         )
 
-        self.is_prepared = True
 
     def _process_batch(self, batch_index, batch) -> TrainingJob._ProcessBatchResult:
         # prepare
