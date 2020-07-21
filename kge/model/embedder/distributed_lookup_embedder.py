@@ -15,9 +15,9 @@ from typing import List
 
 class DistributedLookupEmbedder(LookupEmbedder):
     def __init__(
-        self, config: Config, dataset: Dataset, configuration_key: str, vocab_size: int, parameter_client: "KgeParameterClient", lapse_index: torch.Tensor, complete_vocab_size
+        self, config: Config, dataset: Dataset, configuration_key: str, vocab_size: int, parameter_client: "KgeParameterClient", lapse_index: torch.Tensor, complete_vocab_size, init_for_load_only=False
     ):
-        super().__init__(config, dataset, configuration_key, vocab_size)
+        super().__init__(config, dataset, configuration_key, vocab_size, init_for_load_only=init_for_load_only)
 
         self.complete_vocab_size = complete_vocab_size
         self.parameter_client = parameter_client
