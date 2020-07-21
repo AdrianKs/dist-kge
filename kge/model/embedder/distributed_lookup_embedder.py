@@ -8,27 +8,50 @@ import lapse
 
 from kge import Config, Dataset
 from kge.model import LookupEmbedder, KgeEmbedder
-#from kge.distributed import KgeParameterClient
+
+# from kge.distributed import KgeParameterClient
 
 from typing import List
 
 
 class DistributedLookupEmbedder(LookupEmbedder):
     def __init__(
-        self, config: Config, dataset: Dataset, configuration_key: str, vocab_size: int, parameter_client: "KgeParameterClient", lapse_index: torch.Tensor, complete_vocab_size, init_for_load_only=False
-    ):
-        super().__init__(config, dataset, configuration_key, vocab_size, init_for_load_only=init_for_load_only)
+        self,
+        config: Config,
+        dataset: Dataset,
+        configuration_key: str,
+        vocab_size: int,
+        parameter_client: "KgeParameterClient",
+        lapse_index: torch.Tensor,
+        complete_vocab_size,
+        init_for_load_only=False,
+    ):  
+        super().__init__(
+            config,
+            dataset,
+            configuration_key,
+            vocab_size,
+            init_for_load_only=init_for_load_only,
+        )
 
         self.complete_vocab_size = complete_vocab_size
         self.parameter_client = parameter_client
-        self.lapse_index = lapse_index  # maps the id from the dataset to the id stored in lapse
-        self.local_index_mapper = torch.zeros(self.complete_vocab_size, dtype=torch.long)-1  # maps the id from the dataset to the id of the embedding here in the embedder
-        self.local_to_lapse_mapper = torch.zeros(vocab_size, dtype=torch.long)-1  # maps the local embeddings to the embeddings in lapse
+        self.lapse_index = (
+            lapse_index  # maps the id from the dataset to the id stored in lapse
+        )
+        self.local_index_mapper = (
+            torch.zeros(self.complete_vocab_size, dtype=torch.long) - 1
+        )  # maps the id from the dataset to the id of the embedding here in the embedder
+        self.local_to_lapse_mapper = (
+            torch.zeros(vocab_size, dtype=torch.long) - 1
+        )  # maps the local embeddings to the embeddings in lapse
         self.num_pulled = 0
 
     def push_all(self):
-        self.parameter_client.push(self.lapse_index[torch.arange(self.vocab_size)],
-                                   self._embeddings.weight.detach().cpu())
+        self.parameter_client.push(
+            self.lapse_index[torch.arange(self.vocab_size)],
+            self._embeddings.weight.detach().cpu(),
+        )
 
     def pull_all(self):
         self._pull_embeddings(torch.arange(self.complete_vocab_size))
@@ -39,15 +62,20 @@ class DistributedLookupEmbedder(LookupEmbedder):
         missing_mask = local_indexes == -1
         num_missing = torch.sum(missing_mask).item()
         if num_missing > 0:
-            missing_local_indexes = torch.arange(self.num_pulled, self.num_pulled+num_missing, dtype=torch.long)
+            missing_local_indexes = torch.arange(
+                self.num_pulled, self.num_pulled + num_missing, dtype=torch.long
+            )
             self.num_pulled += num_missing
 
-            #self.lapse_worker.localize(keys=self.lapse_index[missing_local_indexes])
+            # self.lapse_worker.localize(keys=self.lapse_index[missing_local_indexes])
             pull_indexes = self.lapse_index[indexes[missing_mask].cpu()].reshape(-1)
-            current_embeddings = self._embeddings.weight[missing_local_indexes, :].detach().cpu()
-            self.parameter_client.pull(pull_indexes,
-                                       current_embeddings)
-            self._embeddings.weight[missing_local_indexes, :] = current_embeddings.to(self._embeddings.weight.device)
+            current_embeddings = (
+                self._embeddings.weight[missing_local_indexes, :].detach().cpu()
+            )
+            self.parameter_client.pull(pull_indexes, current_embeddings)
+            self._embeddings.weight[missing_local_indexes, :] = current_embeddings.to(
+                self._embeddings.weight.device
+            )
 
             # update local index mapper
             self.local_index_mapper[indexes[missing_mask]] = missing_local_indexes
@@ -66,14 +94,24 @@ class DistributedLookupEmbedder(LookupEmbedder):
         with torch.no_grad():
             long_unique_indexes = torch.unique(long_indexes)
             self._pull_embeddings(long_unique_indexes)
-        return self._embeddings(self.local_index_mapper[long_indexes].to(self._embeddings.weight.device).long())
+        return self._embeddings(
+            self.local_index_mapper[long_indexes]
+            .to(self._embeddings.weight.device)
+            .long()
+        )
 
     def embed(self, indexes: Tensor) -> Tensor:
         long_indexes = indexes.long()
         with torch.no_grad():
             long_unique_indexes = torch.unique(long_indexes)
             self._pull_embeddings(long_unique_indexes)
-        return self._postprocess(self._embeddings(self.local_index_mapper[long_indexes].to(self._embeddings.weight.device).long()))
+        return self._postprocess(
+            self._embeddings(
+                self.local_index_mapper[long_indexes]
+                .to(self._embeddings.weight.device)
+                .long()
+            )
+        )
 
     def embed_all(self) -> Tensor:
         raise NotImplementedError
