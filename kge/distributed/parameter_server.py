@@ -4,6 +4,7 @@ import lapse
 from enum import IntEnum
 from torch import distributed as dist
 
+
 class TORCH_PARAMETER_SERVER_CMDS(IntEnum):
     PULL_CMD = 0
     PUSH_CMD = 1
@@ -51,6 +52,7 @@ class TorchParameterServer:
     def start(self):
         barrier_count = 0
         shutdown_count = 0
+        lr_buffer = torch.zeros(1, dtype=torch.float32)
         while True:
             # cmd_buffer consists of cmd_number, key_len
             cmd_buffer = torch.full((2,), -1, dtype=torch.long)
@@ -70,11 +72,11 @@ class TorchParameterServer:
                 keys = self._receive_keys(rank, key_len)
                 self._handle_set(rank, keys)
             if cmd == TORCH_PARAMETER_SERVER_CMDS.GET_LR_CMD:
-                cmd_buffer[1] = self.lr
-                dist.send(cmd_buffer, rank)
+                lr_buffer[0] = self.lr
+                dist.send(lr_buffer, rank)
             if cmd == TORCH_PARAMETER_SERVER_CMDS.SET_LR_CMD:
-                lr = cmd_buffer[1]
-                self.lr = lr
+                dist.recv(lr_buffer, src=rank)
+                self.lr = lr_buffer.item()
             if cmd == TORCH_PARAMETER_SERVER_CMDS.GET_OPTIM_STEP_CMD:
                 parameter_index = cmd_buffer[1].item()
                 if parameter_index == 0:

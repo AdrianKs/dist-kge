@@ -151,6 +151,7 @@ class TorchParameterClient(KgeParameterClient):
         self.rank = rank
         self.dim = dim
         self.data_type = torch.float32
+        self.lr_buffer = torch.zeros(1, dtype=torch.float32)
 
     def pull(self, keys, pull_tensor=None, asynchronous=False):
         cmd = torch.LongTensor([TORCH_PARAMETER_SERVER_CMDS.PULL_CMD, len(keys)])
@@ -206,9 +207,11 @@ class TorchParameterClient(KgeParameterClient):
     def get_lr(self):
         cmd = torch.LongTensor([TORCH_PARAMETER_SERVER_CMDS.GET_LR_CMD, 0])
         dist.send(cmd, dst=self.server_rank)
-        dist.recv(cmd, src=self.server_rank)
-        return cmd[1].item()
+        dist.recv(self.lr_buffer, src=self.server_rank)
+        return self.lr_buffer[0].item()
 
     def set_lr(self, lr):
-        cmd = torch.LongTensor([TORCH_PARAMETER_SERVER_CMDS.SET_LR_CMD, lr])
+        cmd = torch.LongTensor([TORCH_PARAMETER_SERVER_CMDS.SET_LR_CMD, 0])
         dist.send(cmd, dst=self.server_rank)
+        self.lr_buffer[0] = lr
+        dist.send(self.lr_buffer, dst=self.server_rank)
