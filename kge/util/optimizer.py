@@ -12,14 +12,24 @@ class KgeOptimizer:
     def create(config, model, parameter_client=None, lapse_indexes=None):
         """ Factory method for optimizer creation """
         if config.get("train.optimizer") == "dist_sgd":
-            optimizer = DistSGD(model, parameter_client=parameter_client,
-                                lapse_indexes=lapse_indexes,
-                                **config.get("train.optimizer_args"))
+            optimizer = DistSGD(
+                model,
+                parameter_client=parameter_client,
+                lapse_indexes=lapse_indexes,
+                **config.get("train.optimizer_args"),
+            )
             return optimizer
         if config.get("train.optimizer") == "dist_adagrad":
-            optimizer = DistAdagrad(model, parameter_client=parameter_client,
-                                    lapse_indexes=lapse_indexes,
-                                    **config.get("train.optimizer_args"))
+            optimizer = DistAdagrad(
+                model,
+                parameter_client=parameter_client,
+                lapse_indexes=lapse_indexes,
+                sync_levels=[
+                    config.get("job.distributed.entity_sync_level"),
+                    config.get("job.distributed.relation_sync_level"),
+                ],
+                **config.get("train.optimizer_args"),
+            )
             return optimizer
         else:
             try:
@@ -33,7 +43,7 @@ class KgeOptimizer:
                 raise ValueError(
                     f"Could not create optimizer {config.get('train.optimizer')}. "
                     f"Please specify an optimizer provided in torch.optim"
-            )
+                )
 
 
 class KgeLRScheduler(Configurable):

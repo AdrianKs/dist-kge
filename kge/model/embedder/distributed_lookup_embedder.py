@@ -25,7 +25,7 @@ class DistributedLookupEmbedder(LookupEmbedder):
         lapse_index: torch.Tensor,
         complete_vocab_size,
         init_for_load_only=False,
-    ):  
+    ):
         super().__init__(
             config,
             dataset,
@@ -56,6 +56,12 @@ class DistributedLookupEmbedder(LookupEmbedder):
     def pull_all(self):
         self._pull_embeddings(torch.arange(self.complete_vocab_size))
 
+    def set_embeddings(self):
+        local_indexes = self.local_index_mapper[self.local_index_mapper != -1]
+        lapse_indexes = self.local_to_lapse_mapper[local_indexes]
+        embeddings = self._embeddings.weight[local_indexes].detach().cpu()
+        self.parameter_client.set(lapse_indexes, embeddings)
+
     @torch.no_grad()
     def _pull_embeddings(self, indexes):
         local_indexes = self.local_index_mapper[indexes]
@@ -80,7 +86,7 @@ class DistributedLookupEmbedder(LookupEmbedder):
             # update local index mapper
             self.local_index_mapper[indexes[missing_mask]] = missing_local_indexes
             # update local to lapse mapper
-            self.local_to_lapse_mapper[missing_local_indexes.numpy()] = pull_indexes
+            self.local_to_lapse_mapper[missing_local_indexes] = pull_indexes
 
     def localize(self, indexes: Tensor):
         unique_indexes = torch.unique(indexes).cpu()

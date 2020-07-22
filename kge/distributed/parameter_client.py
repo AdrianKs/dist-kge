@@ -88,7 +88,7 @@ class LapseParameterClient(lapse.Worker, KgeParameterClient):
         super(LapseParameterClient, self).push(keys, push_tensor)
 
     def set(self, keys, set_tensor, asynchronous=False):
-        raise NotImplementedError()
+        super(LapseParameterClient, self).set(keys, set_tensor)
 
     def localize(self, keys, asynchronous=False):
         if type(keys) is torch.Tensor:

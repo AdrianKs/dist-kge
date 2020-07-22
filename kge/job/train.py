@@ -87,6 +87,10 @@ class TrainingJob(Job):
 
         super().__init__(config, dataset, parent_job)
         self.parameter_client = parameter_client
+        self.entity_sync_level = self.config.get("job.distributed.entity_sync_level")
+        self.relation_sync_level = self.config.get(
+            "job.distributed.relation_sync_level"
+        )
         # here we create one large model to init lapse and remove it afterwards
         self.parameter_client.barrier()
         if self.parameter_client.rank == 2 and not init_for_load_only:
@@ -100,16 +104,24 @@ class TrainingJob(Job):
             self.config.set(self.config.get("model") + ".create_complete", False)
         self.parameter_client.barrier()
 
+        self.work_scheduler_client = SchedulerClient()
+        (
+            max_partition_entities,
+            max_partition_relations,
+        ) = self.work_scheduler_client.get_init_info()
         if model is None:
             self.model: KgeModel = KgeModel.create(
-                config, dataset, parameter_client=parameter_client
+                config,
+                dataset,
+                parameter_client=parameter_client,
+                max_partition_entities=max_partition_entities,
             )
         else:
             self.model: KgeModel = model
-        self.work_scheduler_client = SchedulerClient()
         lapse_indexes = [
-            np.arange(dataset.num_entities(), dtype=np.int),
-            np.arange(dataset.num_relations(), dtype=np.int) + dataset.num_entities(),
+            torch.arange(dataset.num_entities(), dtype=torch.int),
+            torch.arange(dataset.num_relations(), dtype=torch.int)
+            + dataset.num_entities(),
         ]
         self.optimizer = KgeOptimizer.create(
             config,
@@ -420,12 +432,32 @@ class TrainingJob(Job):
     def run_epoch(self) -> Dict[str, Any]:
         "Runs an epoch and returns a trace entry."
 
+        trace_entry = None
         while True:
             # load new work package
-            work, work_entities = self.work_scheduler_client.get_work()
+            work, work_entities, work_relations = self.work_scheduler_client.get_work()
             if work is None:
                 break
             self.dataloader_dataset.set_samples(work)
+            if self.entity_sync_level == "partition":
+                if work_entities is not None:
+                    self.model.get_s_embedder()._pull_embeddings(work_entities)
+                    self.optimizer.pull_entities(work_entities)
+                else:
+                    raise ValueError(
+                        "the used work-scheduler seems not to support "
+                        "syncing entities on a partition level"
+                    )
+            if self.relation_sync_level == "partition":
+                if work_relations is not None:
+                    self.model.get_p_embedder()._pull_embeddings(work_relations)
+                    self.optimizer.pull_relations(work_relations)
+                else:
+                    raise ValueError(
+                        "the used work-scheduler seems not to support "
+                        "syncing relations on a partition level"
+                    )
+
             if (
                 work_entities is not None
                 and self.config.get("negative_sampling.sampling_type") == "pooled"
@@ -515,7 +547,10 @@ class TrainingJob(Job):
                 self.optimizer.step()
                 batch_optimizer_time += time.time()
 
-                self.model.push_back()
+                if self.entity_sync_level == "batch":
+                    self.model.get_s_embedder().push_back()
+                if self.relation_sync_level == "batch":
+                    self.model.get_p_embedder().push_back()
 
                 # tracing/logging
                 if self.trace_batch:
@@ -611,6 +646,12 @@ class TrainingJob(Job):
 
             print("work done", self.parameter_client.rank)
             self.work_scheduler_client.work_done()
+            if self.entity_sync_level == "partition":
+                self.model.get_s_embedder().set_embeddings()
+                self.model.get_s_embedder().push_back()
+            if self.relation_sync_level == "partition":
+                self.model.get_p_embedder().set_embeddings()
+                self.model.get_p_embedder().push_back()
         return trace_entry
 
     def _prepare(self):
@@ -1205,7 +1246,6 @@ class TrainingJob1vsAll(TrainingJob):
             worker_init_fn=_generate_worker_init_fn(self.config),
             pin_memory=self.config.get("train.pin_memory"),
         )
-
 
     def _process_batch(self, batch_index, batch) -> TrainingJob._ProcessBatchResult:
         # prepare

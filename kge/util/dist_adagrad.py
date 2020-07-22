@@ -38,6 +38,7 @@ class DistAdagrad(Optimizer):
         eps=1e-10,
         parameter_client=None,
         lapse_indexes=None,
+        sync_levels=[],
     ):
         params = [p for p in model.parameters() if p.requires_grad]
         if not 0.0 <= lr:
@@ -68,6 +69,9 @@ class DistAdagrad(Optimizer):
             model._entity_embedder.local_to_lapse_mapper,
             model._relation_embedder.local_to_lapse_mapper,
         ]
+        self.pulled_parameters = [None, None]
+
+        self.sync_levels = sync_levels
 
         self.parameter_client = parameter_client
         # these are numpy tensors in which we pull the current values from lapse to
@@ -132,7 +136,7 @@ class DistAdagrad(Optimizer):
                     self.parameter_client.set_lr(group["lr"])
                 group["lr"] = self.parameter_client.get_lr()
 
-                #state["step"] += 1
+                # state["step"] += 1
 
                 if group["weight_decay"] != 0:
                     if p.grad.is_sparse:
@@ -158,16 +162,23 @@ class DistAdagrad(Optimizer):
                     # TODO: indexing on numpy update tensor creates a new tensor
                     #  updates will be written in the wrong tensor
                     #  sometimes the tensor is even freed before we even write in it
-                    update_mask = torch.zeros(len(self.local_to_lapse_mappers[i]), dtype=torch.bool)
-                    update_mask[grad_indices_flat.cpu().numpy()] = True
-                    update_tensor = torch.zeros((torch.sum(update_mask).item(), grad.size()[1]), dtype=torch.float32)
-                    keys_optim = (self.local_to_lapse_mappers[i]
-                                  + self.lapse_optimizer_index_offset)[update_mask]
-                    self.parameter_client.pull(
-                        keys_optim,
-                        update_tensor,
-                    )
-                    state["sum"][update_mask] = update_tensor.to(state["sum"].device)
+                    if self.sync_levels[i] == "batch":
+                        update_mask = torch.zeros(
+                            len(self.local_to_lapse_mappers[i]), dtype=torch.bool
+                        )
+                        update_mask[grad_indices_flat.cpu()] = True
+                        update_tensor = torch.zeros(
+                            (torch.sum(update_mask).item(), grad.size()[1]),
+                            dtype=torch.float32,
+                        )
+                        keys_optim = (
+                            self.local_to_lapse_mappers[i]
+                            + self.lapse_optimizer_index_offset
+                        )[update_mask]
+                        self.parameter_client.pull(
+                            keys_optim, update_tensor,
+                        )
+                        state["sum"][update_mask] = update_tensor.to(state["sum"].device)
 
                     def make_sparse(values):
                         constructor = grad.new
@@ -176,37 +187,41 @@ class DistAdagrad(Optimizer):
                         return constructor(grad_indices, values, size)
 
                     sum_update_values = grad_values.pow(2)
-                    self.parameter_client.push(
-                        keys_optim,
-                        sum_update_values.cpu(),
-                    )
                     state["sum"].add_(make_sparse(sum_update_values))
+                    if self.sync_levels[i] == "batch":
+                        self.parameter_client.push(
+                            keys_optim, sum_update_values.cpu(),
+                        )
 
                     std = state["sum"].sparse_mask(grad)
                     std_values = std._values().sqrt_().add_(group["eps"])
                     update_value = (grad_values / std_values).mul_(-clr)
-                    self.parameter_client.push(
-                        self.local_to_lapse_mappers[i][update_mask],
-                        update_value.cpu(),
-                    )
+                    if self.sync_levels[i] == "batch":
+                        self.parameter_client.push(
+                            self.local_to_lapse_mappers[i][update_mask],
+                            update_value.cpu(),
+                        )
+                    else:
+                        p.add_(make_sparse(update_value))
                     # p.add_(make_sparse(grad_values / std_values), alpha=-clr)
                 else:
                     # pull the current internal optimizer parameters
                     update_mask = self.local_to_lapse_mappers[i] != -1
-                    update_tensor = torch.zeros((torch.sum(update_mask).item(), p.shape[1]), dtype=torch.float32)
-                    keys_optim = (self.local_to_lapse_mappers[i]
-                                  + self.lapse_optimizer_index_offset)[update_mask]
-                    self.parameter_client.pull(keys_optim,
-                                               update_tensor
-                                               )
+                    update_tensor = torch.zeros(
+                        (torch.sum(update_mask).item(), p.shape[1]), dtype=torch.float32
+                    )
+                    keys_optim = (
+                        self.local_to_lapse_mappers[i]
+                        + self.lapse_optimizer_index_offset
+                    )[update_mask]
+                    self.parameter_client.pull(keys_optim, update_tensor)
                     state["sum"][update_mask] = update_tensor.to(state["sum"].device)
 
                     # push the updated internal optimizer parameters to lapse
                     # state['sum'].addcmul_(grad, grad, value=1)
                     sum_update = grad * grad
                     self.parameter_client.push(
-                        keys_optim,
-                        sum_update.cpu()[update_mask],
+                        keys_optim, sum_update.cpu()[update_mask],
                     )
                     state["sum"].add_(sum_update)
                     std = state["sum"].sqrt().add_(group["eps"])
@@ -217,29 +232,81 @@ class DistAdagrad(Optimizer):
                     update_value = -clr * grad / std
                     self.parameter_client.push(
                         self.local_to_lapse_mappers[i][update_mask].astype(np.uint64),
-                        update_value.cpu()[update_mask]
+                        update_value.cpu()[update_mask],
                     )
 
         return loss
 
+    def pull_entities(self, entity_ids):
+        self._pull_parameters(entity_ids, 0)
+
+    def pull_relations(self, relation_ids):
+        self._pull_parameters(relation_ids, 1)
+
+    def _pull_parameters(self, ids, parameter_idx):
+        self.pulled_parameters[parameter_idx] = ids
+        local_ids = self.local_index_mappers[parameter_idx][ids]
+        lapse_ids = self.local_to_lapse_mappers[parameter_idx][local_ids]
+        for group in self.param_groups:
+            for i, p in enumerate(group["params"]):
+                if i != parameter_idx:
+                    continue
+                update_tensor = torch.zeros(
+                    (len(ids), p.size()[1]), dtype=torch.float32
+                )
+                keys_optim = lapse_ids + self.lapse_optimizer_index_offset
+                self.parameter_client.pull(
+                    keys_optim, update_tensor,
+                )
+                self.state[p]["sum"][local_ids] = update_tensor.to(
+                    self.state[p]["sum"].device
+                )
+
+    def set_entities(self):
+        self._set_parameters(0)
+
+    def set_relations(self):
+        self._set_parameters(1)
+
+    def _set_parameters(self, parameter_idx):
+        pulled_parameter_ids = self.pulled_parameters[parameter_idx]
+        lapse_optim_ids = (
+            self.lapse_indexes[parameter_idx][pulled_parameter_ids]
+            + self.lapse_optimizer_index_offset
+        )
+        local_ids = self.local_index_mappers[parameter_idx][pulled_parameter_ids]
+        for group in self.param_groups:
+            for i, p in enumerate(group["params"]):
+                if i != parameter_idx:
+                    continue
+                self.parameter_client.set(
+                    lapse_optim_ids, self.state[p]["sum"][local_ids]
+                )
+
     def pull_all(self):
         # get all optimizer parameters out of lapse
+        # only works if the optimizer has the complete size
         for group in self.param_groups:
             for i, p in enumerate(group["params"]):
                 if p.grad is None:
                     continue
                 state = self.state[p]
                 update_tensor = torch.zeros_like(p)
-                keys_optim = torch.arange(p.shape[0]) + self.lapse_optimizer_index_offset[i]
+                keys_optim = (
+                    torch.arange(p.shape[0]) + self.lapse_optimizer_index_offset[i]
+                )
                 self.parameter_client.pull(keys_optim, update_tensor)
-                state['sum'][:, :] = update_tensor
+                state["sum"][:, :] = update_tensor
 
     def push_all(self):
         # push all optimizer parameters into lapse
+        # only works if the optimizer has the complete size
         for group in self.param_groups:
             for i, p in enumerate(group["params"]):
                 if p.grad is None:
                     continue
                 state = self.state[p]
-                keys_optim = torch.arange(p.shape[0]) + self.lapse_optimizer_index_offset[i]
-                self.parameter_client.push(keys_optim, state['sum'].cpu())
+                keys_optim = (
+                    torch.arange(p.shape[0]) + self.lapse_optimizer_index_offset[i]
+                )
+                self.parameter_client.push(keys_optim, state["sum"].cpu())

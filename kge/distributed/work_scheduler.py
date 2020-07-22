@@ -19,6 +19,7 @@ class SCHEDULER_CMDS(IntEnum):
     WAIT = 4
     BARRIER = 5
     SHUTDOWN = 6
+    INIT_INFO = 7
 
 
 class WorkScheduler(mp.get_context("spawn").Process):
@@ -126,6 +127,8 @@ class WorkScheduler(mp.get_context("spawn").Process):
                 if shutdown_count == self.num_clients:
                     print("shutting down work scheduler")
                     break
+            if cmd == SCHEDULER_CMDS.INIT_INFO:
+                self._handle_init_info(rank)
 
     def _next_work(
         self, rank
@@ -161,6 +164,18 @@ class WorkScheduler(mp.get_context("spawn").Process):
 
     def _handle_work_done(self, rank):
         pass
+
+    def _handle_init_info(self, rank):
+        max_entities = self._get_max_entities()
+        max_relations = self._get_max_relations()
+        init_data = torch.LongTensor([max_entities, max_relations])
+        dist.send(init_data, dst=rank)
+
+    def _get_max_entities(self):
+        return 0
+
+    def _get_max_relations(self):
+        return 0
 
     @staticmethod
     def _load_partition_file(partition_type, dataset_folder, num_partitions):
@@ -317,6 +332,23 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         self.entities_to_partition = self._load_entities_to_partitions_file(
             self.partition_type, dataset_folder, num_partitions
         )
+        self._entities_in_bucket = self._get_entities_in_bucket()
+
+    def _get_entities_in_bucket(self):
+        entities_in_bucket = dict()
+        for partition in self.partitions:
+            entities_in_bucket[partition] = torch.from_numpy(
+                np.where(
+                    np.ma.mask_or(
+                        (self.entities_to_partition == partition[0]),
+                        (self.entities_to_partition == partition[1]),
+                    )
+                )[0]
+            )
+        return entities_in_bucket
+
+    def _get_max_entities(self):
+        return max([len(i) for i in self._entities_in_bucket.values()])
 
     def _next_work(
         self, rank
@@ -361,10 +393,10 @@ class TwoDBlockWorkScheduler(WorkScheduler):
                     self._initialized_entity_blocks.add(object_entity_block)
                     block_data = self.work_to_do[bucket]
                     del self.work_to_do[bucket]
-                    return block_data, self._get_entities_in_bucket(bucket), False
+                    return block_data, self._entities_in_bucket.get(bucket), False
         if len(self.work_to_do) > 0:
             wait = True
-            print("work to do", self.work_to_do.keys())
+            # print("work to do", self.work_to_do.keys())
         return None, None, wait
 
     def _is_initialized(self, bucket: Tuple[int, int]):
@@ -376,16 +408,6 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         return (
             bucket[0] in self._initialized_entity_blocks
             or bucket[1] in self._initialized_entity_blocks
-        )
-
-    def _get_entities_in_bucket(self, bucket):
-        return torch.from_numpy(
-            np.where(
-                np.ma.mask_or(
-                    (self.entities_to_partition == bucket[0]),
-                    (self.entities_to_partition == bucket[1]),
-                )
-            )[0]
         )
 
     def _handle_work_done(self, rank):
@@ -416,7 +438,16 @@ class SchedulerClient:
     def __init__(self, scheduler_rank=1):
         self.scheduler_rank = scheduler_rank
 
-    def get_work(self) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+    def get_init_info(self):
+        cmd = torch.LongTensor([SCHEDULER_CMDS.INIT_INFO, 0])
+        dist.send(cmd, dst=self.scheduler_rank)
+        info_buffer = torch.zeros((2,), dtype=torch.long)
+        dist.recv(info_buffer, src=self.scheduler_rank)
+        max_entities = info_buffer[0]
+        max_relations = info_buffer[1]
+        return max_entities, max_relations
+
+    def get_work(self) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
         while True:
             cmd = torch.LongTensor([SCHEDULER_CMDS.GET_WORK, 0])
             dist.send(cmd, dst=self.scheduler_rank)
@@ -428,16 +459,16 @@ class SchedulerClient:
                 dist.recv(cmd, src=self.scheduler_rank)
                 num_entities = cmd[1].item()
                 if num_entities == 0:
-                    return work_buffer, None
+                    return work_buffer, None, None  # todo: add relations
                 else:
                     entity_buffer = torch.full((num_entities,), -1, dtype=torch.long)
                     dist.recv(entity_buffer, src=self.scheduler_rank)
-                    return work_buffer, entity_buffer
+                    return work_buffer, entity_buffer, None  # todo: add relations
             elif cmd[0] == SCHEDULER_CMDS.WAIT:
-                print("waiting for a block")
+                # print("waiting for a block")
                 time.sleep(cmd[1].item())
             else:
-                return None, None
+                return None, None, None
 
     def work_done(self):
         cmd = torch.LongTensor([SCHEDULER_CMDS.WORK_DONE, 0])

@@ -20,6 +20,8 @@ job:
     lapse_port: '9091'
     num_partitions: 2
     partition_type: 'block_partition'  # block_partition, 2d_block_partition
+    entity_sync_level: 'batch'  # batch, partition
+    relation_sync_level: 'batch'  # batch, partition
 
 # The seeds of the PRNGs can be set manually for (increased) reproducability.
 # Use -1 to use default seed.

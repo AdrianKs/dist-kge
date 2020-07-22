@@ -379,6 +379,7 @@ class KgeModel(KgeBase):
         configuration_key=None,
         init_for_load_only=False,
         parameter_client=None,
+        max_partition_entities=0,
     ):
         super().__init__(config, dataset, configuration_key)
 
@@ -393,6 +394,8 @@ class KgeModel(KgeBase):
         if create_embedders:
             if self.get_option("create_complete"):
                 embedding_layer_size = dataset.num_entities()
+            elif config.get("job.distributed.entity_sync_level") == "partition" and max_partition_entities != 0:
+                embedding_layer_size =max_partition_entities
             else:
                 embedding_layer_size = self._calc_embedding_layer_size(config, dataset)
             self._entity_embedder = KgeEmbedder.create(
@@ -515,6 +518,7 @@ class KgeModel(KgeBase):
         configuration_key: Optional[str] = None,
         init_for_load_only=False,
         parameter_client=None,
+        max_partition_entities=0,
     ) -> "KgeModel":
         """Factory method for model creation."""
 
@@ -535,6 +539,7 @@ class KgeModel(KgeBase):
                 configuration_key=configuration_key,
                 init_for_load_only=init_for_load_only,
                 parameter_client=parameter_client,
+                max_partition_entities=max_partition_entities,
             )
             model.to(config.get("job.device"))
             return model
