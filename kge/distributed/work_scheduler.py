@@ -65,6 +65,15 @@ class WorkScheduler(mp.get_context("spawn").Process):
                 num_clients=num_clients,
                 dataset_folder=dataset_folder,
             )
+        if partition_type == "relation_partition":
+            return RelationWorkScheduler(
+                world_size=world_size,
+                master_ip=master_ip,
+                master_port=master_port,
+                num_partitions=num_partitions,
+                num_clients=num_clients,
+                dataset_folder=dataset_folder,
+            )
         elif partition_type == "2d_block_partition":
             return TwoDBlockWorkScheduler(
                 world_size=world_size,
@@ -132,14 +141,14 @@ class WorkScheduler(mp.get_context("spawn").Process):
 
     def _next_work(
         self, rank
-    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], bool]:
+    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor], bool]:
         raise NotImplementedError()
 
     def _refill_work(self):
         self.work_to_do = deque(list(range(self.num_partitions)))
 
     def _send_work(self, rank, cmd_buffer):
-        work, entities, wait = self._next_work(rank)
+        work, entities, relations, wait = self._next_work(rank)
         if work is not None:
             cmd_buffer[0] = SCHEDULER_CMDS.WORK
             cmd_buffer[1] = len(work)
@@ -152,6 +161,13 @@ class WorkScheduler(mp.get_context("spawn").Process):
                 cmd_buffer[1] = len(entities)
                 dist.send(cmd_buffer, dst=rank)
                 dist.send(entities, dst=rank)
+            if relations is None:
+                cmd_buffer[1] = 0
+                dist.send(cmd_buffer, dst=rank)
+            else:
+                cmd_buffer[1] = len(relations)
+                dist.send(cmd_buffer, dst=rank)
+                dist.send(relations, dst=rank)
         elif wait:
             cmd_buffer[0] = SCHEDULER_CMDS.WAIT
             cmd_buffer[1] = self.wait_time
@@ -218,16 +234,22 @@ class WorkScheduler(mp.get_context("spawn").Process):
             )
         return partition_assignment
 
+    def _load_entities_to_partitions_file(self, partition_type, dataset_folder, num_partitions):
+        return self._load_partition_mapper_file("entity_to_partitions.del", partition_type, dataset_folder, num_partitions)
+
+    def _load_relations_to_partitions_file(self, partition_type, dataset_folder, num_partitions):
+        return self._load_partition_mapper_file("relation_to_partitions.del", partition_type, dataset_folder, num_partitions)
+
     @staticmethod
-    def _load_entities_to_partitions_file(
-        partition_type, dataset_folder, num_partitions
+    def _load_partition_mapper_file(
+        file_name, partition_type, dataset_folder, num_partitions
     ):
         if os.path.exists(
             os.path.join(
                 dataset_folder,
                 partition_type,
                 f"num_{num_partitions}",
-                "entity_to_partitions.del.npy",
+                f"{file_name}.npy",
             )
         ):
             partition_assignment = np.load(
@@ -235,7 +257,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
                     dataset_folder,
                     partition_type,
                     f"num_{num_partitions}",
-                    "entity_to_partitions.del.npy",
+                    f"{file_name}.npy",
                 )
             )
         else:
@@ -244,7 +266,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
                     dataset_folder,
                     partition_type,
                     f"num_{num_partitions}",
-                    "entity_to_partitions.del",
+                    file_name,
                 ),
                 dtype=np.long,
             )
@@ -253,7 +275,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
                     dataset_folder,
                     partition_type,
                     f"num_{num_partitions}",
-                    "entity_to_partitions.del",
+                    file_name,
                 ),
                 partition_assignment,
             )
@@ -282,12 +304,12 @@ class BlockWorkScheduler(WorkScheduler):
 
     def _next_work(
         self, rank
-    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], bool]:
+    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor], bool]:
         """add work/partitions to the list of work to do"""
         try:
-            return self.partitions[self.work_to_do.pop()], None, False
+            return self.partitions[self.work_to_do.pop()], None, None, False
         except IndexError:
-            return None, None, False
+            return None, None, None, False
 
     def _load_partitions(self, dataset_folder, num_partitions):
         partition_assignment = self._load_partition_file(
@@ -300,6 +322,65 @@ class BlockWorkScheduler(WorkScheduler):
             for i in partition_indexes
         ]
         return partitions
+
+
+class RelationWorkScheduler(WorkScheduler):
+    def __init__(
+            self,
+            world_size,
+            master_ip,
+            master_port,
+            num_partitions,
+            num_clients,
+            dataset_folder,
+    ):
+        self.partition_type = "relation_partition"
+        super(RelationWorkScheduler, self).__init__(
+            world_size,
+            master_ip,
+            master_port,
+            num_partitions,
+            num_clients,
+            dataset_folder,
+        )
+        self.relations_to_partition = self._load_relations_to_partitions_file(
+            self.partition_type, dataset_folder, num_partitions
+        )
+        self.relations_to_partition = self._get_relations_in_partition()
+
+    def _next_work(
+            self, rank
+    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor], bool]:
+        """add work/partitions to the list of work to do"""
+        try:
+            partition = self.work_to_do.pop()
+            partition_data = self.partitions[partition]
+            relations = self.relations_to_partition[partition]
+            return partition_data, None, relations, False
+        except IndexError:
+            return None, None, None, False
+
+    def _load_partitions(self, dataset_folder, num_partitions):
+        partition_assignment = self._load_partition_file(
+            self.partition_type, dataset_folder, num_partitions
+        )
+        # todo: let the partitions start at zero, then we do not need this unique
+        partition_indexes = np.unique(partition_assignment)
+        partitions = [
+            torch.from_numpy(np.where(partition_assignment == i)[0])
+            for i in partition_indexes
+        ]
+        return partitions
+
+    def _get_relations_in_partition(self):
+        relations_in_partition = dict()
+        for partition in range(self.num_partitions):
+            relations_in_partition[partition] = torch.from_numpy(
+                np.where(
+                        (self.relations_to_partition == partition),
+                )[0]
+            )
+        return relations_in_partition
 
 
 class TwoDBlockWorkScheduler(WorkScheduler):
@@ -352,12 +433,12 @@ class TwoDBlockWorkScheduler(WorkScheduler):
 
     def _next_work(
         self, rank
-    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], bool]:
+    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor], bool]:
         return self._acquire_bucket(rank)
 
     def _acquire_bucket(
         self, rank
-    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], bool]:
+    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor], bool]:
         """
         Finds a (lhs, rhs) partition pair that has not already been acquired
         this epoch, and where neither the lhs nor rhs partitions are currently
@@ -393,11 +474,11 @@ class TwoDBlockWorkScheduler(WorkScheduler):
                     self._initialized_entity_blocks.add(object_entity_block)
                     block_data = self.work_to_do[bucket]
                     del self.work_to_do[bucket]
-                    return block_data, self._entities_in_bucket.get(bucket), False
+                    return block_data, self._entities_in_bucket.get(bucket), None, False
         if len(self.work_to_do) > 0:
             wait = True
             # print("work to do", self.work_to_do.keys())
-        return None, None, wait
+        return None, None, None, wait
 
     def _is_initialized(self, bucket: Tuple[int, int]):
         # at least one side of the partition block needs to be initialized to ensure
@@ -458,12 +539,18 @@ class SchedulerClient:
                 # get partition entities
                 dist.recv(cmd, src=self.scheduler_rank)
                 num_entities = cmd[1].item()
-                if num_entities == 0:
-                    return work_buffer, None, None  # todo: add relations
-                else:
+                entity_buffer = None
+                if num_entities != 0:
                     entity_buffer = torch.full((num_entities,), -1, dtype=torch.long)
                     dist.recv(entity_buffer, src=self.scheduler_rank)
-                    return work_buffer, entity_buffer, None  # todo: add relations
+                # get partition relations
+                dist.recv(cmd, src=self.scheduler_rank)
+                num_relations = cmd[1].item()
+                relation_buffer = None
+                if num_relations != 0:
+                    relation_buffer = torch.full((num_relations,), -1, dtype=torch.long)
+                    dist.recv(relation_buffer, src=self.scheduler_rank)
+                return work_buffer, entity_buffer, relation_buffer
             elif cmd[0] == SCHEDULER_CMDS.WAIT:
                 # print("waiting for a block")
                 time.sleep(cmd[1].item())
