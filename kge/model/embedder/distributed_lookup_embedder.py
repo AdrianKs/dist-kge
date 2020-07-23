@@ -75,12 +75,12 @@ class DistributedLookupEmbedder(LookupEmbedder):
 
             # self.lapse_worker.localize(keys=self.lapse_index[missing_local_indexes])
             pull_indexes = self.lapse_index[indexes[missing_mask].cpu()].reshape(-1)
-            # detach().cpu() is still faster than the creation of a new cpu tensor
             current_embeddings = (
                 self._embeddings.weight[missing_local_indexes, :].detach().cpu()
             )
             self.parameter_client.pull(pull_indexes, current_embeddings)
-            self._embeddings.weight[missing_local_indexes, :].copy_(current_embeddings, non_blocking=True
+            self._embeddings.weight[missing_local_indexes, :] = current_embeddings.to(
+                self._embeddings.weight.device
             )
 
             # update local index mapper
