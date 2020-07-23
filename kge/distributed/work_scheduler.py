@@ -1,4 +1,5 @@
 import os
+import math
 import datetime
 import time
 from collections import deque
@@ -54,6 +55,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
         master_port,
         num_partitions,
         num_clients,
+        dataset,
         dataset_folder,
     ):
         if partition_type == "block_partition":
@@ -81,6 +83,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
                 master_port=master_port,
                 num_partitions=num_partitions,
                 num_clients=num_clients,
+                dataset=dataset,
                 dataset_folder=dataset_folder,
             )
         else:
@@ -395,6 +398,7 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         master_port,
         num_partitions,
         num_clients,
+        dataset,
         dataset_folder,
     ):
         self.partition_type = "2d_block_partition"
@@ -410,19 +414,58 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         self.running_blocks: Dict[int, Tuple[int, int]] = {}
         self.work_to_do = deepcopy(self.partitions)
         self._initialized_entity_blocks = set()
-        self.entities_to_partition = self._load_entities_to_partitions_file(
+        entities_to_partition = self._load_entities_to_partitions_file(
             self.partition_type, dataset_folder, num_partitions
         )
-        self._entities_in_bucket = self._get_entities_in_bucket()
+        self._entities_in_bucket = self._get_entities_in_bucket(entities_to_partition)
+        self.dataset = dataset
+        self.repartition_epoch = True
 
-    def _get_entities_in_bucket(self):
+    def _repartition(self):
+        print("repartitioning data")
+        def random_map_entities():
+            mapper = torch.randperm(self.dataset.num_entities()).type(torch.int32)
+            mapped_data = deepcopy(self.dataset.split("train"))  # drop reference to dataset
+            mapped_data[:, 0] = mapper[mapped_data[:, 0].long()]
+            mapped_data[:, 2] = mapper[mapped_data[:, 2].long()]
+            return mapped_data, mapper
+
+        def get_partition(entity_id, dataset_size, num_partitions):
+            partition = math.floor(
+                entity_id * 1.0 / dataset_size * 1.0 * num_partitions)
+            return partition
+
+        v_get_partition = np.vectorize(
+            get_partition, excluded=["dataset_size", "num_partitions"]
+        )
+        mapped_data, mapped_entities = random_map_entities()
+        print("repartition s")
+        s_block = v_get_partition(
+            mapped_data[:, 0], dataset_size=self.dataset.num_entities(),
+            num_partitions=self.num_partitions
+        )
+        print("repartition o")
+        o_block = v_get_partition(
+            mapped_data[:, 2], dataset_size=self.dataset.num_entities(),
+            num_partitions=self.num_partitions
+        )
+        print("map entity ids to partition")
+        entity_to_partition = v_get_partition(mapped_entities,
+                                              dataset_size=self.dataset.num_entities(),
+                                              num_partitions=self.num_partitions)
+        triple_partition_assignment = np.stack([s_block, o_block], axis=1)
+        self.partitions = self._construct_partitions(triple_partition_assignment)
+        self._entities_in_bucket = self._get_entities_in_bucket(entity_to_partition)
+        print("repartitioning done")
+
+    def _get_entities_in_bucket(self, entities_to_partition):
         entities_in_bucket = dict()
         for partition in self.partitions:
             entities_in_bucket[partition] = torch.from_numpy(
                 np.where(
                     np.ma.mask_or(
-                        (self.entities_to_partition == partition[0]),
-                        (self.entities_to_partition == partition[1]),
+                        (entities_to_partition == partition[0]),
+                        (entities_to_partition == partition[1]),
                     )
                 )[0]
             )
@@ -495,14 +538,18 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         del self.running_blocks[rank]
 
     def _refill_work(self):
+        if self.repartition_epoch:
+            self._repartition()
         self.work_to_do = deepcopy(self.partitions)
 
     def _load_partitions(self, dataset_folder, num_partitions):
         partition_assignment = self._load_partition_file(
             self.partition_type, dataset_folder, num_partitions
         )
-        # todo: let the partitions start at zero, then we do not need this unique
-        #  this is only the case with our R partition script
+        return self._construct_partitions(partition_assignment)
+
+    @staticmethod
+    def _construct_partitions(partition_assignment):
         partition_indexes = np.unique(partition_assignment, axis=0)
         partitions_data = [
             torch.from_numpy(

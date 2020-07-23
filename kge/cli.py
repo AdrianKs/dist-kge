@@ -254,6 +254,7 @@ def main():
                 master_port=master_port,
                 num_partitions=num_partitions,
                 num_clients=num_workers,
+                dataset=dataset,
                 dataset_folder=dataset.folder,
             )
             scheduler.start()
