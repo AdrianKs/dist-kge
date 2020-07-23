@@ -221,7 +221,7 @@ class DistAdagrad(Optimizer):
                     # state['sum'].addcmul_(grad, grad, value=1)
                     sum_update = grad * grad
                     self.parameter_client.push(
-                        keys_optim, sum_update.cpu()[update_mask],
+                        keys_optim, sum_update.cpu()[update_mask], asynchronous=True,
                     )
                     state["sum"].add_(sum_update)
                     std = state["sum"].sqrt().add_(group["eps"])
@@ -233,6 +233,7 @@ class DistAdagrad(Optimizer):
                     self.parameter_client.push(
                         self.local_to_lapse_mappers[i][update_mask].astype(np.uint64),
                         update_value.cpu()[update_mask],
+                        asynchronous=True,
                     )
 
         return loss

@@ -85,7 +85,7 @@ class LapseParameterClient(lapse.Worker, KgeParameterClient):
         super(LapseParameterClient, self).pull(keys, pull_tensor, asynchronous)
 
     def push(self, keys, push_tensor: torch.Tensor, asynchronous=False):
-        super(LapseParameterClient, self).push(keys, push_tensor)
+        super(LapseParameterClient, self).push(keys, push_tensor, asynchronous)
 
     def set(self, keys, set_tensor, asynchronous=False):
         super(LapseParameterClient, self).set(keys, set_tensor)
