@@ -639,13 +639,16 @@ class TrainingJob(Job):
                 event="epoch_completed",
             )
             print("work done", self.parameter_client.rank)
-            self.work_scheduler_client.work_done()
             if self.entity_sync_level == "partition":
+                # todo: optimizer write back missing
                 self.model.get_s_embedder().set_embeddings()
+                self.optimizer.set_entities()
                 self.model.get_s_embedder().push_back()
             if self.relation_sync_level == "partition":
                 self.model.get_p_embedder().set_embeddings()
+                self.optimizer.set_relations()
                 self.model.get_p_embedder().push_back()
+            self.work_scheduler_client.work_done()
 
             for f in self.post_epoch_trace_hooks:
                 f(self, trace_entry)

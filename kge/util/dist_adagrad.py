@@ -281,7 +281,7 @@ class DistAdagrad(Optimizer):
                 if i != parameter_idx:
                     continue
                 self.parameter_client.set(
-                    lapse_optim_ids, self.state[p]["sum"][local_ids]
+                    lapse_optim_ids.long(), self.state[p]["sum"][local_ids].cpu()
                 )
 
     def pull_all(self):
