@@ -638,12 +638,6 @@ class TrainingJob(Job):
                 other_time=other_time,
                 event="epoch_completed",
             )
-            for f in self.post_epoch_trace_hooks:
-                f(self, trace_entry)
-            trace_entry = self.trace(
-                **trace_entry, echo=True, echo_prefix="  ", log=True
-            )
-
             print("work done", self.parameter_client.rank)
             self.work_scheduler_client.work_done()
             if self.entity_sync_level == "partition":
@@ -652,6 +646,13 @@ class TrainingJob(Job):
             if self.relation_sync_level == "partition":
                 self.model.get_p_embedder().set_embeddings()
                 self.model.get_p_embedder().push_back()
+
+            for f in self.post_epoch_trace_hooks:
+                f(self, trace_entry)
+            trace_entry = self.trace(
+                **trace_entry, echo=True, echo_prefix="  ", log=True
+            )
+
         return trace_entry
 
     def _prepare(self):
