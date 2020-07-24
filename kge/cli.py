@@ -18,6 +18,7 @@ from kge.util.io import get_checkpoint_file, load_checkpoint
 from kge.util.package import package_model, add_package_parser
 from kge.normal_cli import create_parser, process_meta_command, argparse_bool_type
 from kge.distributed import WorkerProcessPool, TorchParameterServer, WorkScheduler
+from kge.distributed.misc import MIN_RANK
 
 from torch import multiprocessing as mp
 from torch import distributed as dist
@@ -30,6 +31,9 @@ def init_lapse_scheduler(servers, num_keys, master_ip, master_port, lapse_port, 
     dist.init_process_group(
         backend="gloo", init_method="env://", world_size=dist_world_size, rank=0,
     )
+    # process groups need to be initialized in every process
+    worker_ranks = list(range(MIN_RANK, servers+MIN_RANK))
+    worker_group = dist.new_group(worker_ranks)
     os.environ["DMLC_NUM_WORKER"] = "0"
     os.environ["DMLC_NUM_SERVER"] = str(servers)
     os.environ["DMLC_ROLE"] = "scheduler"
@@ -40,12 +44,15 @@ def init_lapse_scheduler(servers, num_keys, master_ip, master_port, lapse_port, 
 
 
 def init_torch_server(num_clients, num_keys, dim, master_ip, master_port):
-    world_size = num_clients + 2
+    world_size = num_clients + MIN_RANK
     os.environ["MASTER_ADDR"] = master_ip
     os.environ["MASTER_PORT"] = master_port
     dist.init_process_group(
         backend="gloo", init_method="env://", world_size=world_size, rank=0,
     )
+    # process groups need to be initialized in every process
+    worker_ranks = list(range(MIN_RANK, num_clients + MIN_RANK))
+    worker_group = dist.new_group(worker_ranks)
     TorchParameterServer(world_size, num_keys, dim)
 
 
@@ -212,7 +219,7 @@ def main():
             master_port = config.get("job.distributed.master_port")
             lapse_port = config.get("job.distributed.lapse_port")
             num_partitions = config.get("job.distributed.num_partitions")
-            dist_world_size = num_workers + 2
+            dist_world_size = num_workers + MIN_RANK
             dim = config.get("lookup_embedder.dim")
             if config.get("train.optimizer") == "dist_adagrad":
                 num_keys *= 2

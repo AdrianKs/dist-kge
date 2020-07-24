@@ -10,6 +10,7 @@ from torch import distributed as dist
 from kge import Dataset
 from kge.job import Job
 from .parameter_client import KgeParameterClient
+from .misc import MIN_RANK
 
 
 class WorkerProcessPool:
@@ -74,13 +75,15 @@ class WorkerProcess(mp.get_context("spawn").Process):
     def run(self):
         os.environ["MASTER_ADDR"] = self.config.get("job.distributed.master_ip")
         os.environ["MASTER_PORT"] = self.config.get("job.distributed.master_port")
-        print("before init", self.rank + 2)
+        print("before init", self.rank + MIN_RANK)
         dist.init_process_group(
             backend="gloo",
             init_method="env://",
-            world_size=self.num_total_workers + 2,
-            rank=self.rank + 2,
+            world_size=self.num_total_workers + MIN_RANK,
+            rank=self.rank + MIN_RANK,
         )
+        worker_ranks = list(range(MIN_RANK, self.num_total_workers+MIN_RANK))
+        worker_group = dist.new_group(worker_ranks)
         server = None
         if self.config.get("job.distributed.parameter_server") == "lapse":
             os.environ["DMLC_NUM_WORKER"] = "0"
@@ -119,13 +122,14 @@ class WorkerProcess(mp.get_context("spawn").Process):
         parameter_client = KgeParameterClient.create(
             client_type=self.config.get("job.distributed.parameter_server"),
             server_id=0,
-            client_id=worker_id + 2,
+            client_id=worker_id + MIN_RANK,
             embedding_dim=self.embedding_dim,
             server=server,
             num_meta_keys=self.num_meta_keys,
+            worker_group=worker_group
         )
         init_for_load_only = False
-        if parameter_client.rank == 2 and self.checkpoint is not None:
+        if parameter_client.rank == MIN_RANK and self.checkpoint is not None:
             # Todo: we still create a complete new job after creating the resume job
             #  therefore epoch numbers will not be handled correctly, for example
             job = Job.create_from(self.checkpoint)

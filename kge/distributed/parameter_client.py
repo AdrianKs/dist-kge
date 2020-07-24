@@ -3,7 +3,6 @@ import lapse
 import numpy as np
 from typing import Optional
 from torch import distributed as dist
-from .work_scheduler import SCHEDULER_CMDS
 from .parameter_server import TORCH_PARAMETER_SERVER_CMDS
 
 
@@ -31,7 +30,13 @@ class KgeParameterClient:
 
     @staticmethod
     def create(
-        client_type, server_id, client_id, embedding_dim, server=None, num_meta_keys=0
+        client_type,
+        server_id,
+        client_id,
+        embedding_dim,
+        worker_group,
+        server=None,
+        num_meta_keys=0,
     ):
         if client_type == "lapse":
             return LapseParameterClient(
@@ -39,10 +44,14 @@ class KgeParameterClient:
                 rank=client_id,
                 lapse_server=server,  # in lapse we need to provide the actual server
                 num_meta_keys=num_meta_keys,
+                worker_group=worker_group,
             )
         if client_type == "torch":
             return TorchParameterClient(
-                server_rank=server_id, rank=client_id, dim=embedding_dim
+                server_rank=server_id,
+                rank=client_id,
+                dim=embedding_dim,
+                worker_group=worker_group,
             )
         else:
             raise ValueError(client_type)
@@ -50,9 +59,15 @@ class KgeParameterClient:
 
 class LapseParameterClient(lapse.Worker, KgeParameterClient):
     def __init__(
-        self, customer_id: int, rank: int, lapse_server: lapse.Server, num_meta_keys,
+        self,
+        customer_id: int,
+        rank: int,
+        lapse_server: lapse.Server,
+        num_meta_keys,
+        worker_group,
     ):
         super(LapseParameterClient, self).__init__(customer_id, rank, lapse_server)
+        self.worker_group = worker_group
         self.rank = rank
         self.num_meta_keys = num_meta_keys
         self._stop_key = torch.LongTensor([self.num_keys - self.num_meta_keys])
@@ -94,6 +109,9 @@ class LapseParameterClient(lapse.Worker, KgeParameterClient):
         if type(keys) is torch.Tensor:
             keys = keys.numpy().astype(np.uint64)
         super(LapseParameterClient, self).localize(keys, asynchronous)
+
+    def barrier(self):
+        dist.barrier(group=self.worker_group)
 
     def shutdown(self):
         super(LapseParameterClient, self).push(
@@ -145,13 +163,13 @@ class LapseParameterClient(lapse.Worker, KgeParameterClient):
 
 
 class TorchParameterClient(KgeParameterClient):
-    def __init__(self, server_rank, rank, dim):
+    def __init__(self, server_rank, rank, dim, worker_group):
         self.server_rank = server_rank
-        self.scheduler_rank = 1  # fixme: needs to be a parameter
         self.rank = rank
         self.dim = dim
         self.data_type = torch.float32
         self.lr_buffer = torch.zeros(1, dtype=torch.float32)
+        self.worker_group = worker_group
 
     def pull(self, keys, pull_tensor=None, asynchronous=False):
         cmd = torch.LongTensor([TORCH_PARAMETER_SERVER_CMDS.PULL_CMD, len(keys)])
@@ -177,14 +195,7 @@ class TorchParameterClient(KgeParameterClient):
         pass
 
     def barrier(self):
-        cmd = torch.LongTensor([TORCH_PARAMETER_SERVER_CMDS.BARRIER_CMD, 0])
-        dist.send(cmd, dst=self.server_rank)
-        # TODO: this is still very hacky. The parameter client should not have to tell
-        #  the scheduler to have to set a barrier
-        #  can we somehow ignore the scheduler in the barrier?
-        cmd = torch.LongTensor([SCHEDULER_CMDS.BARRIER, 0])
-        dist.send(cmd, dst=self.scheduler_rank)
-        dist.barrier()
+        dist.barrier(group=self.worker_group)
 
     def shutdown(self):
         cmd = torch.LongTensor([TORCH_PARAMETER_SERVER_CMDS.SHUTDOWN_CMD, 0])

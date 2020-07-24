@@ -23,6 +23,7 @@ from kge.util.io import load_checkpoint
 #  from init. But directly it works (partially initialized model)
 from kge.distributed.work_scheduler import SchedulerClient
 from kge.distributed.parameter_client import KgeParameterClient
+from kge.distributed.misc import MIN_RANK
 
 # from kge.distributed import KgeParameterClient, SchedulerClient
 from typing import Any, Callable, Dict, List, Optional, Union
@@ -93,7 +94,7 @@ class TrainingJob(Job):
         )
         # here we create one large model to init lapse and remove it afterwards
         self.parameter_client.barrier()
-        if self.parameter_client.rank == 2 and not init_for_load_only:
+        if self.parameter_client.rank == MIN_RANK and not init_for_load_only:
             self.config.set(self.config.get("model") + ".create_complete", True)
             init_model = KgeModel.create(
                 self.config, self.dataset, parameter_client=self.parameter_client
@@ -298,7 +299,7 @@ class TrainingJob(Job):
             self.model = self.model.cpu()
             torch.cuda.empty_cache()
             self.parameter_client.barrier()
-            if self.parameter_client.rank == 2:
+            if self.parameter_client.rank == MIN_RANK:
                 # move current small model to a tmp model
                 self.model = self.model.cpu()
                 tmp_model = self.model
