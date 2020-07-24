@@ -74,11 +74,9 @@ class DistAdagrad(Optimizer):
         self.sync_levels = sync_levels
 
         self.parameter_client = parameter_client
-        # these are numpy tensors in which we pull the current values from lapse to
-        # update the optimizer
-        # TODO: find a way that we don't have to store these parameters multiple times
-        #  (lapse, optimizer, this tensor)
-        self.lapse_update_tensors = [None, None]
+        # this array stores helper cpu tensors in which we pull data from the parameter
+        # client. We don't want to create a new tensor in every step.
+        self.pull_tensors = [None, None]
 
         defaults = dict(
             lr=lr,
@@ -157,28 +155,21 @@ class DistAdagrad(Optimizer):
                     size = grad.size()
 
                     # pull the current internal optimizer parameters
-                    if self.lapse_update_tensors[i] is None:
-                        self.lapse_update_tensors[i] = np.zeros(size, dtype=np.float32)
-                    # TODO: indexing on numpy update tensor creates a new tensor
-                    #  updates will be written in the wrong tensor
-                    #  sometimes the tensor is even freed before we even write in it
+                    if self.pull_tensors[i] is None:
+                        self.pull_tensors[i] = torch.zeros_like(p, device="cpu")
                     if self.sync_levels[i] == "batch":
-                        update_mask = torch.zeros(
-                            len(self.local_to_lapse_mappers[i]), dtype=torch.bool
-                        )
-                        update_mask[grad_indices_flat.cpu()] = True
-                        update_tensor = torch.zeros(
-                            (torch.sum(update_mask).item(), grad.size()[1]),
-                            dtype=torch.float32,
-                        )
+                        update_indexes = grad_indices_flat.cpu()
+                        update_tensor = self.pull_tensors[i][:len(update_indexes)]
                         keys_optim = (
                             self.local_to_lapse_mappers[i]
                             + self.lapse_optimizer_index_offset
-                        )[update_mask]
+                        )[update_indexes]
                         self.parameter_client.pull(
                             keys_optim, update_tensor,
                         )
-                        state["sum"][update_mask] = update_tensor.to(state["sum"].device)
+                        state["sum"][update_indexes] = update_tensor.to(
+                            state["sum"].device
+                        )
 
                     def make_sparse(values):
                         constructor = grad.new
@@ -198,7 +189,7 @@ class DistAdagrad(Optimizer):
                     update_value = (grad_values / std_values).mul_(-clr)
                     if self.sync_levels[i] == "batch":
                         self.parameter_client.push(
-                            self.local_to_lapse_mappers[i][update_mask],
+                            self.local_to_lapse_mappers[i][update_indexes],
                             update_value.cpu(),
                         )
                     else:
