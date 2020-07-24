@@ -27,11 +27,9 @@ def init_lapse_scheduler(servers, num_keys, master_ip, master_port, lapse_port, 
     # we are only initializing dist here to have the same ranks for lapse and torch
     os.environ["MASTER_ADDR"] = master_ip
     os.environ["MASTER_PORT"] = master_port
-    print("before init mock process, world_size", dist_world_size)
     dist.init_process_group(
         backend="gloo", init_method="env://", world_size=dist_world_size, rank=0,
     )
-    print("after init mock")
     os.environ["DMLC_NUM_WORKER"] = "0"
     os.environ["DMLC_NUM_SERVER"] = str(servers)
     os.environ["DMLC_ROLE"] = "scheduler"
