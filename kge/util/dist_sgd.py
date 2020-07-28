@@ -2,6 +2,7 @@ import torch
 import numpy as np
 from torch.optim.optimizer import Optimizer, required
 
+
 class DistSGD(Optimizer):
     r"""Implements stochastic gradient descent (optionally with momentum).
 
@@ -52,8 +53,18 @@ class DistSGD(Optimizer):
         The Nesterov version is analogously modified.
     """
 
-    def __init__(self, model, lr=required, momentum=0, dampening=0,
-                 weight_decay=0, nesterov=False, parameter_client=None, lapse_indexes=None, local_index_mappers=None):
+    def __init__(
+        self,
+        model,
+        lr=required,
+        momentum=0,
+        dampening=0,
+        weight_decay=0,
+        nesterov=False,
+        parameter_client=None,
+        lapse_indexes=None,
+        local_index_mappers=None,
+    ):
         params = [p for p in model.parameters() if p.requires_grad]
         if lr is not required and lr < 0.0:
             raise ValueError("Invalid learning rate: {}".format(lr))
@@ -62,12 +73,23 @@ class DistSGD(Optimizer):
         if weight_decay < 0.0:
             raise ValueError("Invalid weight_decay value: {}".format(weight_decay))
 
-        defaults = dict(lr=lr, momentum=momentum, dampening=dampening,
-                        weight_decay=weight_decay, nesterov=nesterov)
+        defaults = dict(
+            lr=lr,
+            momentum=momentum,
+            dampening=dampening,
+            weight_decay=weight_decay,
+            nesterov=nesterov,
+        )
         self.lapse_indexes = lapse_indexes
-        #self.local_index_mappers = local_index_mappers
-        self.local_index_mappers = [model._entity_embedder.local_index_mapper, model._relation_embedder.local_index_mapper]
-        self.local_to_lapse_mappers = [model._entity_embedder.local_to_lapse_mapper, model._relation_embedder.local_to_lapse_mapper]
+        # self.local_index_mappers = local_index_mappers
+        self.local_index_mappers = [
+            model._entity_embedder.local_index_mapper,
+            model._relation_embedder.local_index_mapper,
+        ]
+        self.local_to_lapse_mappers = [
+            model._entity_embedder.local_to_lapse_mapper,
+            model._relation_embedder.local_to_lapse_mapper,
+        ]
         self.parameter_client = parameter_client
         if nesterov and (momentum <= 0 or dampening != 0):
             raise ValueError("Nesterov momentum requires a momentum and zero dampening")
@@ -76,7 +98,7 @@ class DistSGD(Optimizer):
     def __setstate__(self, state):
         super(DistSGD, self).__setstate__(state)
         for group in self.param_groups:
-            group.setdefault('nesterov', False)
+            group.setdefault("nesterov", False)
 
     @torch.no_grad()
     def step(self, closure=None):
@@ -92,12 +114,12 @@ class DistSGD(Optimizer):
                 loss = closure()
 
         for group in self.param_groups:
-            weight_decay = group['weight_decay']
-            momentum = group['momentum']
-            dampening = group['dampening']
-            nesterov = group['nesterov']
+            weight_decay = group["weight_decay"]
+            momentum = group["momentum"]
+            dampening = group["dampening"]
+            nesterov = group["nesterov"]
 
-            for i, p in enumerate(group['params']):
+            for i, p in enumerate(group["params"]):
                 if p.grad is None:
                     continue
                 d_p = p.grad
@@ -105,28 +127,49 @@ class DistSGD(Optimizer):
                     d_p = d_p.add(p, alpha=weight_decay)
                 if momentum != 0:
                     param_state = self.state[p]
-                    if 'momentum_buffer' not in param_state:
-                        buf = param_state['momentum_buffer'] = torch.clone(d_p).detach()
+                    if "momentum_buffer" not in param_state:
+                        buf = param_state["momentum_buffer"] = torch.clone(d_p).detach()
                     else:
-                        buf = param_state['momentum_buffer']
+                        buf = param_state["momentum_buffer"]
                         buf.mul_(momentum).add_(d_p, alpha=1 - dampening)
                     if nesterov:
                         d_p = d_p.add(buf, alpha=momentum)
                     else:
                         d_p = buf
 
-                # TODO: handle sparse correctly. Currently we just push all parameters
-                #  back to lapse
-                # TODO: only densify needed part of gradients
-                #indexes_to_push_mask = self.local_index_mappers[i] != -1
-                indexes_to_push_mask = self.local_to_lapse_mappers[i] != -1
-                #indexes_to_push = self.local_index_mappers[i][self.local_index_mappers[i] != -1]
-                #self.lapse_worker.push(self.lapse_indexes[i][indexes_to_push_mask], (-group['lr']*d_p).cpu().to_dense()[indexes_to_push_mask].numpy())
-                # TODO: this does not yet work with penalize
-                #  the mapping in penalize is still wrong -> take patricks freeze code as soon as ready
-                self.parameter_client.push(self.local_to_lapse_mappers[i][indexes_to_push_mask],
-                                           (-group['lr'] * d_p).cpu().to_dense()[indexes_to_push_mask])
-                #self.lapse_worker.push(self.lapse_indexes[i], (-group['lr']*d_p).cpu().to_dense().numpy())
-                p.add_(d_p, alpha=-group['lr'])
+                if d_p.is_sparse:
+                    d_p = (
+                        d_p.coalesce()
+                    )  # the update is non-linear so indices must be unique
+                    push_tensor = d_p._values().mul_(-group["lr"]).cpu()
+                    update_indexes = d_p._indices().cpu()
+                    push_keys = self.local_to_lapse_mappers[i][update_indexes].view(-1)
+                    self.parameter_client.push(push_keys, push_tensor)
+                else:
+                    indexes_to_push_mask = self.local_to_lapse_mappers[i] != -1
+                    self.parameter_client.push(
+                        self.local_to_lapse_mappers[i][indexes_to_push_mask],
+                        (-group["lr"] * d_p).cpu()[indexes_to_push_mask],
+                    )
+                # self.lapse_worker.push(self.lapse_indexes[i], (-group['lr']*d_p).cpu().to_dense().numpy())
+                # p.add_(d_p, alpha=-group['lr'])
 
         return loss
+
+    def pull_entities(self, entity_ids):
+        pass
+
+    def pull_relations(self, relation_ids):
+        pass
+
+    def set_entities(self):
+        pass
+
+    def set_relations(self):
+        pass
+
+    def pull_all(self):
+        pass
+
+    def push_all(self):
+        pass
