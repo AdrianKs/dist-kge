@@ -435,6 +435,17 @@ class TrainingJob(Job):
 
         trace_entry = None
         while True:
+            # variables that record various statitics
+            sum_loss = 0.0
+            sum_penalty = 0.0
+            sum_penalties = defaultdict(lambda: 0.0)
+            epoch_time = -time.time()
+            prepare_time = 0.0
+            forward_time = 0.0
+            backward_time = 0.0
+            optimizer_time = 0.0
+            scheduler_time = -time.time()
+
             # load new work package
             work, work_entities, work_relations = self.work_scheduler_client.get_work()
             if work is None:
@@ -465,16 +476,7 @@ class TrainingJob(Job):
             ):
                 self._sampler.set_pool(work_entities, S)
                 self._sampler.set_pool(work_entities, O)
-
-            # variables that record various statitics
-            sum_loss = 0.0
-            sum_penalty = 0.0
-            sum_penalties = defaultdict(lambda: 0.0)
-            epoch_time = -time.time()
-            prepare_time = 0.0
-            forward_time = 0.0
-            backward_time = 0.0
-            optimizer_time = 0.0
+            scheduler_time += time.time()
 
             # process each batch
             for batch_index, batch in enumerate(self.loader):
@@ -616,6 +618,7 @@ class TrainingJob(Job):
                 - forward_time
                 - backward_time
                 - optimizer_time
+                - scheduler_time
             )
             trace_entry = dict(
                 type=self.type_str,
@@ -636,6 +639,7 @@ class TrainingJob(Job):
                 forward_time=forward_time,
                 backward_time=backward_time,
                 optimizer_time=optimizer_time,
+                scheduler_time=scheduler_time,
                 other_time=other_time,
                 event="epoch_completed",
             )
