@@ -113,12 +113,16 @@ class WorkScheduler(mp.get_context("spawn").Process):
         )
         barrier_count = 0
         shutdown_count = 0
+        epoch_time = None
         while True:
             # cmd_buffer consists of cmd_number, key_len
             cmd_buffer = torch.full((2,), -1, dtype=torch.long)
 
             # refill work and distribute to all asking workers
             if len(self.done_workers) == self.num_clients:
+                epoch_time += time.time()
+                print("epoch time", epoch_time)
+                epoch_time = None
                 self._refill_work()
                 for worker in self.asking_workers:
                     self._send_work(worker, cmd_buffer)
@@ -132,6 +136,8 @@ class WorkScheduler(mp.get_context("spawn").Process):
             cmd = cmd_buffer[0].item()
             key_len = cmd_buffer[1].item()
             if cmd == SCHEDULER_CMDS.GET_WORK:
+                if epoch_time is None:
+                    epoch_time = -time.time()
                 if rank in self.done_workers:
                     self.asking_workers.append(rank)
                     continue
