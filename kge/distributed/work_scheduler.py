@@ -67,8 +67,17 @@ class WorkScheduler(mp.get_context("spawn").Process):
                 num_clients=num_clients,
                 dataset_folder=dataset_folder,
             )
-        if partition_type == "relation_partition":
+        elif partition_type == "relation_partition":
             return RelationWorkScheduler(
+                world_size=world_size,
+                master_ip=master_ip,
+                master_port=master_port,
+                num_partitions=num_partitions,
+                num_clients=num_clients,
+                dataset_folder=dataset_folder,
+            )
+        elif partition_type == "metis_partition":
+            return MetisWorkScheduler(
                 world_size=world_size,
                 master_ip=master_ip,
                 master_port=master_port,
@@ -384,6 +393,63 @@ class RelationWorkScheduler(WorkScheduler):
                 )[0]
             )
         return relations_in_partition
+
+
+class MetisWorkScheduler(WorkScheduler):
+    def __init__(
+            self,
+            world_size,
+            master_ip,
+            master_port,
+            num_partitions,
+            num_clients,
+            dataset_folder,
+    ):
+        self.partition_type = "metis_partition"
+        super(MetisWorkScheduler, self).__init__(
+            world_size,
+            master_ip,
+            master_port,
+            num_partitions,
+            num_clients,
+            dataset_folder,
+        )
+        self.entities_to_partition = self._load_entities_to_partitions_file(self.partition_type, dataset_folder, num_partitions)
+        self.entities_to_partition = self._get_entities_in_partition()
+
+    def _next_work(
+            self, rank
+    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor], bool]:
+        """add work/partitions to the list of work to do"""
+        try:
+            partition = self.work_to_do.pop()
+            partition_data = self.partitions[partition]
+            entities = self.entities_to_partition[partition]
+            return partition_data, entities, None, False
+        except IndexError:
+            return None, None, None, False
+
+    def _load_partitions(self, dataset_folder, num_partitions):
+        partition_assignment = self._load_partition_file(
+            self.partition_type, dataset_folder, num_partitions
+        )
+        # todo: let the partitions start at zero, then we do not need this unique
+        partition_indexes = np.unique(partition_assignment)
+        partitions = [
+            torch.from_numpy(np.where(partition_assignment == i)[0])
+            for i in partition_indexes
+        ]
+        return partitions
+
+    def _get_entities_in_partition(self):
+        entities_in_partition = dict()
+        for partition in range(self.num_partitions):
+            entities_in_partition[partition] = torch.from_numpy(
+                np.where(
+                    (self.entities_to_partition == partition),
+                )[0]
+            )
+        return entities_in_partition
 
 
 class TwoDBlockWorkScheduler(WorkScheduler):
