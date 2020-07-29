@@ -23,6 +23,7 @@ from kge.distributed.misc import MIN_RANK
 from torch import multiprocessing as mp
 from torch import distributed as dist
 
+os.environ["OMP_NUM_THREADS"] = "2"
 
 def init_lapse_scheduler(servers, num_keys, master_ip, master_port, lapse_port, dist_world_size):
     # we are only initializing dist here to have the same ranks for lapse and torch
