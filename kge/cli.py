@@ -262,6 +262,7 @@ def main():
                 num_clients=num_workers,
                 dataset=dataset,
                 dataset_folder=dataset.folder,
+                repartition_epoch=config.get("job.distributed.repartition_epoch")
             )
             scheduler.start()
             processes.append(scheduler)

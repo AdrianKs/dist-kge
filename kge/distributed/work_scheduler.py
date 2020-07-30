@@ -57,6 +57,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
         num_clients,
         dataset,
         dataset_folder,
+        repartition_epoch=True,
     ):
         if partition_type == "block_partition":
             return BlockWorkScheduler(
@@ -94,6 +95,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
                 num_clients=num_clients,
                 dataset=dataset,
                 dataset_folder=dataset_folder,
+                repartition_epoch=repartition_epoch
             )
         else:
             raise NotImplementedError()
@@ -472,6 +474,7 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         num_clients,
         dataset,
         dataset_folder,
+        repartition_epoch=True,
     ):
         self.partition_type = "2d_block_partition"
         super(TwoDBlockWorkScheduler, self).__init__(
@@ -491,7 +494,7 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         )
         self._entities_in_bucket = self._get_entities_in_bucket(entities_to_partition)
         self.dataset = dataset
-        self.repartition_epoch = True
+        self.repartition_epoch = repartition_epoch
 
     def _repartition(self):
         print("repartitioning data")
