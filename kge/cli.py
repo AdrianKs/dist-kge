@@ -23,9 +23,10 @@ from kge.distributed.misc import MIN_RANK
 from torch import multiprocessing as mp
 from torch import distributed as dist
 
-os.environ["OMP_NUM_THREADS"] = "2"
 
-def init_lapse_scheduler(servers, num_keys, master_ip, master_port, lapse_port, dist_world_size):
+def init_lapse_scheduler(
+    servers, num_keys, master_ip, master_port, lapse_port, dist_world_size
+):
     # we are only initializing dist here to have the same ranks for lapse and torch
     os.environ["MASTER_ADDR"] = master_ip
     os.environ["MASTER_PORT"] = master_port
@@ -33,7 +34,7 @@ def init_lapse_scheduler(servers, num_keys, master_ip, master_port, lapse_port, 
         backend="gloo", init_method="env://", world_size=dist_world_size, rank=0,
     )
     # process groups need to be initialized in every process
-    worker_ranks = list(range(MIN_RANK, servers+MIN_RANK))
+    worker_ranks = list(range(MIN_RANK, servers + MIN_RANK))
     worker_group = dist.new_group(worker_ranks)
     os.environ["DMLC_NUM_WORKER"] = "0"
     os.environ["DMLC_NUM_SERVER"] = str(servers)
@@ -212,6 +213,9 @@ def main():
                 #         "No checkpoint found or specified, starting from scratch..."
                 #     )
             # else:
+            os.environ["OMP_NUM_THREADS"] = str(
+                config.get("job.distributed.num_threads_per_process")
+            )
             processes = []
             num_keys = dataset.num_entities() + dataset.num_relations()
             num_meta_keys = 2
@@ -237,7 +241,14 @@ def main():
             if config.get("job.distributed.parameter_server") == "lapse":
                 p = mp.Process(
                     target=init_lapse_scheduler,
-                    args=(num_workers, num_keys, master_ip, master_port, lapse_port, dist_world_size),
+                    args=(
+                        num_workers,
+                        num_keys,
+                        master_ip,
+                        master_port,
+                        lapse_port,
+                        dist_world_size,
+                    ),
                     daemon=True,
                 )
                 p.start()
@@ -262,7 +273,7 @@ def main():
                 num_clients=num_workers,
                 dataset=dataset,
                 dataset_folder=dataset.folder,
-                repartition_epoch=config.get("job.distributed.repartition_epoch")
+                repartition_epoch=config.get("job.distributed.repartition_epoch"),
             )
             scheduler.start()
             processes.append(scheduler)

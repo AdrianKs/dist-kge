@@ -14,6 +14,7 @@ job:
   device_pool: [ ]
   distributed:
     num_workers: 0
+    num_threads_per_process: 2  # omp threads per process
     parameter_server: 'lapse'  # options: lapse, torch
     master_ip: '127.0.0.1'
     master_port: '8888'
