@@ -28,6 +28,7 @@ class KgeOptimizer:
                     config.get("job.distributed.entity_sync_level"),
                     config.get("job.distributed.relation_sync_level"),
                 ],
+                async_write_back=[config.get("job.distributed.entity_async_write_back"), config.get("job.distributed.relation_async_write_back")],
                 **config.get("train.optimizer_args"),
             )
             return optimizer

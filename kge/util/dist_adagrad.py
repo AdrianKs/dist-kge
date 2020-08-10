@@ -39,6 +39,7 @@ class DistAdagrad(Optimizer):
         parameter_client=None,
         lapse_indexes=None,
         sync_levels=[],
+        async_write_back=[],
     ):
         params = [p for p in model.parameters() if p.requires_grad]
         if not 0.0 <= lr:
@@ -70,6 +71,7 @@ class DistAdagrad(Optimizer):
             model._relation_embedder.local_to_lapse_mapper,
         ]
         self.pulled_parameters = [None, None]
+        self.async_write_back = async_write_back
 
         self.sync_levels = sync_levels
 
@@ -181,7 +183,9 @@ class DistAdagrad(Optimizer):
                     state["sum"].add_(make_sparse(sum_update_values))
                     if self.sync_levels[i] == "batch":
                         self.parameter_client.push(
-                            keys_optim, sum_update_values.cpu(),
+                            keys_optim,
+                            sum_update_values.cpu(),
+                            asynchronous=self.async_write_back[i]
                         )
 
                     std = state["sum"].sparse_mask(grad)
@@ -191,6 +195,7 @@ class DistAdagrad(Optimizer):
                         self.parameter_client.push(
                             self.local_to_lapse_mappers[i][update_indexes],
                             update_value.cpu(),
+                            asynchronous=self.async_write_back[i]
                         )
                     else:
                         p.add_(make_sparse(update_value))
