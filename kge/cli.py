@@ -216,6 +216,7 @@ def main():
             os.environ["OMP_NUM_THREADS"] = str(
                 config.get("job.distributed.num_threads_per_process")
             )
+            os.environ["GLOO_SOCKET_IFNAME"] = config.get("job.distributed.gloo_socket_ifname")
             processes = []
             num_keys = dataset.num_entities() + dataset.num_relations()
             num_meta_keys = 2
@@ -238,48 +239,53 @@ def main():
             #  and provide them with the scheduler rank
             #  then we can remove this ugly mock process and can have a barrier
             #  for the workers only
-            if config.get("job.distributed.parameter_server") == "lapse":
-                p = mp.Process(
-                    target=init_lapse_scheduler,
-                    args=(
-                        num_workers,
-                        num_keys,
-                        master_ip,
-                        master_port,
-                        lapse_port,
-                        dist_world_size,
-                    ),
-                    daemon=True,
-                )
-                p.start()
-                processes.append(p)
-            else:
-                p = mp.Process(
-                    target=init_torch_server,
-                    args=(num_workers, num_keys, dim, master_ip, master_port),
-                    daemon=True,
-                )
-                p.start()
-                processes.append(p)
+            if config.get("job.distributed.machine_id") == 0:
+                if config.get("job.distributed.parameter_server") == "lapse":
+                    p = mp.Process(
+                        target=init_lapse_scheduler,
+                        args=(
+                            num_workers,
+                            num_keys,
+                            master_ip,
+                            master_port,
+                            lapse_port,
+                            dist_world_size,
+                        ),
+                        daemon=True,
+                    )
+                    p.start()
+                    processes.append(p)
+                else:
+                    p = mp.Process(
+                        target=init_torch_server,
+                        args=(num_workers, num_keys, dim, master_ip, master_port),
+                        daemon=True,
+                    )
+                    p.start()
+                    processes.append(p)
 
-            # create a work scheduler
-            partition_type = config.get("job.distributed.partition_type")
-            scheduler = WorkScheduler.create(
-                partition_type=partition_type,
-                world_size=num_workers + 2,
-                master_ip=master_ip,
-                master_port=master_port,
-                num_partitions=num_partitions,
-                num_clients=num_workers,
-                dataset=dataset,
-                dataset_folder=dataset.folder,
-                repartition_epoch=config.get("job.distributed.repartition_epoch"),
-            )
-            scheduler.start()
-            processes.append(scheduler)
+                # create a work scheduler
+                partition_type = config.get("job.distributed.partition_type")
+                scheduler = WorkScheduler.create(
+                    partition_type=partition_type,
+                    world_size=num_workers + 2,
+                    master_ip=master_ip,
+                    master_port=master_port,
+                    num_partitions=num_partitions,
+                    num_clients=num_workers,
+                    dataset=dataset,
+                    dataset_folder=dataset.folder,
+                    repartition_epoch=config.get("job.distributed.repartition_epoch"),
+                )
+                scheduler.start()
+                processes.append(scheduler)
             num_workers = config.get("job.distributed.num_workers")
+            num_workers_machine = config.get("job.distributed.num_workers_machine")
+            if num_workers_machine <= 0:
+                num_workers_machine = num_workers
+            already_init_workers = config.get("job.distributed.already_init_workers")
             worker_process_pool = WorkerProcessPool(
-                num_workers, num_keys, num_meta_keys, dim, config, dataset, checkpoint
+                num_workers, num_workers_machine, already_init_workers, num_keys, num_meta_keys, dim, config, dataset, checkpoint
             )
             worker_process_pool.join()
             for p in processes:

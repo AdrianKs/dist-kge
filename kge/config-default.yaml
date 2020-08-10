@@ -14,11 +14,16 @@ job:
   device_pool: [ ]
   distributed:
     num_workers: 0
+    num_workers_machine: -1  # number of workers on this machine. -1 equals num_workers
+    already_init_workers: 0  # number of already initialized workers on other machines
+    num_machines: 1
+    machine_id: 0
     num_threads_per_process: 2  # omp threads per process
     parameter_server: 'lapse'  # options: lapse, torch
     master_ip: '127.0.0.1'
     master_port: '8888'
     lapse_port: '9091'
+    gloo_socket_ifname: 'eno1'
     num_partitions: 2
     partition_type: 'block_partition'  # block_partition, 2d_block_partition
     entity_sync_level: 'batch'  # batch, partition

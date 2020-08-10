@@ -17,6 +17,8 @@ class WorkerProcessPool:
     def __init__(
         self,
         num_total_workers,
+        num_workers_machine,
+        already_init_workers,
         num_keys,
         num_meta_keys,
         embedding_dim,
@@ -26,13 +28,13 @@ class WorkerProcessPool:
     ):
         self.workers = []
         configs = {}
-        for rank in range(num_total_workers):
+        for rank in range(num_workers_machine):
             configs[rank] = deepcopy(config)
             configs[rank].set(config.get("model") + ".create_complete", False)
             configs[rank].folder = os.path.join(config.folder, f"server-{rank}")
             configs[rank].init_folder()
             worker = WorkerProcess(
-                rank,
+                rank + already_init_workers,
                 num_total_workers,
                 num_keys,
                 num_meta_keys,
