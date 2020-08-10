@@ -256,7 +256,6 @@ class TrainingJob(Job):
                         + "in the last {} validation runs).".format(patience)
                     )
                     self.parameter_client.shutdown()
-                    self.work_scheduler_client.shutdown()
                     # break
                 if self.epoch > self.config.get(
                     "valid.early_stopping.min_threshold.epochs"
