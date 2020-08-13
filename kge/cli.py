@@ -17,45 +17,7 @@ from kge.util.dump import add_dump_parsers, dump
 from kge.util.io import get_checkpoint_file, load_checkpoint
 from kge.util.package import package_model, add_package_parser
 from kge.normal_cli import create_parser, process_meta_command, argparse_bool_type
-from kge.distributed import WorkerProcessPool, TorchParameterServer, WorkScheduler
-from kge.distributed.misc import MIN_RANK
-
-from torch import multiprocessing as mp
-from torch import distributed as dist
-
-
-def init_lapse_scheduler(
-    servers, num_keys, master_ip, master_port, lapse_port, dist_world_size
-):
-    # we are only initializing dist here to have the same ranks for lapse and torch
-    os.environ["MASTER_ADDR"] = master_ip
-    os.environ["MASTER_PORT"] = master_port
-    dist.init_process_group(
-        backend="gloo", init_method="env://", world_size=dist_world_size, rank=0,
-    )
-    # process groups need to be initialized in every process
-    worker_ranks = list(range(MIN_RANK, servers + MIN_RANK))
-    worker_group = dist.new_group(worker_ranks)
-    os.environ["DMLC_NUM_WORKER"] = "0"
-    os.environ["DMLC_NUM_SERVER"] = str(servers)
-    os.environ["DMLC_ROLE"] = "scheduler"
-    os.environ["DMLC_PS_ROOT_URI"] = master_ip
-    os.environ["DMLC_PS_ROOT_PORT"] = lapse_port
-    num_workers_per_server = 1
-    lapse.scheduler(num_keys, num_workers_per_server)
-
-
-def init_torch_server(num_clients, num_keys, dim, master_ip, master_port):
-    world_size = num_clients + MIN_RANK
-    os.environ["MASTER_ADDR"] = master_ip
-    os.environ["MASTER_PORT"] = master_port
-    dist.init_process_group(
-        backend="gloo", init_method="env://", world_size=world_size, rank=0,
-    )
-    # process groups need to be initialized in every process
-    worker_ranks = list(range(MIN_RANK, num_clients + MIN_RANK))
-    worker_group = dist.new_group(worker_ranks)
-    TorchParameterServer(world_size, num_keys, dim)
+from kge.distributed.funcs import create_and_run_distributed
 
 
 def main():
@@ -213,83 +175,7 @@ def main():
                 #         "No checkpoint found or specified, starting from scratch..."
                 #     )
             # else:
-            os.environ["OMP_NUM_THREADS"] = str(
-                config.get("job.distributed.num_threads_per_process")
-            )
-            os.environ["GLOO_SOCKET_IFNAME"] = config.get("job.distributed.gloo_socket_ifname")
-            processes = []
-            num_keys = dataset.num_entities() + dataset.num_relations()
-            num_meta_keys = 2
-            num_workers = config.get("job.distributed.num_workers")
-            master_ip = config.get("job.distributed.master_ip")
-            master_port = config.get("job.distributed.master_port")
-            lapse_port = config.get("job.distributed.lapse_port")
-            num_partitions = config.get("job.distributed.num_partitions")
-            dist_world_size = num_workers + MIN_RANK
-            dim = config.get("lookup_embedder.dim")
-            if config.get("train.optimizer") == "dist_adagrad":
-                num_keys *= 2
-                num_meta_keys += 2
-            # meta keys. contains for example a variable indicating whether to stop or
-            #  not
-            num_keys += num_meta_keys
-            # todo: we should define server, scheduler and worker ranks here
-            #  then create a extra dist worker group after every init
-            #  we can create the scheduler-clients in the worker generation
-            #  and provide them with the scheduler rank
-            #  then we can remove this ugly mock process and can have a barrier
-            #  for the workers only
-            if config.get("job.distributed.machine_id") == 0:
-                if config.get("job.distributed.parameter_server") == "lapse":
-                    p = mp.Process(
-                        target=init_lapse_scheduler,
-                        args=(
-                            num_workers,
-                            num_keys,
-                            master_ip,
-                            master_port,
-                            lapse_port,
-                            dist_world_size,
-                        ),
-                        daemon=True,
-                    )
-                    p.start()
-                    processes.append(p)
-                else:
-                    p = mp.Process(
-                        target=init_torch_server,
-                        args=(num_workers, num_keys, dim, master_ip, master_port),
-                        daemon=True,
-                    )
-                    p.start()
-                    processes.append(p)
-
-                # create a work scheduler
-                partition_type = config.get("job.distributed.partition_type")
-                scheduler = WorkScheduler.create(
-                    partition_type=partition_type,
-                    world_size=num_workers + 2,
-                    master_ip=master_ip,
-                    master_port=master_port,
-                    num_partitions=num_partitions,
-                    num_clients=num_workers,
-                    dataset=dataset,
-                    dataset_folder=dataset.folder,
-                    repartition_epoch=config.get("job.distributed.repartition_epoch"),
-                )
-                scheduler.start()
-                processes.append(scheduler)
-            num_workers = config.get("job.distributed.num_workers")
-            num_workers_machine = config.get("job.distributed.num_workers_machine")
-            if num_workers_machine <= 0:
-                num_workers_machine = num_workers
-            already_init_workers = config.get("job.distributed.already_init_workers")
-            worker_process_pool = WorkerProcessPool(
-                num_workers, num_workers_machine, already_init_workers, num_keys, num_meta_keys, dim, config, dataset, checkpoint
-            )
-            worker_process_pool.join()
-            for p in processes:
-                p.join()
+            create_and_run_distributed(config, dataset, checkpoint)
 
             # job.run()
     except BaseException as e:

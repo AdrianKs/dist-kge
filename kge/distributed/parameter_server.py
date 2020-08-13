@@ -4,6 +4,8 @@ import lapse
 from enum import IntEnum
 from torch import distributed as dist
 
+from kge.distributed.misc import MIN_RANK
+
 
 class TORCH_PARAMETER_SERVER_CMDS(IntEnum):
     PULL_CMD = 0
@@ -116,3 +118,37 @@ class TorchParameterServer:
         set_data = torch.zeros((len(keys), self.dim), dtype=self.data_type)
         dist.recv(set_data, src=rank)
         self.data[keys, :] = set_data
+
+
+def init_lapse_scheduler(
+        servers, num_keys, master_ip, master_port, lapse_port, dist_world_size
+):
+    # we are only initializing dist here to have the same ranks for lapse and torch
+    os.environ["MASTER_ADDR"] = master_ip
+    os.environ["MASTER_PORT"] = master_port
+    dist.init_process_group(
+        backend="gloo", init_method="env://", world_size=dist_world_size, rank=0,
+    )
+    # process groups need to be initialized in every process
+    worker_ranks = list(range(MIN_RANK, servers + MIN_RANK))
+    worker_group = dist.new_group(worker_ranks)
+    os.environ["DMLC_NUM_WORKER"] = "0"
+    os.environ["DMLC_NUM_SERVER"] = str(servers)
+    os.environ["DMLC_ROLE"] = "scheduler"
+    os.environ["DMLC_PS_ROOT_URI"] = master_ip
+    os.environ["DMLC_PS_ROOT_PORT"] = lapse_port
+    num_workers_per_server = 1
+    lapse.scheduler(num_keys, num_workers_per_server)
+
+
+def init_torch_server(num_clients, num_keys, dim, master_ip, master_port):
+    world_size = num_clients + MIN_RANK
+    os.environ["MASTER_ADDR"] = master_ip
+    os.environ["MASTER_PORT"] = master_port
+    dist.init_process_group(
+        backend="gloo", init_method="env://", world_size=world_size, rank=0,
+    )
+    # process groups need to be initialized in every process
+    worker_ranks = list(range(MIN_RANK, num_clients + MIN_RANK))
+    worker_group = dist.new_group(worker_ranks)
+    TorchParameterServer(world_size, num_keys, dim)
