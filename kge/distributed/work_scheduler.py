@@ -505,28 +505,28 @@ class TwoDBlockWorkScheduler(WorkScheduler):
             mapped_data[:, 2] = mapper[mapped_data[:, 2].long()]
             return mapped_data, mapper
 
-        def get_partition(entity_id, dataset_size, num_partitions):
+        def get_partition(entity_id, num_entities, num_partitions):
             partition = math.floor(
-                entity_id * 1.0 / dataset_size * 1.0 * num_partitions)
+                entity_id * 1.0 / num_entities * 1.0 * num_partitions)
             return partition
 
         v_get_partition = np.vectorize(
-            get_partition, excluded=["dataset_size", "num_partitions"]
+            get_partition, excluded=["num_entities", "num_partitions"]
         )
         mapped_data, mapped_entities = random_map_entities()
         print("repartition s")
         s_block = v_get_partition(
-            mapped_data[:, 0], dataset_size=self.dataset.num_entities(),
+            mapped_data[:, 0], num_entities=self.dataset.num_entities(),
             num_partitions=self.num_partitions
         )
         print("repartition o")
         o_block = v_get_partition(
-            mapped_data[:, 2], dataset_size=self.dataset.num_entities(),
+            mapped_data[:, 2], num_entities=self.dataset.num_entities(),
             num_partitions=self.num_partitions
         )
         print("map entity ids to partition")
         entity_to_partition = v_get_partition(mapped_entities,
-                                              dataset_size=self.dataset.num_entities(),
+                                              num_entities=self.dataset.num_entities(),
                                               num_partitions=self.num_partitions)
         triple_partition_assignment = np.stack([s_block, o_block], axis=1)
         self.partitions = self._construct_partitions(triple_partition_assignment)
