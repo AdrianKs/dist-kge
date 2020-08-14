@@ -31,6 +31,7 @@ job:
     entity_async_write_back: False  # write to parameter server asynchronous
     relation_async_write_back: False  # write to parameter server asynchronous
     repartition_epoch: True  # currently only works with 2d_block_partition
+    load_batch: True  # load all embeddings once at beginning of the batch
 
 # The seeds of the PRNGs can be set manually for (increased) reproducability.
 # Use -1 to use default seed.

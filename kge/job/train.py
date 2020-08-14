@@ -1050,6 +1050,11 @@ class TrainingJobNegativeSampling(TrainingJob):
         batch_negative_samples = [
             ns.to(self.device) for ns in batch["negative_samples"]
         ]
+        if self.config.get("job.distributed.load_batch"):
+            unique_entities = torch.unique(torch.cat((batch_triples[:, [S,O]], batch_negative_samples[S], batch_negative_samples[O]), dim=1))
+            self.model.get_s_embedder()._pull_embeddings(unique_entities)
+            unique_relations = torch.unique(torch.cat((batch_triples[:, [P]], batch_negative_samples[P]), dim=1))
+            self.model.get_p_embedder()._pull_embeddings(unique_relations)
         batch_size = len(batch_triples)
         prepare_time += time.time()
 

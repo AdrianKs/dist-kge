@@ -39,6 +39,7 @@ class DistributedLookupEmbedder(LookupEmbedder):
         self.lapse_index = (
             lapse_index  # maps the id from the dataset to the id stored in lapse
         )
+        self.load_batch = self.config.get("job.distributed.load_batch")
         self.local_index_mapper = (
             torch.zeros(self.complete_vocab_size, dtype=torch.long) - 1
         )  # maps the id from the dataset to the id of the embedding here in the embedder
@@ -97,9 +98,10 @@ class DistributedLookupEmbedder(LookupEmbedder):
 
     def _embed(self, indexes: Tensor) -> Tensor:
         long_indexes = indexes.long()
-        with torch.no_grad():
-            long_unique_indexes = torch.unique(long_indexes)
-            self._pull_embeddings(long_unique_indexes)
+        if not self.load_batch:
+            with torch.no_grad():
+                long_unique_indexes = torch.unique(long_indexes)
+                self._pull_embeddings(long_unique_indexes)
         return self._embeddings(
             self.local_index_mapper[long_indexes]
             .to(self._embeddings.weight.device)
