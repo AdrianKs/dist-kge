@@ -46,12 +46,20 @@ class KgeParameterClient:
                 num_meta_keys=num_meta_keys,
                 worker_group=worker_group,
             )
-        if client_type == "torch":
+        elif client_type == "torch":
             return TorchParameterClient(
                 server_rank=server_id,
                 rank=client_id,
                 dim=embedding_dim,
                 worker_group=worker_group,
+            )
+        elif client_type == "shared":
+            return SharedParameterClient(
+                rank=client_id,
+                dim=embedding_dim,
+                num_meta_keys=num_meta_keys,
+                worker_group=worker_group,
+                parameters=server
             )
         else:
             raise ValueError(client_type)
@@ -226,3 +234,103 @@ class TorchParameterClient(KgeParameterClient):
         dist.send(cmd, dst=self.server_rank)
         self.lr_buffer[0] = lr
         dist.send(self.lr_buffer, dst=self.server_rank)
+
+
+class SharedParameterClient(KgeParameterClient):
+    def __init__(self, rank, dim, num_meta_keys, worker_group, parameters):
+        self.parameters = parameters
+        self.num_keys = len(parameters)
+        self.rank = rank
+        self.dim = dim
+        self.data_type = torch.float32
+        self.lr_buffer = torch.zeros(1, dtype=torch.float32)
+        self.worker_group = worker_group
+        self.num_meta_keys = num_meta_keys
+        self._stop_key = torch.LongTensor([self.num_keys - self.num_meta_keys])
+        self._optim_entity_step_key = torch.LongTensor(
+            [self.num_keys - self.num_meta_keys + 1]
+        )
+        self._optim_relation_step_key = torch.LongTensor(
+            [self.num_keys - self.num_meta_keys + 2]
+        )
+        self._lr_key = torch.LongTensor([self.num_keys - self.num_meta_keys + 3])
+        self._stop_value_tensor = torch.zeros((1, self.dim), dtype=torch.float32)
+        self._optim_entity_step_value_tensor = torch.zeros(
+            (1, self.dim), dtype=torch.float32
+        )
+        self._optim_relation_step_value_tensor = torch.zeros(
+            (1, self.dim), dtype=torch.float32
+        )
+        self._lr_tensor = torch.zeros((1, self.dim), dtype=torch.float32)
+        self.meta_key_tensor = torch.zeros(
+            (self.num_meta_keys, self.dim), dtype=torch.float32
+        )
+
+    @torch.no_grad()
+    def pull(self, keys, pull_tensor=None, asynchronous=False):
+        if pull_tensor is None:
+            pull_tensor = torch.zeros((len(keys), self.dim), dtype=self.data_type)
+        pull_tensor[:, :] = self.parameters[keys, :]
+
+    @torch.no_grad()
+    def push(self, keys, push_tensor, asynchronous=False):
+        self.parameters[keys, :] += push_tensor
+
+    def set(self, keys, set_tensor, asynchronous=False):
+        self.parameters[keys, :] = set_tensor
+
+    def localize(self, keys, asynchronous=False):
+        pass
+
+    def barrier(self):
+        dist.barrier(group=self.worker_group)
+
+
+    def shutdown(self):
+        self.push(
+            self._stop_key, torch.ones((1, self.dim), dtype=torch.float32)
+        )
+
+    def is_stopped(self) -> bool:
+        self.pull(self._stop_key, self._stop_value_tensor)
+        if torch.any(self._stop_value_tensor[0] == 1):
+            return True
+        else:
+            return False
+
+    def step_optim(self, parameter_index):
+        if parameter_index == 0:
+            self.push(
+                self._optim_entity_step_key,
+                torch.ones((1, self.dim), dtype=torch.float32),
+            )
+        else:
+            self.push(
+                self._optim_relation_step_key,
+                torch.ones((1, self.dim), dtype=torch.float32),
+            )
+
+    def get_step_optim(self, parameter_index):
+        if parameter_index == 0:
+            self.pull(
+                self._optim_entity_step_key, self._optim_entity_step_value_tensor
+            )
+            return self._optim_relation_step_value_tensor[0, 0].item()
+        else:
+            self.pull(
+                self._optim_relation_step_key, self._optim_relation_step_value_tensor
+            )
+            return self._optim_relation_step_value_tensor[0, 0].item()
+
+    def get_lr(self):
+        self.pull(self._lr_key, self._lr_tensor)
+        return self._lr_tensor[0, 0].item()
+
+    def set_lr(self, lr):
+        # todo: change this to set as soon as available
+        if self._lr_tensor[0, 0].item() == 0:
+            self._lr_tensor[:] = lr
+        else:
+            self._lr_tensor[:] = self._lr_tensor[:] - lr
+        self.push(self._lr_key, self._lr_tensor)
+

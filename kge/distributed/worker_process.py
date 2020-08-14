@@ -28,6 +28,9 @@ class WorkerProcessPool:
     ):
         self.workers = []
         configs = {}
+        parameters=None
+        if config.get("job.distributed.parameter_server") == "shared":
+            parameters = torch.empty((num_keys, embedding_dim), dtype=torch.float32).share_memory_()
         for rank in range(num_workers_machine):
             configs[rank] = deepcopy(config)
             configs[rank].set(config.get("model") + ".create_complete", False)
@@ -41,7 +44,8 @@ class WorkerProcessPool:
                 embedding_dim,
                 configs[rank],
                 dataset,
-                checkpoint,
+                parameters=parameters,
+                checkpoint=checkpoint,
             )
             worker.start()
             self.workers.append(worker)
@@ -61,6 +65,7 @@ class WorkerProcess(mp.get_context("spawn").Process):
         embedding_dim,
         config,
         dataset,
+        parameters=None,
         checkpoint: Optional[Dict] = None,
     ):
         # rank = rank + 1
@@ -72,6 +77,7 @@ class WorkerProcess(mp.get_context("spawn").Process):
         self.embedding_dim = embedding_dim
         self.config = config
         self.dataset = dataset
+        self.parameters = parameters
         self.checkpoint = checkpoint
 
     def run(self):
@@ -101,7 +107,8 @@ class WorkerProcess(mp.get_context("spawn").Process):
             num_workers_per_server = 1
             lapse.setup(self.num_keys, num_workers_per_server)
             server = lapse.Server(self.num_keys, self.embedding_dim)
-
+        elif self.config.get("job.distributed.parameter_server") == "shared":
+            server = self.parameters
         configs = {}
         datasets = {}
         w = 0
@@ -128,7 +135,7 @@ class WorkerProcess(mp.get_context("spawn").Process):
             embedding_dim=self.embedding_dim,
             server=server,
             num_meta_keys=self.num_meta_keys,
-            worker_group=worker_group
+            worker_group=worker_group,
         )
         init_for_load_only = False
         if parameter_client.rank == MIN_RANK and self.checkpoint is not None:
