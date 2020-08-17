@@ -75,6 +75,7 @@ def create_and_run_distributed(config: Config, dataset: Optional[Dataset] = None
             num_clients=num_workers,
             dataset=dataset,
             dataset_folder=dataset.folder,
+            scheduling_order=config.get("job.distributed.scheduling_order"),
             repartition_epoch=config.get("job.distributed.repartition_epoch"),
         )
         scheduler.start()

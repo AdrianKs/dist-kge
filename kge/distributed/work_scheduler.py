@@ -2,6 +2,7 @@ import os
 import math
 import datetime
 import time
+import random
 from collections import deque
 from copy import deepcopy
 import numpy as np
@@ -57,6 +58,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
         num_clients,
         dataset,
         dataset_folder,
+        scheduling_order="random",
         repartition_epoch=True,
     ):
         if partition_type == "block_partition":
@@ -95,6 +97,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
                 num_clients=num_clients,
                 dataset=dataset,
                 dataset_folder=dataset_folder,
+                scheduling_order=scheduling_order,
                 repartition_epoch=repartition_epoch
             )
         else:
@@ -474,6 +477,7 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         num_clients,
         dataset,
         dataset_folder,
+        scheduling_order = "random",
         repartition_epoch=True,
     ):
         self.partition_type = "2d_block_partition"
@@ -494,6 +498,7 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         )
         self._entities_in_bucket = self._get_entities_in_bucket(entities_to_partition)
         self.dataset = dataset
+        self.scheduling_order = scheduling_order
         self.repartition_epoch = repartition_epoch
 
     def _repartition(self):
@@ -583,17 +588,27 @@ class TwoDBlockWorkScheduler(WorkScheduler):
             for i in range(self.num_partitions)
             if i not in locked_entity_blocks.keys()
         ]
+        acquirable_partitions = []
         for subject_entity_block in acquirable_entity_blocks:
             for object_entity_block in acquirable_entity_blocks:
                 bucket = (subject_entity_block, object_entity_block)
                 if bucket in self.work_to_do and self._is_initialized(bucket):
-                    self.running_blocks[rank] = bucket
-                    self._initialized_entity_blocks.add(subject_entity_block)
-                    self._initialized_entity_blocks.add(object_entity_block)
-                    block_data = self.work_to_do[bucket]
-                    del self.work_to_do[bucket]
-                    return block_data, self._entities_in_bucket.get(bucket), None, False
-        if len(self.work_to_do) > 0:
+                    acquirable_partitions.append(bucket)
+        if len(acquirable_partitions) > 0:
+            if self.scheduling_order == "sequential":
+                acquired_partition = acquirable_partitions[0]
+            elif self.scheduling_order == "random":
+                random_index = random.randint(0, len(acquirable_partitions)-1)
+                acquired_partition = acquirable_partitions[random_index]
+            else:
+                raise NotImplementedError()
+            self.running_blocks[rank] = acquired_partition
+            self._initialized_entity_blocks.add(acquired_partition[0])
+            self._initialized_entity_blocks.add(acquired_partition[1])
+            block_data = self.work_to_do[acquired_partition]
+            del self.work_to_do[acquired_partition]
+            return block_data, self._entities_in_bucket.get(acquired_partition), None, False
+        elif len(self.work_to_do) > 0:
             wait = True
             # print("work to do", self.work_to_do.keys())
         return None, None, None, wait
