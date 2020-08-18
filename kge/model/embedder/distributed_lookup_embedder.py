@@ -101,9 +101,10 @@ class DistributedLookupEmbedder(LookupEmbedder):
             # update local to lapse mapper
             self.local_to_lapse_mapper[missing_local_indexes] = pull_indexes
 
-    def localize(self, indexes: Tensor):
-        unique_indexes = torch.unique(indexes).cpu()
-        self.parameter_client.localize(unique_indexes)
+    def localize(self, indexes: Tensor, make_unique=False):
+        if make_unique:
+            indexes = torch.unique(indexes)
+        self.parameter_client.localize(indexes.cpu())
         # TODO: also pull the embeddings and store in a tensor on gpu
         #  this needs to be handled in the background somehow
         #  to device can be done in background, but this needs to wait for localize

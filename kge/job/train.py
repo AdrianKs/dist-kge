@@ -1004,6 +1004,9 @@ class TrainingJobNegativeSampling(TrainingJob):
             "'{}' scoring function ...".format(self._implementation)
         )
         self.type_str = "negative_sampling"
+        self.load_batch = self.config.get("job.distributed.load_batch")
+        self.entity_localize = self.config.get("job.distributed.entity_localize")
+        self.relation_localize = self.config.get("job.distributed.relation_localize")
 
         if self.__class__ == TrainingJobNegativeSampling:
             for f in Job.job_created_hooks:
@@ -1057,8 +1060,12 @@ class TrainingJobNegativeSampling(TrainingJob):
         ]
         if self.config.get("job.distributed.load_batch"):
             unique_entities = torch.unique(torch.cat((batch_triples[:, [S,O]], batch_negative_samples[S], batch_negative_samples[O]), dim=1))
+            if self.entity_localize:
+                self.model.get_s_embedder().localize(unique_entities)
             self.model.get_s_embedder()._pull_embeddings(unique_entities)
             unique_relations = torch.unique(torch.cat((batch_triples[:, [P]], batch_negative_samples[P]), dim=1))
+            if self.relation_localize:
+                self.model.get_p_embedder().localize(unique_relations)
             self.model.get_p_embedder()._pull_embeddings(unique_relations)
         batch_size = len(batch_triples)
         prepare_time += time.time()
