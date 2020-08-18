@@ -169,9 +169,12 @@ class DistAdagrad(Optimizer):
                         self.parameter_client.pull(
                             keys_optim, update_tensor,
                         )
-                        state["sum"][update_indexes] = update_tensor.to(
-                            state["sum"].device
-                        )
+                        state_sum = update_tensor.to(state["sum"].device)
+                        #state["sum"][update_indexes] = update_tensor.to(
+                        #    state["sum"].device
+                        #)
+                    else:
+                        state_sum = self.state["sum"][grad_indices_flat]
 
                     def make_sparse(values):
                         constructor = grad.new
@@ -180,16 +183,20 @@ class DistAdagrad(Optimizer):
                         return constructor(grad_indices, values, size)
 
                     sum_update_values = grad_values.pow(2)
-                    state["sum"].add_(make_sparse(sum_update_values))
+                    state_sum.add_(sum_update_values)
+                    #state["sum"].add_(make_sparse(sum_update_values))
                     if self.sync_levels[i] == "batch":
                         self.parameter_client.push(
                             keys_optim,
                             sum_update_values.cpu(),
                             asynchronous=self.async_write_back[i]
                         )
+                    else:
+                        state["sum"][grad_indices_flat] = state_sum
 
-                    std = state["sum"].sparse_mask(grad)
-                    std_values = std._values().sqrt_().add_(group["eps"])
+                    #std = state["sum"].sparse_mask(grad)
+                    #std_values = std._values().sqrt_().add_(group["eps"])
+                    std_values = state_sum.sqrt_().add_(group["eps"])
                     update_value = (grad_values / std_values).mul_(-clr)
                     if self.sync_levels[i] == "batch":
                         self.parameter_client.push(

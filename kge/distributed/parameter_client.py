@@ -114,8 +114,6 @@ class LapseParameterClient(lapse.Worker, KgeParameterClient):
         super(LapseParameterClient, self).set(keys, set_tensor)
 
     def localize(self, keys, asynchronous=False):
-        if type(keys) is torch.Tensor:
-            keys = keys.numpy().astype(np.uint64)
         super(LapseParameterClient, self).localize(keys, asynchronous)
 
     def barrier(self):
@@ -162,12 +160,8 @@ class LapseParameterClient(lapse.Worker, KgeParameterClient):
         return self._lr_tensor[0, 0].item()
 
     def set_lr(self, lr):
-        # todo: change this to set as soon as available
-        if self._lr_tensor[0, 0].item() == 0:
-            self._lr_tensor[:] = lr
-        else:
-            self._lr_tensor[:] = self._lr_tensor[:] - lr
-        super(LapseParameterClient, self).push(self._lr_key, self._lr_tensor)
+        self._lr_tensor[:] = lr
+        super(LapseParameterClient, self).set(self._lr_key, self._lr_tensor)
 
 
 class TorchParameterClient(KgeParameterClient):
@@ -274,7 +268,7 @@ class SharedParameterClient(KgeParameterClient):
 
     @torch.no_grad()
     def push(self, keys, push_tensor, asynchronous=False):
-        self.parameters[keys, :] += push_tensor
+        self.parameters.index_add_(0, keys, push_tensor)
 
     def set(self, keys, set_tensor, asynchronous=False):
         self.parameters[keys, :] = set_tensor
@@ -327,10 +321,6 @@ class SharedParameterClient(KgeParameterClient):
         return self._lr_tensor[0, 0].item()
 
     def set_lr(self, lr):
-        # todo: change this to set as soon as available
-        if self._lr_tensor[0, 0].item() == 0:
-            self._lr_tensor[:] = lr
-        else:
-            self._lr_tensor[:] = self._lr_tensor[:] - lr
-        self.push(self._lr_key, self._lr_tensor)
+        self._lr_tensor[:] = lr
+        self.set(self._lr_key, self._lr_tensor)
 

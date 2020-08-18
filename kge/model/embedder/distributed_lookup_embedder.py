@@ -76,7 +76,7 @@ class DistributedLookupEmbedder(LookupEmbedder):
             self.local_to_lapse_mapper[new_local_indexes] = pull_indexes
             pull_tensor = self._embeddings.weight[: len(indexes), :].detach().cpu()
             self.parameter_client.pull(pull_indexes, pull_tensor)
-            self._embeddings.weight[new_local_indexes] = pull_tensor.to(self._embeddings.weight.device)
+            self._embeddings.weight.index_copy_(0, new_local_indexes, pull_tensor.to(self._embeddings.weight.device))
             return
         local_indexes = self.local_index_mapper[indexes]
         missing_mask = local_indexes == -1
@@ -94,9 +94,7 @@ class DistributedLookupEmbedder(LookupEmbedder):
                 self._embeddings.weight[:num_missing, :].detach().cpu()
             )
             self.parameter_client.pull(pull_indexes, current_embeddings)
-            self._embeddings.weight[missing_local_indexes, :] = current_embeddings.to(
-                self._embeddings.weight.device
-            )
+            self._embeddings.weight.index_copy_(0, missing_local_indexes, current_embeddings.to(self._embeddings.weight.device))
 
             # update local index mapper
             self.local_index_mapper[indexes[missing_mask]] = missing_local_indexes
