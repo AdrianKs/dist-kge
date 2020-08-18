@@ -30,7 +30,7 @@ class WorkerProcessPool:
         configs = {}
         parameters=None
         if config.get("job.distributed.parameter_server") == "shared":
-            parameters = torch.empty((num_keys, embedding_dim), dtype=torch.float32).share_memory_()
+            parameters = torch.empty((num_keys, embedding_dim), dtype=torch.float32, requires_grad=False).share_memory_()
         for rank in range(num_workers_machine):
             configs[rank] = deepcopy(config)
             configs[rank].set(config.get("model") + ".create_complete", False)

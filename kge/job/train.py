@@ -130,6 +130,8 @@ class TrainingJob(Job):
             parameter_client=parameter_client,
             lapse_indexes=lapse_indexes,
         )
+        self.model.get_s_embedder().to_device()
+        self.model.get_p_embedder().to_device()
         self.kge_lr_scheduler = KgeLRScheduler(config, self.optimizer)
         self.loss = KgeLoss.create(config)
         self.abort_on_nan: bool = config.get("train.abort_on_nan")
@@ -319,6 +321,9 @@ class TrainingJob(Job):
                 self.optimizer.pull_all()
                 self.config.set("job.device", self.device)
                 self.model = self.model.to(self.device)
+                # we need to move some mappers seperately to device
+                self.model.get_s_embedder().to_device()
+                self.model.get_p_embedder().to_device()
                 self.valid_job.model = self.model
                 # validate and update learning rate
                 if (

@@ -48,6 +48,10 @@ class DistributedLookupEmbedder(LookupEmbedder):
         )  # maps the local embeddings to the embeddings in lapse
         self.num_pulled = 0
 
+    def to_device(self):
+        """Needs to be called after model.to(self.device)"""
+        self.local_index_mapper = self.local_index_mapper.to(self._embeddings.weight.device)
+
     def push_all(self):
         self.parameter_client.push(
             self.lapse_index[torch.arange(self.vocab_size)],
@@ -65,19 +69,29 @@ class DistributedLookupEmbedder(LookupEmbedder):
 
     @torch.no_grad()
     def _pull_embeddings(self, indexes):
+        if self.load_batch:
+            new_local_indexes = torch.arange(len(indexes), device=self._embeddings.weight.device, dtype=torch.long)
+            pull_indexes = self.lapse_index[indexes.cpu()]
+            self.local_index_mapper[indexes] = new_local_indexes
+            self.local_to_lapse_mapper[new_local_indexes] = pull_indexes
+            pull_tensor = self._embeddings.weight[: len(indexes), :].detach().cpu()
+            self.parameter_client.pull(pull_indexes, pull_tensor)
+            self._embeddings.weight[new_local_indexes] = pull_tensor.to(self._embeddings.weight.device)
+            return
         local_indexes = self.local_index_mapper[indexes]
         missing_mask = local_indexes == -1
         num_missing = torch.sum(missing_mask).item()
         if num_missing > 0:
             missing_local_indexes = torch.arange(
-                self.num_pulled, self.num_pulled + num_missing, dtype=torch.long
+                self.num_pulled, self.num_pulled + num_missing, dtype=torch.long, device=self._embeddings.weight.device
             )
             self.num_pulled += num_missing
 
             # self.lapse_worker.localize(keys=self.lapse_index[missing_local_indexes])
-            pull_indexes = self.lapse_index[indexes[missing_mask].cpu()].reshape(-1)
+            pull_indexes = self.lapse_index[indexes[missing_mask].cpu()]
             current_embeddings = (
-                self._embeddings.weight[missing_local_indexes, :].detach().cpu()
+                #self._embeddings.weight[missing_local_indexes, :].detach().cpu()
+                self._embeddings.weight[:num_missing, :].detach().cpu()
             )
             self.parameter_client.pull(pull_indexes, current_embeddings)
             self._embeddings.weight[missing_local_indexes, :] = current_embeddings.to(
@@ -104,20 +118,17 @@ class DistributedLookupEmbedder(LookupEmbedder):
                 self._pull_embeddings(long_unique_indexes)
         return self._embeddings(
             self.local_index_mapper[long_indexes]
-            .to(self._embeddings.weight.device)
-            .long()
         )
 
     def embed(self, indexes: Tensor) -> Tensor:
         long_indexes = indexes.long()
-        with torch.no_grad():
-            long_unique_indexes = torch.unique(long_indexes)
-            self._pull_embeddings(long_unique_indexes)
+        if not self.load_batch:
+            with torch.no_grad():
+                long_unique_indexes = torch.unique(long_indexes)
+                self._pull_embeddings(long_unique_indexes)
         return self._postprocess(
             self._embeddings(
                 self.local_index_mapper[long_indexes]
-                .to(self._embeddings.weight.device)
-                .long()
             )
         )
 
