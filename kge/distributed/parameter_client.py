@@ -264,7 +264,8 @@ class SharedParameterClient(KgeParameterClient):
     def pull(self, keys, pull_tensor=None, asynchronous=False):
         if pull_tensor is None:
             pull_tensor = torch.zeros((len(keys), self.dim), dtype=self.data_type)
-        pull_tensor[:, :] = self.parameters[keys, :]
+        pull_tensor[:, :] = self.parameters.index_select(0, keys)
+        return pull_tensor
 
     @torch.no_grad()
     def push(self, keys, push_tensor, asynchronous=False):
