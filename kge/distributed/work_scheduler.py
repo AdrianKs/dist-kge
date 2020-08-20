@@ -3,14 +3,14 @@ import math
 import datetime
 import time
 import random
-from collections import deque
+from collections import deque, OrderedDict
 from copy import deepcopy
 import numpy as np
 import torch
 from torch import multiprocessing as mp
 from torch import distributed as dist
 from enum import IntEnum
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict, Tuple, List
 
 
 class SCHEDULER_CMDS(IntEnum):
@@ -491,7 +491,7 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         )
         # dictionary: key=worker_rank, value=block
         self.running_blocks: Dict[int, Tuple[int, int]] = {}
-        self.work_to_do = deepcopy(self.partitions)
+        #self.work_to_do = deepcopy(self.partitions)
         self._initialized_entity_blocks = set()
         entities_to_partition = self._load_entities_to_partitions_file(
             self.partition_type, dataset_folder, num_partitions
@@ -500,6 +500,41 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         self.dataset = dataset
         self.scheduling_order = scheduling_order
         self.repartition_epoch = repartition_epoch
+        self.work_to_do: Dict[Tuple[int, int], torch.Tensor] = self._order_by_schedule(deepcopy(self.partitions))
+
+    def _order_by_schedule(self, partitions):
+        sorted_partitions_keys = [0]*(len(partitions.keys()))
+        num_entity_blocks = int(math.sqrt(len(partitions)))
+        if self.scheduling_order == "sequential":
+            sorted_partitions_keys = []
+            for i in range(num_entity_blocks):
+                sorted_partitions_keys.append((i,i))
+            for i in range(num_entity_blocks):
+                for j in range(num_entity_blocks):
+                    object_id = (j+i+1) % num_entity_blocks
+                    if object_id == j:
+                        continue
+                    sorted_partitions_keys.append((j, object_id))
+        elif self.scheduling_order == "sequential_old":
+            for bucket in partitions.keys():
+                if bucket[0] == bucket[1]:
+                    sorted_partitions_keys[bucket[0].item()] = bucket
+                else:
+                    position = (num_entity_blocks*(bucket[0]+1)) + bucket[1]
+                    position -= bucket[0]
+                    if bucket[1] > bucket[0]:
+                        position -= 1
+                    sorted_partitions_keys[position.item()] = bucket
+        elif self.scheduling_order == "random":
+            positions = np.random.permutation(np.arange(len(partitions.keys())))
+            for i, bucket in zip(positions, partitions.keys()):
+                sorted_partitions_keys[i] = bucket
+        else:
+            raise NotImplementedError()
+        sorted_partitions = OrderedDict()
+        for key in sorted_partitions_keys:
+            sorted_partitions[key] = partitions[key]
+        return sorted_partitions
 
     def _repartition(self):
         print("repartitioning data")
@@ -588,29 +623,26 @@ class TwoDBlockWorkScheduler(WorkScheduler):
             for i in range(self.num_partitions)
             if i not in locked_entity_blocks.keys()
         ]
-        acquirable_partitions = []
-        for subject_entity_block in acquirable_entity_blocks:
-            for object_entity_block in acquirable_entity_blocks:
-                bucket = (subject_entity_block, object_entity_block)
-                if bucket in self.work_to_do and self._is_initialized(bucket):
-                    acquirable_partitions.append(bucket)
-        if len(acquirable_partitions) > 0:
-            if self.scheduling_order == "sequential":
-                acquired_partition = acquirable_partitions[0]
-            elif self.scheduling_order == "random":
-                random_index = random.randint(0, len(acquirable_partitions)-1)
-                acquired_partition = acquirable_partitions[random_index]
-            else:
-                raise NotImplementedError()
-            self.running_blocks[rank] = acquired_partition
-            self._initialized_entity_blocks.add(acquired_partition[0])
-            self._initialized_entity_blocks.add(acquired_partition[1])
-            block_data = self.work_to_do[acquired_partition]
-            del self.work_to_do[acquired_partition]
-            return block_data, self._entities_in_bucket.get(acquired_partition), None, False
-        elif len(self.work_to_do) > 0:
+        acquirable_entity_blocks = set(acquirable_entity_blocks)
+
+        def _is_acquirable(bucket: Tuple[int, int]):
+            if not self._is_initialized(bucket):
+                return False
+            if not bucket[0] in acquirable_entity_blocks:
+                return False
+            if not bucket[1] in acquirable_entity_blocks:
+                return False
+            return True
+
+        for block, block_data in self.work_to_do.items():
+            if _is_acquirable(block):
+                self.running_blocks[rank] = block
+                self._initialized_entity_blocks.add(block[0])
+                self._initialized_entity_blocks.add(block[1])
+                del self.work_to_do[block]
+                return block_data, self._entities_in_bucket.get(block), None, False
+        if len(self.work_to_do) > 0:
             wait = True
-            # print("work to do", self.work_to_do.keys())
         return None, None, None, wait
 
     def _is_initialized(self, bucket: Tuple[int, int]):
@@ -630,7 +662,7 @@ class TwoDBlockWorkScheduler(WorkScheduler):
     def _refill_work(self):
         if self.repartition_epoch:
             self._repartition()
-        self.work_to_do = deepcopy(self.partitions)
+        self.work_to_do = self._order_by_schedule(deepcopy(self.partitions))
 
     def _load_partitions(self, dataset_folder, num_partitions):
         partition_assignment = self._load_partition_file(
