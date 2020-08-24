@@ -512,7 +512,7 @@ class DefaultSharedNegativeSample(BatchNegativeSample):
         # repeat indexes as needed for WR sampling
         if num_unique != num_samples:
             negative_samples = negative_samples[
-                :, torch.cat((torch.arange(num_unique), self._repeat_indexes))
+                :, torch.cat((torch.arange(num_unique, device=device), self._repeat_indexes))
             ]
 
         return negative_samples
@@ -645,7 +645,7 @@ class KgeUniformSampler(KgeSampler):
                 positive_triples,
                 slot,
                 num_samples,
-                torch.tensor(unique_samples),
+                torch.tensor(unique_samples, dtype=torch.long),
                 repeat_indexes,
             )
 
@@ -798,9 +798,59 @@ class KgePooledSampler(KgeSampler):
     def _sample_shared(
         self, positive_triples: torch.Tensor, slot: int, num_samples: int
     ):
-        return self._sample(
-            positive_triples[0, :].view(1, 3), slot, num_samples
-        ).expand((len(positive_triples), num_samples))
+        if not self.shared_type == "naive":
+            raise NotImplementedError("currently only naive shared samping supported for pooled")
+        # determine number of distinct negative samples for each positive
+        if self.with_replacement:
+            # Simple way to get a sample from the distribution of number of distinct
+            # values in the negative sample (for "default" type: WR sampling except the
+            # positive, hence the - 1)
+            num_unique = len(
+                np.unique(
+                    np.random.choice(
+                        self.sample_pools[slot]
+                        if self.shared_type == "naive"
+                        else self.vocabulary_size[slot] - 1,
+                        num_samples,
+                        replace=True,
+                    )
+                )
+            )
+        else:  # WOR -> all samples distinct
+            num_unique = num_samples
+
+        # Take the WOR sample. For default, take one more WOR sample than necessary
+        # (used to replace sampled positives). Numpy is horribly slow for large
+        # vocabulary sizes, so we use random.sample instead.
+        #
+        # SLOW:
+        # unique_samples = np.random.choice(
+        #     self.vocabulary_size[slot], num_unique, replace=False
+        # )
+        unique_samples = random.sample(
+            self.sample_pools[slot].tolist(),
+            num_unique if self.shared_type == "naive" else num_unique + 1,
+        )
+
+        # For WR, we need to upsample. To do so, we compute the set of additional
+        # (repeated) sample indexes.
+        if num_unique != num_samples:  # only happens with WR
+            repeat_indexes = torch.tensor(
+                np.random.choice(num_unique, num_samples - num_unique, replace=True)
+            )
+        else:
+            repeat_indexes = torch.empty(0)  # WOR or WR when all samples unique
+        # for naive shared sampling, we are done
+        if self.shared_type == "naive":
+            return NaiveSharedNegativeSample(
+                self.config,
+                self.configuration_key,
+                positive_triples,
+                slot,
+                num_samples,
+                torch.tensor(unique_samples, dtype=torch.long),
+                repeat_indexes,
+            )
 
     def update_pools(self):
         self.sample_pools[S] = torch.randperm(self.vocabulary_size[S])[

@@ -1062,11 +1062,11 @@ class TrainingJobNegativeSampling(TrainingJob):
             ns.to(self.device) for ns in batch["negative_samples"]
         ]
         if self.config.get("job.distributed.load_batch"):
-            unique_entities = torch.unique(torch.cat((batch_triples[:, [S,O]], batch_negative_samples[S], batch_negative_samples[O]), dim=1))
+            unique_entities = torch.unique(torch.cat((batch_triples[:, [S,O]].view(-1), batch_negative_samples[S].unique_samples(), batch_negative_samples[O].unique_samples())))
             if self.entity_localize:
                 self.model.get_s_embedder().localize(unique_entities)
             self.model.get_s_embedder()._pull_embeddings(unique_entities)
-            unique_relations = torch.unique(torch.cat((batch_triples[:, [P]], batch_negative_samples[P]), dim=1))
+            unique_relations = torch.unique(torch.cat((batch_triples[:, [P]].view(-1), batch_negative_samples[P].unique_samples())))
             if self.relation_localize:
                 self.model.get_p_embedder().localize(unique_relations)
             self.model.get_p_embedder()._pull_embeddings(unique_relations)
