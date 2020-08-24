@@ -31,6 +31,7 @@ import kge.job.util
 
 SLOTS = [0, 1, 2]
 S, P, O = SLOTS
+SLOT_STR = ["s", "p", "o"]
 
 
 def _generate_worker_init_fn(config):
@@ -1055,6 +1056,8 @@ class TrainingJobNegativeSampling(TrainingJob):
         # prepare
         prepare_time = -time.time()
         batch_triples = batch["triples"].to(self.device)
+        for ns in batch["negative_samples"]:
+            ns.positive_triples = batch_triples
         batch_negative_samples = [
             ns.to(self.device) for ns in batch["negative_samples"]
         ]
@@ -1073,7 +1076,7 @@ class TrainingJobNegativeSampling(TrainingJob):
         loss_value = 0.0
         forward_time = 0.0
         backward_time = 0.0
-        labels = None
+        labels = [None] * 3
 
         # perform processing of batch in smaller chunks to save memory
         max_chunk_size = (
@@ -1083,11 +1086,9 @@ class TrainingJobNegativeSampling(TrainingJob):
             # determine data used for this chunk
             chunk_start = max_chunk_size * chunk_number
             chunk_end = min(max_chunk_size * (chunk_number + 1), batch_size)
-            negative_samples = [
-                ns[chunk_start:chunk_end, :] for ns in batch_negative_samples
-            ]
-            triples = batch_triples[chunk_start:chunk_end, :]
+            chunk_indexes = slice(chunk_start, chunk_end)
             chunk_size = chunk_end - chunk_start
+            triples = batch_triples[chunk_indexes]
 
             # process the chunk
             for slot in [S, P, O]:
@@ -1097,133 +1098,38 @@ class TrainingJobNegativeSampling(TrainingJob):
 
                 # construct gold labels: first column corresponds to positives,
                 # remaining columns to negatives
-                if labels is None or labels.shape != torch.Size(
-                    [chunk_size, 1 + num_samples]
+                if labels[slot] is None or labels[slot].shape != (
+                    chunk_size,
+                    1 + num_samples,
                 ):
                     prepare_time -= time.time()
-                    labels = torch.zeros(
+                    labels[slot] = torch.zeros(
                         (chunk_size, 1 + num_samples), device=self.device
                     )
-                    labels[:, 0] = 1
+                    labels[slot][:, 0] = 1
                     prepare_time += time.time()
 
-                # compute corresponding scores
-                scores = None
-                if self._implementation == "triple":
-                    # construct triples
-                    prepare_time -= time.time()
-                    triples_to_score = triples.repeat(1, 1 + num_samples).view(-1, 3)
-                    triples_to_score[:, slot] = torch.cat(
-                        (
-                            triples[:, [slot]],  # positives
-                            negative_samples[slot],  # negatives
-                        ),
-                        1,
-                    ).view(-1)
-                    prepare_time += time.time()
-
-                    # and score them
-                    forward_time -= time.time()
-                    scores = self.model.score_spo(
-                        triples_to_score[:, 0],
-                        triples_to_score[:, 1],
-                        triples_to_score[:, 2],
-                        direction="s" if slot == S else ("o" if slot == O else "p"),
-                    ).view(chunk_size, -1)
-                    forward_time += time.time()
-                elif self._implementation == "all":
-                    # Score against all possible targets. Creates a score matrix of size
-                    # [chunk_size, num_entities] or [chunk_size, num_relations]. All
-                    # scores relevant for positive and negative triples are contained in
-                    # this score matrix.
-
-                    # compute all scores for slot
-                    forward_time -= time.time()
-                    if slot == S:
-                        all_scores = self.model.score_po(triples[:, P], triples[:, O])
-                    elif slot == P:
-                        all_scores = self.model.score_so(triples[:, S], triples[:, O])
-                    elif slot == O:
-                        all_scores = self.model.score_sp(triples[:, S], triples[:, P])
-                    else:
-                        raise NotImplementedError
-                    forward_time += time.time()
-
-                    # determine indexes of relevant scores in scoring matrix
-                    prepare_time -= time.time()
-                    row_indexes = (
-                        torch.arange(chunk_size, device=self.device)
-                        .unsqueeze(1)
-                        .repeat(1, 1 + num_samples)
-                        .view(-1)
-                    )  # 000 111 222; each 1+num_negative times (here: 3)
-                    column_indexes = torch.cat(
-                        (
-                            triples[:, [slot]],  # positives
-                            negative_samples[slot],  # negatives
-                        ),
-                        1,
-                    ).view(-1)
-                    prepare_time += time.time()
-
-                    # now pick the scores we need
-                    forward_time -= time.time()
-                    scores = all_scores[row_indexes, column_indexes].view(
-                        chunk_size, -1
-                    )
-                    forward_time += time.time()
-                elif self._implementation == "batch":
-                    # Score against all targets contained in the chunk. Creates a score
-                    # matrix of size [chunk_size, unique_entities_in_slot] or
-                    # [chunk_size, unique_relations_in_slot]. All scores
-                    # relevant for positive and negative triples are contained in this
-                    # score matrix.
-                    forward_time -= time.time()
-                    unique_targets, column_indexes = torch.unique(
-                        torch.cat((triples[:, [slot]], negative_samples[slot]), 1).view(
-                            -1
-                        ),
-                        return_inverse=True,
-                    )
-
-                    # compute scores for all unique targets for slot
-                    if slot == S:
-                        all_scores = self.model.score_po(
-                            triples[:, P], triples[:, O], unique_targets
-                        )
-                    elif slot == P:
-                        all_scores = self.model.score_so(
-                            triples[:, S], triples[:, O], unique_targets
-                        )
-                    elif slot == O:
-                        all_scores = self.model.score_sp(
-                            triples[:, S], triples[:, P], unique_targets
-                        )
-                    else:
-                        raise NotImplementedError
-                    forward_time += time.time()
-
-                    # determine indexes of relevant scores in scoring matrix
-                    prepare_time -= time.time()
-                    row_indexes = (
-                        torch.arange(chunk_size, device=self.device)
-                        .unsqueeze(1)
-                        .repeat(1, 1 + num_samples)
-                        .view(-1)
-                    )  # 000 111 222; each 1+num_negative times (here: 3)
-                    prepare_time += time.time()
-
-                    # now pick the scores we need
-                    forward_time -= time.time()
-                    scores = all_scores[row_indexes, column_indexes].view(
-                        chunk_size, -1
-                    )
-                    forward_time += time.time()
+                # compute the scores
+                forward_time -= time.time()
+                scores = torch.empty((chunk_size, num_samples + 1), device=self.device)
+                scores[:, 0] = self.model.score_spo(
+                    triples[:, S],
+                    triples[:, P],
+                    triples[:, O],
+                    direction=SLOT_STR[slot],
+                )
+                forward_time += time.time()
+                scores[:, 1:] = batch_negative_samples[slot].score(
+                    self.model, indexes=chunk_indexes
+                )
+                forward_time += batch_negative_samples[slot].forward_time
+                prepare_time += batch_negative_samples[slot].prepare_time
 
                 # compute chunk loss (concluding the forward pass of the chunk)
                 forward_time -= time.time()
                 loss_value_torch = (
-                    self.loss(scores, labels, num_negatives=num_samples) / batch_size
+                    self.loss(scores, labels[slot], num_negatives=num_samples)
+                    / batch_size
                 )
                 loss_value += loss_value_torch.item()
                 forward_time += time.time()
