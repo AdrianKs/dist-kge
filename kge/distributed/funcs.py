@@ -28,7 +28,7 @@ def create_and_run_distributed(config: Config, dataset: Optional[Dataset] = None
     dist_world_size = num_workers + MIN_RANK
     dim = config.get("lookup_embedder.dim")
     optimizer_dim = get_optimizer_dim(config, dim)
-    if config.get("train.optimizer") == "dist_adagrad":
+    if config.get("train.optimizer") in ["dist_adagrad", "dist_rowadagrad"]:
     #    num_keys *= 2
         num_meta_keys += 2
     # meta keys. contains for example a variable indicating whether to stop or

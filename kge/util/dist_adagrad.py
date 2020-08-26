@@ -40,6 +40,7 @@ class DistAdagrad(Optimizer):
         lapse_indexes=None,
         sync_levels=[],
         async_write_back=[],
+        is_row=False,
     ):
         params = [p for p in model.parameters() if p.requires_grad]
         if not 0.0 <= lr:
@@ -76,6 +77,7 @@ class DistAdagrad(Optimizer):
         self.async_write_back = async_write_back
 
         self.sync_levels = sync_levels
+        self.is_row = is_row
 
         self.parameter_client = parameter_client
         # this array stores helper cpu tensors in which we pull data from the parameter
@@ -185,8 +187,10 @@ class DistAdagrad(Optimizer):
                         if grad_indices.dim() == 0 or values.dim() == 0:
                             return constructor().resize_as_(grad)
                         return constructor(grad_indices, values, size)
-
-                    sum_update_values = grad_values.pow(2)
+                    if not self.is_row:
+                        sum_update_values = grad_values.pow(2)
+                    else:
+                        sum_update_values = grad_values.pow(2).mean(1).view(-1, 1)
                     state_sum.add_(sum_update_values)
                     #state["sum"].add_(make_sparse(sum_update_values))
                     if self.sync_levels[i] == "batch":
