@@ -77,8 +77,8 @@ class DistributedLookupEmbedder(LookupEmbedder):
     def set_embeddings(self):
         local_indexes = self.local_index_mapper[self.local_index_mapper != -1]
         lapse_indexes = self.local_to_lapse_mapper[local_indexes]
-        embeddings = self._embeddings.weight[local_indexes].detach().cpu()
-        self.parameter_client.set(lapse_indexes, embeddings)
+        set_tensor = torch.cat((self._embeddings.weight[local_indexes].detach(), self.optimizer_values[local_indexes]), dim=1).cpu()
+        self.parameter_client.set(lapse_indexes, set_tensor)
 
     @torch.no_grad()
     def _pull_embeddings(self, indexes):

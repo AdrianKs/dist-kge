@@ -460,7 +460,6 @@ class TrainingJob(Job):
             if self.entity_sync_level == "partition":
                 if work_entities is not None:
                     self.model.get_s_embedder()._pull_embeddings(work_entities)
-                    self.optimizer.pull_entities(work_entities)
                 else:
                     raise ValueError(
                         "the used work-scheduler seems not to support "
@@ -469,7 +468,6 @@ class TrainingJob(Job):
             if self.relation_sync_level == "partition":
                 if work_relations is not None:
                     self.model.get_p_embedder()._pull_embeddings(work_relations)
-                    self.optimizer.pull_relations(work_relations)
                 else:
                     raise ValueError(
                         "the used work-scheduler seems not to support "
@@ -653,11 +651,11 @@ class TrainingJob(Job):
             if self.entity_sync_level == "partition":
                 # todo: optimizer write back missing
                 self.model.get_s_embedder().set_embeddings()
-                self.optimizer.set_entities()
+                # self.optimizer.set_entities()
                 self.model.get_s_embedder().push_back()
             if self.relation_sync_level == "partition":
                 self.model.get_p_embedder().set_embeddings()
-                self.optimizer.set_relations()
+                # self.optimizer.set_relations()
                 self.model.get_p_embedder().push_back()
             self.work_scheduler_client.work_done()
 
@@ -1063,14 +1061,16 @@ class TrainingJobNegativeSampling(TrainingJob):
             ns.to(self.device) for ns in batch["negative_samples"]
         ]
         if self.config.get("job.distributed.load_batch"):
-            unique_entities = torch.unique(torch.cat((batch_triples[:, [S,O]].view(-1), batch_negative_samples[S].unique_samples(), batch_negative_samples[O].unique_samples())))
-            if self.entity_localize:
-                self.model.get_s_embedder().localize(unique_entities)
-            self.model.get_s_embedder()._pull_embeddings(unique_entities)
-            unique_relations = torch.unique(torch.cat((batch_triples[:, [P]].view(-1), batch_negative_samples[P].unique_samples())))
-            if self.relation_localize:
-                self.model.get_p_embedder().localize(unique_relations)
-            self.model.get_p_embedder()._pull_embeddings(unique_relations)
+            if self.entity_sync_level == "batch":
+                unique_entities = torch.unique(torch.cat((batch_triples[:, [S,O]].view(-1), batch_negative_samples[S].unique_samples(), batch_negative_samples[O].unique_samples())))
+                if self.entity_localize:
+                    self.model.get_s_embedder().localize(unique_entities)
+                self.model.get_s_embedder()._pull_embeddings(unique_entities)
+            if self.relation_sync_level == "batch":
+                unique_relations = torch.unique(torch.cat((batch_triples[:, [P]].view(-1), batch_negative_samples[P].unique_samples())))
+                if self.relation_localize:
+                    self.model.get_p_embedder().localize(unique_relations)
+                self.model.get_p_embedder()._pull_embeddings(unique_relations)
         batch_size = len(batch_triples)
         prepare_time += time.time()
 

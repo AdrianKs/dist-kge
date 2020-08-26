@@ -99,9 +99,12 @@ class DistAdagrad(Optimizer):
             for i, p in enumerate(group["params"]):
                 state = self.state[p]
                 state["step"] = 0
-                state["sum"] = torch.full_like(
-                    p, initial_accumulator_value, memory_format=torch.preserve_format
-                )
+                if not is_row:
+                    state["sum"] = torch.full_like(
+                        p, initial_accumulator_value, memory_format=torch.preserve_format
+                    )
+                else:
+                    state["sum"] = torch.full((len(p), 1), initial_accumulator_value, dtype=torch.float32, device=p.device)#memory_format=torch.preserve_format)
                 # TODO: we need to find a good way to init complete lapse at the
                 #  beginning, so that workers won't overwrite each other
                 # initialize optimizer parameters in lapse
@@ -180,7 +183,8 @@ class DistAdagrad(Optimizer):
                         # TODO: when we move the optimizer value tensor in the model it is a new tensor and we still use the old tensor here...
                         state_sum = self.optimizer_values[i][grad_indices_flat]
                     else:
-                        state_sum = self.state["sum"][grad_indices_flat]
+                        # state_sum = state["sum"][grad_indices_flat]
+                        state_sum = self.optimizer_values[i][grad_indices_flat]
 
                     def make_sparse(values):
                         constructor = grad.new
@@ -201,7 +205,8 @@ class DistAdagrad(Optimizer):
                         #)
                         pass
                     else:
-                        state["sum"][grad_indices_flat] = state_sum
+                        # state["sum"][grad_indices_flat] = state_sum
+                        self.optimizer_values[i][grad_indices_flat] = state_sum
 
                     #std = state["sum"].sparse_mask(grad)
                     #std_values = std._values().sqrt_().add_(group["eps"])
