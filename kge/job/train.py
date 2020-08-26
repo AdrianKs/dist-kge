@@ -60,7 +60,8 @@ class NumberDataset(torch.utils.data.Dataset):
         return len(self.samples)
 
     def __getitem__(self, idx):
-        return self.samples[idx]
+        return idx
+    #    return self.samples[idx]
 
     def set_samples(self, samples):
         self.samples = samples
@@ -1040,7 +1041,7 @@ class TrainingJobNegativeSampling(TrainingJob):
               in order S,P,O)
             """
 
-            triples = self.dataset.split(self.train_split)[batch, :].long()
+            triples = self.dataset.split(self.train_split)[self.dataloader_dataset.samples[batch], :].long()
             # labels = torch.zeros((len(batch), self._sampler.num_negatives_total + 1))
             # labels[:, 0] = 1
             # labels = labels.view(-1)
