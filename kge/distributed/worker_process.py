@@ -22,6 +22,7 @@ class WorkerProcessPool:
         num_keys,
         num_meta_keys,
         embedding_dim,
+        optimizer_dim,
         config,
         dataset,
         checkpoint: Optional[Dict] = None,
@@ -30,7 +31,7 @@ class WorkerProcessPool:
         configs = {}
         parameters=None
         if config.get("job.distributed.parameter_server") == "shared":
-            parameters = torch.empty((num_keys, embedding_dim), dtype=torch.float32, requires_grad=False).share_memory_()
+            parameters = torch.empty((num_keys, embedding_dim + optimizer_dim), dtype=torch.float32, requires_grad=False).share_memory_()
         for rank in range(num_workers_machine):
             configs[rank] = deepcopy(config)
             configs[rank].set(config.get("model") + ".create_complete", False)
@@ -42,6 +43,7 @@ class WorkerProcessPool:
                 num_keys,
                 num_meta_keys,
                 embedding_dim,
+                optimizer_dim,
                 configs[rank],
                 dataset,
                 parameters=parameters,
@@ -63,6 +65,7 @@ class WorkerProcess(mp.get_context("spawn").Process):
         num_keys,
         num_meta_keys,
         embedding_dim,
+        optimizer_dim,
         config,
         dataset,
         parameters=None,
@@ -75,6 +78,7 @@ class WorkerProcess(mp.get_context("spawn").Process):
         self.num_keys = num_keys
         self.num_meta_keys = num_meta_keys
         self.embedding_dim = embedding_dim
+        self.optimizer_dim = optimizer_dim
         self.config = config
         self.dataset = dataset
         self.parameters = parameters
@@ -106,7 +110,7 @@ class WorkerProcess(mp.get_context("spawn").Process):
 
             num_workers_per_server = 1
             lapse.setup(self.num_keys, num_workers_per_server)
-            server = lapse.Server(self.num_keys, self.embedding_dim)
+            server = lapse.Server(self.num_keys, self.embedding_dim + self.optimizer_dim)
         elif self.config.get("job.distributed.parameter_server") == "shared":
             server = self.parameters
         configs = {}
@@ -132,7 +136,7 @@ class WorkerProcess(mp.get_context("spawn").Process):
             client_type=self.config.get("job.distributed.parameter_server"),
             server_id=0,
             client_id=worker_id + MIN_RANK,
-            embedding_dim=self.embedding_dim,
+            embedding_dim=self.embedding_dim + self.optimizer_dim,
             server=server,
             num_meta_keys=self.num_meta_keys,
             worker_group=worker_group,

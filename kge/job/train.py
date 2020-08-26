@@ -125,14 +125,14 @@ class TrainingJob(Job):
             torch.arange(dataset.num_relations(), dtype=torch.int)
             + dataset.num_entities(),
         ]
+        self.model.get_s_embedder().to_device()
+        self.model.get_p_embedder().to_device()
         self.optimizer = KgeOptimizer.create(
             config,
             self.model,
             parameter_client=parameter_client,
             lapse_indexes=lapse_indexes,
         )
-        self.model.get_s_embedder().to_device()
-        self.model.get_p_embedder().to_device()
         self.kge_lr_scheduler = KgeLRScheduler(config, self.optimizer)
         self.loss = KgeLoss.create(config)
         self.abort_on_nan: bool = config.get("train.abort_on_nan")

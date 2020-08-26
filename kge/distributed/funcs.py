@@ -27,8 +27,9 @@ def create_and_run_distributed(config: Config, dataset: Optional[Dataset] = None
     num_partitions = config.get("job.distributed.num_partitions")
     dist_world_size = num_workers + MIN_RANK
     dim = config.get("lookup_embedder.dim")
+    optimizer_dim = get_optimizer_dim(config, dim)
     if config.get("train.optimizer") == "dist_adagrad":
-        num_keys *= 2
+    #    num_keys *= 2
         num_meta_keys += 2
     # meta keys. contains for example a variable indicating whether to stop or
     #  not
@@ -58,7 +59,7 @@ def create_and_run_distributed(config: Config, dataset: Optional[Dataset] = None
         else:
             p = mp.Process(
                 target=init_torch_server,
-                args=(num_workers, num_keys, dim, master_ip, master_port),
+                args=(num_workers, num_keys, dim + optimizer_dim, master_ip, master_port),
                 daemon=True,
             )
             p.start()
@@ -87,8 +88,20 @@ def create_and_run_distributed(config: Config, dataset: Optional[Dataset] = None
     already_init_workers = config.get("job.distributed.already_init_workers")
     worker_process_pool = WorkerProcessPool(
         num_workers, num_workers_machine, already_init_workers, num_keys,
-        num_meta_keys, dim, config, dataset, checkpoint
+        num_meta_keys, dim, optimizer_dim, config, dataset, checkpoint
     )
     worker_process_pool.join()
     for p in processes:
         p.join()
+
+def get_optimizer_dim(config: Config, dim):
+    optimizer = config.get("train.optimizer")
+    if optimizer == "dist_sgd":
+        optimizer_dim = 0
+    elif optimizer == "dist_adagrad":
+        optimizer_dim = dim
+    elif optimizer == "dist_rowadagrad":
+        optimizer_dim = 1
+    else:
+        raise NotImplementedError(f"Optimizer {optimizer} not implemented")
+    return optimizer_dim

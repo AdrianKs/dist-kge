@@ -57,6 +57,8 @@ class DistAdagrad(Optimizer):
         if not 0.0 <= eps:
             raise ValueError("Invalid epsilon value: {}".format(eps))
 
+        self.optimizer_values = [model._entity_embedder.optimizer_values, model._relation_embedder.optimizer_values]
+
         self.lapse_optimizer_index_offset = (
             model.dataset.num_entities() + model.dataset.num_relations()
         )
@@ -161,18 +163,20 @@ class DistAdagrad(Optimizer):
                         self.pull_tensors[i] = torch.zeros_like(p, device="cpu")
                     if self.sync_levels[i] == "batch":
                         update_indexes = grad_indices_flat.cpu()
-                        update_tensor = self.pull_tensors[i][:len(update_indexes)]
-                        keys_optim = (
-                            self.local_to_lapse_mappers[i]
-                            + self.lapse_optimizer_index_offset
-                        )[update_indexes]
-                        self.parameter_client.pull(
-                            keys_optim, update_tensor,
-                        )
-                        state_sum = update_tensor.to(state["sum"].device)
-                        #state["sum"][update_indexes] = update_tensor.to(
-                        #    state["sum"].device
-                        #)
+                    #    update_tensor = self.pull_tensors[i][:len(update_indexes)]
+                    #    keys_optim = (
+                    #            self.local_to_lapse_mappers[i]
+                    #            + self.lapse_optimizer_index_offset
+                    #    )[update_indexes]
+                    #    self.parameter_client.pull(
+                    #        keys_optim, update_tensor,
+                    #    )
+                    #    state_sum = update_tensor.to(state["sum"].device)
+                    #    #state["sum"][update_indexes] = update_tensor.to(
+                    #    #    state["sum"].device
+                    #    #)
+                        # TODO: when we move the optimizer value tensor in the model it is a new tensor and we still use the old tensor here...
+                        state_sum = self.optimizer_values[i][grad_indices_flat]
                     else:
                         state_sum = self.state["sum"][grad_indices_flat]
 
@@ -186,11 +190,12 @@ class DistAdagrad(Optimizer):
                     state_sum.add_(sum_update_values)
                     #state["sum"].add_(make_sparse(sum_update_values))
                     if self.sync_levels[i] == "batch":
-                        self.parameter_client.push(
-                            keys_optim,
-                            sum_update_values.cpu(),
-                            asynchronous=self.async_write_back[i]
-                        )
+                        #self.parameter_client.push(
+                        #    keys_optim,
+                        #    sum_update_values.cpu(),
+                        #    asynchronous=self.async_write_back[i]
+                        #)
+                        pass
                     else:
                         state["sum"][grad_indices_flat] = state_sum
 
@@ -201,7 +206,7 @@ class DistAdagrad(Optimizer):
                     if self.sync_levels[i] == "batch":
                         self.parameter_client.push(
                             self.local_to_lapse_mappers[i][update_indexes],
-                            update_value.cpu(),
+                            torch.cat((update_value, sum_update_values), dim=1).cpu(),
                             asynchronous=self.async_write_back[i]
                         )
                     else:

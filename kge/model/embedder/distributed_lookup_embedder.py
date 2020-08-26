@@ -33,6 +33,16 @@ class DistributedLookupEmbedder(LookupEmbedder):
             vocab_size,
             init_for_load_only=init_for_load_only,
         )
+        optimizer = self.config.get("train.optimizer")
+        if optimizer == "dist_sgd":
+            self.optimizer_dim = 0
+        elif optimizer == "dist_adagrad":
+            self.optimizer_dim = self.dim
+        elif optimizer == "dist_rowadagrad":
+            self.optimizer_dim = 1
+        else:
+            raise NotImplementedError(f"Optimizer {optimizer} not implemented")
+        self.optimizer_values = torch.zeros((self.vocab_size, self.optimizer_dim), dtype=torch.float32)
 
         self.complete_vocab_size = complete_vocab_size
         self.parameter_client = parameter_client
@@ -46,16 +56,19 @@ class DistributedLookupEmbedder(LookupEmbedder):
         self.local_to_lapse_mapper = (
             torch.zeros(vocab_size, dtype=torch.long) - 1
         )  # maps the local embeddings to the embeddings in lapse
+        self.pull_dim = self.dim + self.optimizer_dim
+        self.pull_tensor = torch.empty((1, self.dim + self.optimizer_dim), dtype=torch.float32, device="cpu", requires_grad=False)
         self.num_pulled = 0
 
     def to_device(self):
         """Needs to be called after model.to(self.device)"""
         self.local_index_mapper = self.local_index_mapper.to(self._embeddings.weight.device)
+        self.optimizer_values = self.optimizer_values.to(self._embeddings.weight.device)
 
     def push_all(self):
         self.parameter_client.push(
             self.lapse_index[torch.arange(self.vocab_size)],
-            self._embeddings.weight.detach().cpu(),
+            torch.cat((self._embeddings.weight.detach().cpu(), self.optimizer_values.cpu()), dim=1),
         )
 
     def pull_all(self):
@@ -69,14 +82,19 @@ class DistributedLookupEmbedder(LookupEmbedder):
 
     @torch.no_grad()
     def _pull_embeddings(self, indexes):
+        device = self._embeddings.weight.device
         if self.load_batch:
             new_local_indexes = torch.arange(len(indexes), device=self._embeddings.weight.device, dtype=torch.long)
             pull_indexes = self.lapse_index[indexes.cpu()]
             self.local_index_mapper[indexes] = new_local_indexes
             self.local_to_lapse_mapper[new_local_indexes] = pull_indexes
-            pull_tensor = self._embeddings.weight[: len(indexes), :].detach().cpu()
+            #pull_tensor = self._embeddings.weight[: len(indexes), :].detach().cpu()
+            pull_tensor = self.pull_tensor.expand(len(indexes), self.pull_dim).contiguous()
             self.parameter_client.pull(pull_indexes, pull_tensor)
-            self._embeddings.weight.index_copy_(0, new_local_indexes, pull_tensor.to(self._embeddings.weight.device))
+            pull_tensor = pull_tensor.to(device)
+            pulled_embeddings, pulled_optim_values = torch.split(pull_tensor, [self.dim, self.optimizer_dim], dim=1)
+            self._embeddings.weight.index_copy_(0, new_local_indexes, pulled_embeddings)
+            self.optimizer_values.index_copy_(0, new_local_indexes, pulled_optim_values)
             return
         local_indexes = self.local_index_mapper[indexes]
         missing_mask = local_indexes == -1
