@@ -21,8 +21,11 @@ class KgeOptimizer:
             return optimizer
         if config.get("train.optimizer") in ["dist_adagrad", "dist_rowadagrad"]:
             is_row=False
+            use_lr_scheduler=False
             if config.get("train.optimizer") == "dist_rowadagrad":
                 is_row = True
+            if config.get("train.lr_scheduler") != "":
+                use_lr_scheduler = True
             optimizer = DistAdagrad(
                 model,
                 parameter_client=parameter_client,
@@ -33,6 +36,7 @@ class KgeOptimizer:
                 ],
                 async_write_back=[config.get("job.distributed.entity_async_write_back"), config.get("job.distributed.relation_async_write_back")],
                 is_row=is_row,
+                use_lr_scheduler=use_lr_scheduler,
                 **config.get("train.optimizer_args"),
             )
             return optimizer

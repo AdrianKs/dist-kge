@@ -41,6 +41,7 @@ class DistAdagrad(Optimizer):
         sync_levels=[],
         async_write_back=[],
         is_row=False,
+        use_lr_scheduler=False,
     ):
         params = [p for p in model.parameters() if p.requires_grad]
         if not 0.0 <= lr:
@@ -83,6 +84,9 @@ class DistAdagrad(Optimizer):
         # this array stores helper cpu tensors in which we pull data from the parameter
         # client. We don't want to create a new tensor in every step.
         self.pull_tensors = [None, None]
+        self.push_keys = [None, None]
+        self.push_tensors = [None, None]
+        self.use_lr_scheduler = use_lr_scheduler
 
         defaults = dict(
             lr=lr,
@@ -137,13 +141,17 @@ class DistAdagrad(Optimizer):
 
                 grad = p.grad
                 state = self.state[p]
-                self.parameter_client.step_optim(i)
-                state["step"] = self.parameter_client.get_step_optim(i)
-                if self.parameter_client.rank == 2:
-                    self.parameter_client.set_lr(group["lr"])
-                group["lr"] = self.parameter_client.get_lr()
-
-                # state["step"] += 1
+                if group["lr_decay"] > 0:
+                    # we only need to synchronize steps between workers if we actually
+                    #  use the step variable for something
+                    self.parameter_client.step_optim(i)
+                    state["step"] = self.parameter_client.get_step_optim(i)
+                else:
+                    state["step"] += 1
+                if self.use_lr_scheduler:
+                    if self.parameter_client.rank == 2:
+                        self.parameter_client.set_lr(group["lr"])
+                    group["lr"] = self.parameter_client.get_lr()
 
                 if group["weight_decay"] != 0:
                     if p.grad.is_sparse:
@@ -158,33 +166,13 @@ class DistAdagrad(Optimizer):
                     grad = (
                         grad.coalesce()
                     )  # the update is non-linear so indices must be unique
-                    grad_indices = grad._indices()
-                    grad_indices_flat = grad_indices.flatten()
+                    grad_indices = grad._indices()[0]
+                    #grad_indices_flat = grad_indices.flatten()
                     grad_values = grad._values()
                     size = grad.size()
 
                     # pull the current internal optimizer parameters
-                    if self.pull_tensors[i] is None:
-                        self.pull_tensors[i] = torch.zeros_like(p, device="cpu")
-                    if self.sync_levels[i] == "batch":
-                        update_indexes = grad_indices_flat.cpu()
-                    #    update_tensor = self.pull_tensors[i][:len(update_indexes)]
-                    #    keys_optim = (
-                    #            self.local_to_lapse_mappers[i]
-                    #            + self.lapse_optimizer_index_offset
-                    #    )[update_indexes]
-                    #    self.parameter_client.pull(
-                    #        keys_optim, update_tensor,
-                    #    )
-                    #    state_sum = update_tensor.to(state["sum"].device)
-                    #    #state["sum"][update_indexes] = update_tensor.to(
-                    #    #    state["sum"].device
-                    #    #)
-                        # TODO: when we move the optimizer value tensor in the model it is a new tensor and we still use the old tensor here...
-                        state_sum = self.optimizer_values[i][grad_indices_flat]
-                    else:
-                        # state_sum = state["sum"][grad_indices_flat]
-                        state_sum = self.optimizer_values[i][grad_indices_flat]
+                    state_sum = self.optimizer_values[i][grad_indices]
 
                     def make_sparse(values):
                         constructor = grad.new
@@ -198,28 +186,27 @@ class DistAdagrad(Optimizer):
                     state_sum.add_(sum_update_values)
                     #state["sum"].add_(make_sparse(sum_update_values))
                     if self.sync_levels[i] == "batch":
-                        #self.parameter_client.push(
-                        #    keys_optim,
-                        #    sum_update_values.cpu(),
-                        #    asynchronous=self.async_write_back[i]
-                        #)
                         pass
                     else:
                         # state["sum"][grad_indices_flat] = state_sum
-                        self.optimizer_values[i][grad_indices_flat] = state_sum
+                        self.optimizer_values[i][grad_indices] = state_sum
 
                     #std = state["sum"].sparse_mask(grad)
                     #std_values = std._values().sqrt_().add_(group["eps"])
                     std_values = state_sum.sqrt_().add_(group["eps"])
                     update_value = (grad_values / std_values).mul_(-clr)
                     if self.sync_levels[i] == "batch":
+                        update_indexes = grad_indices.cpu()
+                        self.push_keys[i] = self.local_to_lapse_mappers[i][update_indexes]
+                        self.push_tensors[i] = torch.cat((update_value, sum_update_values), dim=1).cpu()
                         self.parameter_client.push(
-                            self.local_to_lapse_mappers[i][update_indexes],
-                            torch.cat((update_value, sum_update_values), dim=1).cpu(),
+                            self.push_keys[i],
+                            self.push_tensors[i],
                             asynchronous=self.async_write_back[i]
                         )
                     else:
-                        p.add_(make_sparse(update_value))
+                        p.data.index_add_(0, grad_indices, update_value)
+                        #p.add_(make_sparse(update_value))
                     # p.add_(make_sparse(grad_values / std_values), alpha=-clr)
                 else:
                     # pull the current internal optimizer parameters
