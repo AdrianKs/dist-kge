@@ -174,11 +174,6 @@ class DistAdagrad(Optimizer):
                     # pull the current internal optimizer parameters
                     state_sum = self.optimizer_values[i][grad_indices]
 
-                    def make_sparse(values):
-                        constructor = grad.new
-                        if grad_indices.dim() == 0 or values.dim() == 0:
-                            return constructor().resize_as_(grad)
-                        return constructor(grad_indices, values, size)
                     if not self.is_row:
                         sum_update_values = grad_values.pow(2)
                     else:
@@ -242,76 +237,13 @@ class DistAdagrad(Optimizer):
 
         return loss
 
-    def pull_entities(self, entity_ids):
-        self._pull_parameters(entity_ids, 0)
-
-    def pull_relations(self, relation_ids):
-        self._pull_parameters(relation_ids, 1)
-
-    def _pull_parameters(self, ids, parameter_idx):
-        self.pulled_parameters[parameter_idx] = ids
-        local_ids = self.local_index_mappers[parameter_idx][ids]
-        lapse_ids = self.local_to_lapse_mappers[parameter_idx][local_ids]
-        for group in self.param_groups:
-            for i, p in enumerate(group["params"]):
-                if i != parameter_idx:
-                    continue
-                update_tensor = torch.zeros(
-                    (len(ids), p.size()[1]), dtype=torch.float32
-                )
-                keys_optim = lapse_ids + self.lapse_optimizer_index_offset
-                self.parameter_client.pull(
-                    keys_optim, update_tensor,
-                )
-                self.state[p]["sum"][local_ids] = update_tensor.to(
-                    self.state[p]["sum"].device
-                )
-
-    def set_entities(self):
-        self._set_parameters(0)
-
-    def set_relations(self):
-        self._set_parameters(1)
-
-    def _set_parameters(self, parameter_idx):
-        pulled_parameter_ids = self.pulled_parameters[parameter_idx]
-        lapse_optim_ids = (
-            self.lapse_indexes[parameter_idx][pulled_parameter_ids]
-            + self.lapse_optimizer_index_offset
-        )
-        local_ids = self.local_index_mappers[parameter_idx][pulled_parameter_ids]
-        for group in self.param_groups:
-            for i, p in enumerate(group["params"]):
-                if i != parameter_idx:
-                    continue
-                self.parameter_client.set(
-                    lapse_optim_ids.long(), self.state[p]["sum"][local_ids].cpu()
-                )
-
     def pull_all(self):
-        # get all optimizer parameters out of lapse
-        # only works if the optimizer has the complete size
+        """
+        loads optimizer values stored in distributed lookup embedder to state[sum]
+        used for checkpoint of complete model
+        embedder.pull_all needs to be called before this function.
+        """
         for group in self.param_groups:
             for i, p in enumerate(group["params"]):
-                if p.grad is None:
-                    continue
-                state = self.state[p]
-                update_tensor = torch.zeros_like(p)
-                keys_optim = (
-                    torch.arange(p.shape[0]) + self.lapse_optimizer_index_offset[i]
-                )
-                self.parameter_client.pull(keys_optim, update_tensor)
-                state["sum"][:, :] = update_tensor
+                self.state[p]["sum"][:, :] = self.optimizer_values[i]
 
-    def push_all(self):
-        # push all optimizer parameters into lapse
-        # only works if the optimizer has the complete size
-        for group in self.param_groups:
-            for i, p in enumerate(group["params"]):
-                if p.grad is None:
-                    continue
-                state = self.state[p]
-                keys_optim = (
-                    torch.arange(p.shape[0]) + self.lapse_optimizer_index_offset[i]
-                )
-                self.parameter_client.push(keys_optim, state["sum"].cpu())
