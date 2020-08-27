@@ -518,6 +518,7 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         sorted_partitions_keys = [0] * (len(partitions.keys()))
         num_entity_blocks = int(math.sqrt(len(partitions)))
         if self.scheduling_order == "sequential":
+            # 00 11 22 01 12 20 02 10 21
             sorted_partitions_keys = []
             for i in range(num_entity_blocks):
                 sorted_partitions_keys.append((i, i))
@@ -541,6 +542,18 @@ class TwoDBlockWorkScheduler(WorkScheduler):
             positions = np.random.permutation(np.arange(len(partitions.keys())))
             for i, bucket in zip(positions, partitions.keys()):
                 sorted_partitions_keys[i] = bucket
+        elif self.scheduling_order == "inside_out":
+            # 00 01 10 11 02 20 12 21 22
+            sorted_partitions_keys = []
+            for i in range(num_entity_blocks):
+                sorted_partitions_keys.append((i, i))
+                if i == num_entity_blocks - 1:
+                    break
+                for j in range(i):
+                    sorted_partitions_keys.append((j, i + 1))
+                    sorted_partitions_keys.append((i + 1, j))
+                sorted_partitions_keys.append((i, i + 1))
+                sorted_partitions_keys.append((i + 1, i))
         else:
             raise NotImplementedError()
         sorted_partitions = OrderedDict()
