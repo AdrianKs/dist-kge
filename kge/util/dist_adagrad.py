@@ -246,4 +246,6 @@ class DistAdagrad(Optimizer):
         for group in self.param_groups:
             for i, p in enumerate(group["params"]):
                 self.state[p]["sum"][:, :] = self.optimizer_values[i]
+                self.state[p]["step"] = self.parameter_client.get_step_optim(i)
+            group["lr"] = self.parameter_client.get_lr()
 
