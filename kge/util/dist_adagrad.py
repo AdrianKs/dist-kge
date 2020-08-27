@@ -1,3 +1,4 @@
+from collections import deque
 import torch
 import numpy as np
 from torch.optim.optimizer import Optimizer
@@ -87,6 +88,9 @@ class DistAdagrad(Optimizer):
         self.push_keys = [None, None]
         self.push_tensors = [None, None]
         self.use_lr_scheduler = use_lr_scheduler
+        self.entity_async_wait_values = deque()
+        self.relation_async_wait_values = deque()
+        self.async_wait_values = [self.entity_async_wait_values, self.relation_async_wait_values]
 
         defaults = dict(
             lr=lr,
@@ -194,11 +198,11 @@ class DistAdagrad(Optimizer):
                         update_indexes = grad_indices.cpu()
                         self.push_keys[i] = self.local_to_lapse_mappers[i][update_indexes]
                         self.push_tensors[i] = torch.cat((update_value, sum_update_values), dim=1).cpu()
-                        self.parameter_client.push(
+                        self.async_wait_values[i].append(self.parameter_client.push(
                             self.push_keys[i],
                             self.push_tensors[i],
                             asynchronous=self.async_write_back[i]
-                        )
+                        ))
                     else:
                         p.data.index_add_(0, grad_indices, update_value)
                         #p.add_(make_sparse(update_value))

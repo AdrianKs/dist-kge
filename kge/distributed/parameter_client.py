@@ -19,6 +19,9 @@ class KgeParameterClient:
     def localize(self, keys, asynchronous=False):
         raise NotImplementedError()
 
+    def wait(self, wait_value):
+        pass
+
     def barrier(self):
         raise NotImplementedError()
 
@@ -108,7 +111,7 @@ class LapseParameterClient(lapse.Worker, KgeParameterClient):
         super(LapseParameterClient, self).pull(keys, pull_tensor, asynchronous)
 
     def push(self, keys, push_tensor: torch.Tensor, asynchronous=False):
-        super(LapseParameterClient, self).push(keys, push_tensor, asynchronous)
+        return super(LapseParameterClient, self).push(keys, push_tensor, asynchronous)
 
     def set(self, keys, set_tensor, asynchronous=False):
         super(LapseParameterClient, self).set(keys, set_tensor)
@@ -118,6 +121,9 @@ class LapseParameterClient(lapse.Worker, KgeParameterClient):
 
     def barrier(self):
         dist.barrier(group=self.worker_group)
+
+    def wait(self, wait_value):
+        super(LapseParameterClient, self).wait(wait_value)
 
     def shutdown(self):
         super(LapseParameterClient, self).push(

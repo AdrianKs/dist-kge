@@ -1063,11 +1063,17 @@ class TrainingJobNegativeSampling(TrainingJob):
         if self.config.get("job.distributed.load_batch"):
             if self.entity_sync_level == "batch":
                 unique_entities = torch.unique(torch.cat((batch_triples[:, [S,O]].view(-1), batch_negative_samples[S].unique_samples(), batch_negative_samples[O].unique_samples())))
+                for wait_value in self.optimizer.entity_async_wait_values:
+                    self.parameter_client.wait(wait_value)
+                self.optimizer.entity_async_wait_values.clear()
                 if self.entity_localize:
                     self.model.get_s_embedder().localize(unique_entities)
                 self.model.get_s_embedder()._pull_embeddings(unique_entities)
             if self.relation_sync_level == "batch":
                 unique_relations = torch.unique(torch.cat((batch_triples[:, [P]].view(-1), batch_negative_samples[P].unique_samples())))
+                for wait_value in self.optimizer.relation_async_wait_values:
+                    self.parameter_client.wait(wait_value)
+                self.optimizer.relation_async_wait_values.clear()
                 if self.relation_localize:
                     self.model.get_p_embedder().localize(unique_relations)
                 self.model.get_p_embedder()._pull_embeddings(unique_relations)
