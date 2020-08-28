@@ -70,6 +70,17 @@ class WorkScheduler(mp.get_context("spawn").Process):
                 num_clients=num_clients,
                 dataset_folder=dataset_folder,
             )
+        elif partition_type == "random_partition":
+            return RandomWorkScheduler(
+                world_size=world_size,
+                master_ip=master_ip,
+                master_port=master_port,
+                num_partitions=num_partitions,
+                num_clients=num_clients,
+                dataset=dataset,
+                dataset_folder=dataset_folder,
+                repartition_epoch=repartition_epoch,
+            )
         elif partition_type == "relation_partition":
             return RelationWorkScheduler(
                 world_size=world_size,
@@ -351,6 +362,54 @@ class BlockWorkScheduler(WorkScheduler):
             for i in partition_indexes
         ]
         return partitions
+
+
+class RandomWorkScheduler(WorkScheduler):
+    def __init__(
+        self,
+        world_size,
+        master_ip,
+        master_port,
+        num_partitions,
+        num_clients,
+        dataset,
+        dataset_folder,
+        repartition_epoch,
+    ):
+        self.partition_type = "random_partition"
+        self.dataset = dataset
+        self.repartition_epoch = repartition_epoch
+        super(RandomWorkScheduler, self).__init__(
+            world_size,
+            master_ip,
+            master_port,
+            num_partitions,
+            num_clients,
+            dataset_folder,
+        )
+
+    def _next_work(
+            self, rank
+    ) -> Tuple[
+        Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor], bool
+    ]:
+        """add work/partitions to the list of work to do"""
+        try:
+            return self.partitions[self.work_to_do.pop()], None, None, False
+        except IndexError:
+            return None, None, None, False
+
+    def _load_partitions(self, dataset_folder, num_partitions):
+        num_triples = len(self.dataset.split("train"))
+        permuted_triple_index = torch.randperm(num_triples)
+        partitions = list(torch.chunk(permuted_triple_index, num_partitions))
+        partitions = [p.clone() for p in partitions]
+        return partitions
+
+    def _refill_work(self):
+        if self.repartition_epoch:
+            self.partitions = self._load_partitions(None, self.num_partitions)
+        super(RandomWorkScheduler, self)._refill_work()
 
 
 class RelationWorkScheduler(WorkScheduler):
