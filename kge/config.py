@@ -495,6 +495,9 @@ class Config:
     @staticmethod
     def best_or_last_checkpoint_file(path: str) -> str:
         """Return best (if present) or last checkpoint path for a given folder path."""
+        if not os.path.exists(path):
+            raise Exception("Path or file {} does not exist".format(path))
+
         config = Config(folder=path, load_default=False)
         checkpoint_file = config.checkpoint_file("best")
         if os.path.isfile(checkpoint_file):
@@ -677,6 +680,25 @@ def _process_deprecated_options(options: Dict[str, Any]):
             else:
                 raise ValueError(f"key {key} is deprecated and has been removed.")
 
+    # deletes a key with a regular expression if it takes the given value (else error)
+    def delete_key_re_with_default_value(key_regex, value):
+        regex = re.compile(key_regex)
+        for old_key in list(options.keys()):
+            if regex.match(old_key):
+                if options[old_key] == value:
+                    print(
+                        f"Warning: key {old_key} is deprecated and has been removed."
+                        " Ignoring key since it has its value is compatible with the"
+                        " current implementation.",
+                        file=sys.stderr,
+                    )
+                    del options[old_key]
+                else:
+                    raise ValueError(
+                        f"Warning: key {old_key} is deprecated and has been removed."
+                        f" The specified value {options[old_key]} is not supported any more."
+                    )
+
     # renames a set of keys matching a regular expression
     def rename_keys_re(key_regex, replacement):
         renamed_keys = set()
@@ -697,6 +719,12 @@ def _process_deprecated_options(options: Dict[str, Any]):
                 if rename_value(key, old_value, new_value):
                     renamed_keys.add(key)
         return renamed_keys
+
+    # 31.8.2020
+    rename_key("negative_sampling.chunk_size", "train.subbatch_size")
+
+    # 13.6.2020
+    delete_key_re_with_default_value(".*normalize.with_grad", False)
 
     # 10.6.2020
     rename_key("eval.filter_splits", "entity_ranking.filter_splits")
@@ -784,4 +812,5 @@ def _process_deprecated_options(options: Dict[str, Any]):
         "eval.metric_per_argument_frequency_perc",
         "entity_ranking.metrics_per.argument_frequency",
     )
+
     return options

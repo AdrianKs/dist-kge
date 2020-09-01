@@ -638,10 +638,14 @@ class KgeModel(KgeBase):
         self._entity_embedder.prepare_job(job, **kwargs)
         self._relation_embedder.prepare_job(job, **kwargs)
 
-        def append_num_parameter(job, trace):
-            trace["num_parameters"] = sum(map(lambda p: p.numel(), self.parameters()))
+        from kge.job import TrainingOrEvaluationJob
+        if isinstance(job, TrainingOrEvaluationJob):
+            def append_num_parameter(job):
+                job.current_trace["epoch"]["num_parameters"] = sum(
+                    map(lambda p: p.numel(), self.parameters())
+                )
 
-        job.post_epoch_trace_hooks.append(append_num_parameter)
+            job.post_epoch_hooks.append(append_num_parameter)
 
     def penalty(self, **kwargs) -> List[Tensor]:
         # Note: If the subject and object embedder are identical, embeddings may be
@@ -649,19 +653,47 @@ class KgeModel(KgeBase):
         # weighted).
         if "batch" in kwargs and "triples" in kwargs["batch"]:
             triples = kwargs["batch"]["triples"].to(self.config.get("job.device"))
-            return (
-                super().penalty(**kwargs)
-                + self.get_s_embedder().penalty(indexes=triples[:, S], **kwargs)
-                + self.get_p_embedder().penalty(indexes=triples[:, P], **kwargs)
-                + self.get_o_embedder().penalty(indexes=triples[:, O], **kwargs)
+            penalty_result = super().penalty(**kwargs) + self.get_p_embedder().penalty(
+                indexes=triples[:, P], **kwargs
             )
+            if self.get_s_embedder() is self.get_o_embedder():
+                weighted = self.get_s_embedder().get_option("regularize_args.weighted")
+                entity_indexes = None
+                if weighted:
+                    entity_indexes = torch.cat(
+                        (triples[:, S].view(-1, 1), triples[:, O].view(-1, 1)), dim=1
+                    )
+                entity_penalty_result = self.get_s_embedder().penalty(
+                    indexes=entity_indexes, **kwargs,
+                )
+                if not weighted:
+                    # backwards compatibility
+                    for penalty in entity_penalty_result:
+                        for p in penalty:
+                            p *= 2
+                penalty_result += entity_penalty_result
+            else:
+                penalty_result += self.get_s_embedder().penalty(
+                    indexes=triples[:, S], **kwargs
+                )
+                penalty_result += self.get_o_embedder().penalty(
+                    indexes=triples[:, O], **kwargs
+                )
+            return penalty_result
         else:
-            return (
-                super().penalty(**kwargs)
-                + self.get_s_embedder().penalty(**kwargs)
-                + self.get_p_embedder().penalty(**kwargs)
-                + self.get_o_embedder().penalty(**kwargs)
+            penalty_result = super().penalty(**kwargs) + self.get_p_embedder().penalty(
+                **kwargs
             )
+            if self.get_s_embedder() is self.get_o_embedder():
+                entity_penalty_result = self.get_s_embedder().penalty(**kwargs)
+                for penalty in entity_penalty_result:
+                    for p in penalty:
+                        p *= 2
+                penalty_result += entity_penalty_result
+            else:
+                penalty_result += self.get_s_embedder().penalty(**kwargs)
+                penalty_result += self.get_o_embedder().penalty(**kwargs)
+            return penalty_result
 
     def get_s_embedder(self) -> KgeEmbedder:
         return self._entity_embedder
