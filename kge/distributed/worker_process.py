@@ -34,8 +34,8 @@ class WorkerProcessPool:
             parameters = torch.empty((num_keys, embedding_dim + optimizer_dim), dtype=torch.float32, requires_grad=False).share_memory_()
         for rank in range(num_workers_machine):
             configs[rank] = deepcopy(config)
-            configs[rank].set(config.get("model") + ".create_complete", False)
-            configs[rank].folder = os.path.join(config.folder, f"server-{rank}")
+            # configs[rank].set(config.get("model") + ".create_complete", False)
+            # configs[rank].folder = os.path.join(config.folder, f"server-{rank}")
             configs[rank].init_folder()
             worker = WorkerProcess(
                 rank + already_init_workers,
@@ -145,18 +145,22 @@ class WorkerProcess(mp.get_context("spawn").Process):
         if parameter_client.rank == MIN_RANK and self.checkpoint is not None:
             # Todo: we still create a complete new job after creating the resume job
             #  therefore epoch numbers will not be handled correctly, for example
-            job = Job.create_from(self.checkpoint)
+            job = Job.create_from(self.checkpoint, parameter_client=parameter_client)
             job.model.get_s_embedder().push_all()
             job.model.get_p_embedder().push_all()
-            job.optimizer.push_all()
+            #job.optimizer.push_all()
             init_for_load_only = True
-            del self.checkpoint
+            #del self.checkpoint
         job = Job.create(
             configs[w],
             datasets[w],
             parameter_client=parameter_client,
             init_for_load_only=init_for_load_only,
         )
+        if parameter_client.rank == MIN_RANK and self.checkpoint is not None:
+            job.epoch = self.checkpoint["epoch"]
+            job.valid_trace = self.checkpoint["valid_trace"]
+            del self.checkpoint
         job.run()
 
         job.work_scheduler_client.shutdown()

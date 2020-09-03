@@ -604,6 +604,7 @@ class KgeModel(KgeBase):
         dataset: Optional[Dataset] = None,
         use_tmp_log_folder=True,
         new_config: Config = None,
+        parameter_client=None,
     ) -> "KgeModel":
         """Loads a model from a checkpoint file of a training job or a packaged model.
 
@@ -628,7 +629,7 @@ class KgeModel(KgeBase):
             if not config.log_folder or not os.path.exists(config.log_folder):
                 config.log_folder = "."
         dataset = Dataset.create_from(checkpoint, config, dataset, preload_data=False)
-        model = KgeModel.create(config, dataset, init_for_load_only=True)
+        model = KgeModel.create(config, dataset, init_for_load_only=True, parameter_client=parameter_client)
         model.load(checkpoint["model"])
         model.eval()
         return model

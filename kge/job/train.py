@@ -229,8 +229,10 @@ class TrainingJob(TrainingOrEvaluationJob):
                     range(len(self.valid_trace)),
                     key=lambda index: self.valid_trace[index][metric_name],
                 )
-                if best_index == len(self.valid_trace) - 1:
-                    self.save(self.config.checkpoint_file("best"))
+                # we are now saving the best checkpoint directly after validating
+                # otherwise we would have to create the complete model again here
+                # if best_index == len(self.valid_trace) - 1:
+                #     self.save(self.config.checkpoint_file("best"))
                 if (
                     patience > 0
                     and len(self.valid_trace) > patience
@@ -292,6 +294,9 @@ class TrainingJob(TrainingOrEvaluationJob):
                 #  in the checkpoint
                 # create a new complete model, to be able to validate and store
                 self.config.set(self.config.get("model") + ".create_complete", True)
+                worker_folder = self.config.folder
+                valid_folder = os.path.dirname(worker_folder)
+                self.config.folder = valid_folder
                 self.config.set("job.device", "cpu")
                 self.model = KgeModel.create(
                     self.config, self.dataset, parameter_client=self.parameter_client
@@ -327,6 +332,16 @@ class TrainingJob(TrainingOrEvaluationJob):
 
                 # create checkpoint and delete old one, if necessary
                 self.save(self.config.checkpoint_file(self.epoch))
+                if (
+                        len(self.valid_trace) > 0
+                        and self.valid_trace[-1]["epoch"] == self.epoch
+                ):
+                    best_index = max(
+                        range(len(self.valid_trace)),
+                        key=lambda index: self.valid_trace[index][metric_name],
+                    )
+                    if best_index == len(self.valid_trace) - 1:
+                        self.save(self.config.checkpoint_file("best"))
                 if self.epoch > 1:
                     delete_checkpoint_epoch = -1
                     if checkpoint_every == 0:
@@ -359,6 +374,7 @@ class TrainingJob(TrainingOrEvaluationJob):
                                 )
                             )
                 self.config.set(self.config.get("model") + ".create_complete", False)
+                self.config.folder = worker_folder
                 self.model = self.model.cpu()
                 del self.optimizer
                 del self.model
