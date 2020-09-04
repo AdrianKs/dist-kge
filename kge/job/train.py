@@ -288,7 +288,7 @@ class TrainingJob(TrainingOrEvaluationJob):
             gc.collect()
             torch.cuda.empty_cache()
             self.parameter_client.barrier()
-            if self.parameter_client.rank == MIN_RANK:
+            if self.parameter_client.rank == MIN_RANK and self.config.get("valid.every") > 0 and self.epoch % self.config.get("valid.every") == 0:
                 # move current small model to a tmp model
                 # self.model = self.model.cpu()
                 tmp_model = self.model
