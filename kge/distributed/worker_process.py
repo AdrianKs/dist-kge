@@ -34,7 +34,7 @@ class WorkerProcessPool:
             parameters = torch.empty((num_keys, embedding_dim + optimizer_dim), dtype=torch.float32, requires_grad=False).share_memory_()
         for rank in range(num_workers_machine):
             configs[rank] = deepcopy(config)
-            # configs[rank].set(config.get("model") + ".create_complete", False)
+            configs[rank].set(config.get("model") + ".create_complete", False)
             # configs[rank].folder = os.path.join(config.folder, f"server-{rank}")
             configs[rank].init_folder()
             worker = WorkerProcess(
@@ -122,7 +122,7 @@ class WorkerProcess(mp.get_context("spawn").Process):
         worker_id = self.rank
         configs[w] = deepcopy(self.config)
         configs[w].set("job.device", device_pool[worker_id % len(device_pool)])
-        configs[w].folder = os.path.join(self.config.folder, f"worker-{w}")
+        configs[w].folder = os.path.join(self.config.folder, f"worker-{self.rank}")
         configs[w].init_folder()
         datasets[w] = deepcopy(self.dataset)
         # datasets[w] = Dataset.create(

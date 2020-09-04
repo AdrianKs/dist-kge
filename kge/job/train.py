@@ -105,6 +105,7 @@ class TrainingJob(TrainingOrEvaluationJob):
             init_model.get_s_embedder().push_all()
             init_model.get_p_embedder().push_all()
             del init_model
+            gc.collect()
             self.config.set(self.config.get("model") + ".create_complete", False)
         self.parameter_client.barrier()
 
