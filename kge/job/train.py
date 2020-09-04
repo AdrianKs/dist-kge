@@ -334,7 +334,7 @@ class TrainingJob(TrainingOrEvaluationJob):
                     self.kge_lr_scheduler.step()
 
                 # create checkpoint and delete old one, if necessary
-                # self.save(self.config.checkpoint_file(self.epoch))
+                self.save(self.config.checkpoint_file(self.epoch))
                 if (
                         len(self.valid_trace) > 0
                         and self.valid_trace[-1]["epoch"] == self.epoch
@@ -499,8 +499,6 @@ class TrainingJob(TrainingOrEvaluationJob):
 
             # process each batch
             for batch_index, batch in enumerate(self.loader):
-                if batch_index > 20:
-                    break
                 # create initial batch trace (yet incomplete)
                 self.current_trace["batch"] = {
                     "type": self.type_str,
