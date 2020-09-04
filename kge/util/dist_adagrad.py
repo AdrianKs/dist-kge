@@ -107,17 +107,7 @@ class DistAdagrad(Optimizer):
             for i, p in enumerate(group["params"]):
                 state = self.state[p]
                 state["step"] = 0
-                if not is_row:
-                    state["sum"] = torch.full_like(
-                        p, initial_accumulator_value, memory_format=torch.preserve_format
-                    )
-                else:
-                    state["sum"] = torch.full((len(p), 1), initial_accumulator_value, dtype=torch.float32, device=p.device)#memory_format=torch.preserve_format)
-                # TODO: we need to find a good way to init complete lapse at the
-                #  beginning, so that workers won't overwrite each other
-                # initialize optimizer parameters in lapse
-                # self.lapse_worker.push(self.optimizer_lapse_indexes[i],
-                #                       np.full((len(self))))
+                state["sum"] = self.optimizer_values[i]
 
     def share_memory(self):
         for group in self.param_groups:
