@@ -107,7 +107,7 @@ class DistAdagrad(Optimizer):
             for i, p in enumerate(group["params"]):
                 state = self.state[p]
                 state["step"] = 0
-                state["sum"] = self.optimizer_values[i]
+                #state["sum"] = self.optimizer_values[i]
 
     def share_memory(self):
         for group in self.param_groups:
@@ -239,7 +239,7 @@ class DistAdagrad(Optimizer):
         """
         for group in self.param_groups:
             for i, p in enumerate(group["params"]):
-                self.state[p]["sum"][:, :] = self.optimizer_values[i]
+                self.state[p]["sum"] = self.optimizer_values[i]
                 self.state[p]["step"] = self.parameter_client.get_step_optim(i)
             group["lr"] = self.parameter_client.get_lr()
 

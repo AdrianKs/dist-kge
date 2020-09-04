@@ -284,11 +284,13 @@ class TrainingJob(TrainingOrEvaluationJob):
 
             print("done worker: ", self.parameter_client.rank)
             self.model = self.model.cpu()
+            self.valid_job.model = self.model
+            gc.collect()
             torch.cuda.empty_cache()
             self.parameter_client.barrier()
             if self.parameter_client.rank == MIN_RANK:
                 # move current small model to a tmp model
-                self.model = self.model.cpu()
+                # self.model = self.model.cpu()
                 tmp_model = self.model
                 tmp_optimizer = self.optimizer
                 # TODO: we also need to handle the learning rate scheduler somehow
@@ -310,9 +312,9 @@ class TrainingJob(TrainingOrEvaluationJob):
                 self.optimizer.pull_all()
                 self.config.set("job.device", self.device)
                 self.model = self.model.to(self.device)
-                # we need to move some mappers seperately to device
-                self.model.get_s_embedder().to_device()
-                self.model.get_p_embedder().to_device()
+                # we need to move some mappers separately to device
+                self.model.get_s_embedder().to_device(move_optim_data=False)
+                self.model.get_p_embedder().to_device(move_optim_data=False)
                 self.valid_job.model = self.model
                 # validate and update learning rate
                 if (
@@ -332,7 +334,7 @@ class TrainingJob(TrainingOrEvaluationJob):
                     self.kge_lr_scheduler.step()
 
                 # create checkpoint and delete old one, if necessary
-                self.save(self.config.checkpoint_file(self.epoch))
+                # self.save(self.config.checkpoint_file(self.epoch))
                 if (
                         len(self.valid_trace) > 0
                         and self.valid_trace[-1]["epoch"] == self.epoch
@@ -379,7 +381,9 @@ class TrainingJob(TrainingOrEvaluationJob):
                 self.model = self.model.cpu()
                 del self.optimizer
                 del self.model
+                del self.valid_job.model
                 gc.collect()
+                torch.cuda.empty_cache()
                 self.model = tmp_model
                 self.optimizer = tmp_optimizer
             else:
@@ -495,6 +499,8 @@ class TrainingJob(TrainingOrEvaluationJob):
 
             # process each batch
             for batch_index, batch in enumerate(self.loader):
+                if batch_index > 20:
+                    break
                 # create initial batch trace (yet incomplete)
                 self.current_trace["batch"] = {
                     "type": self.type_str,

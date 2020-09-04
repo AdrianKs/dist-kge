@@ -60,10 +60,11 @@ class DistributedLookupEmbedder(LookupEmbedder):
         self.pull_tensor = torch.empty((1, self.dim + self.optimizer_dim), dtype=torch.float32, device="cpu", requires_grad=False)
         self.num_pulled = 0
 
-    def to_device(self):
+    def to_device(self, move_optim_data=True):
         """Needs to be called after model.to(self.device)"""
         self.local_index_mapper = self.local_index_mapper.to(self._embeddings.weight.device)
-        self.optimizer_values = self.optimizer_values.to(self._embeddings.weight.device)
+        if move_optim_data:
+            self.optimizer_values = self.optimizer_values.to(self._embeddings.weight.device)
 
     def push_all(self):
         self.parameter_client.push(
