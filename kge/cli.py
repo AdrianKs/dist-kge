@@ -96,7 +96,7 @@ def main():
         ]:
             continue
         if value is not None:
-            if key == "search.device_pool":
+            if key == "search.device_pool" or key == "job.device_pool":
                 value = "".join(value).split(",")
             try:
                 if isinstance(config.get(key), bool):
