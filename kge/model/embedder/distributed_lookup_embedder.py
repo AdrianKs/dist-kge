@@ -57,7 +57,8 @@ class DistributedLookupEmbedder(LookupEmbedder):
             torch.zeros(vocab_size, dtype=torch.long) - 1
         )  # maps the local embeddings to the embeddings in lapse
         self.pull_dim = self.dim + self.optimizer_dim
-        self.pull_tensor = torch.empty((1, self.dim + self.optimizer_dim), dtype=torch.float32, device="cpu", requires_grad=False)
+        # self.pull_tensor = torch.empty((1, self.dim + self.optimizer_dim), dtype=torch.float32, device="cpu", requires_grad=False)
+        self.pull_tensor = torch.empty((self.vocab_size, self.dim + self.optimizer_dim), dtype=torch.float32, device="cpu", requires_grad=False)
         self.num_pulled = 0
 
     def to_device(self, move_optim_data=True):
@@ -90,7 +91,8 @@ class DistributedLookupEmbedder(LookupEmbedder):
             self.local_index_mapper[indexes] = new_local_indexes
             self.local_to_lapse_mapper[new_local_indexes] = pull_indexes
             #pull_tensor = self._embeddings.weight[: len(indexes), :].detach().cpu()
-            pull_tensor = self.pull_tensor.expand(len(indexes), self.pull_dim).contiguous()
+            pull_tensor = self.pull_tensor[:len(indexes)]
+            # pull_tensor = self.pull_tensor.expand(len(indexes), self.pull_dim).contiguous()
             self.parameter_client.pull(pull_indexes, pull_tensor)
             pull_tensor = pull_tensor.to(device)
             pulled_embeddings, pulled_optim_values = torch.split(pull_tensor, [self.dim, self.optimizer_dim], dim=1)
