@@ -258,7 +258,7 @@ class TrainingJob(TrainingOrEvaluationJob):
                         )
                     )
                     self.parameter_client.shutdown()
-                    self.work_scheduler_client.shutdown()
+                    # self.work_scheduler_client.shutdown()
                     # break
 
             # should we stop?
@@ -283,15 +283,15 @@ class TrainingJob(TrainingOrEvaluationJob):
             self.model.meta["train_trace_entry"] = trace_entry
 
             print("done worker: ", self.parameter_client.rank)
-            self.model = self.model.cpu()
-            self.valid_job.model = self.model
+            tmp_model = self.model.cpu()
+            self.valid_job.model = tmp_model
+            del self.model
             gc.collect()
             torch.cuda.empty_cache()
             self.parameter_client.barrier()
             if self.parameter_client.rank == MIN_RANK and self.config.get("valid.every") > 0 and self.epoch % self.config.get("valid.every") == 0:
                 # move current small model to a tmp model
                 # self.model = self.model.cpu()
-                tmp_model = self.model
                 tmp_optimizer = self.optimizer
                 # TODO: we also need to handle the learning rate scheduler somehow
                 #  in the checkpoint
@@ -378,18 +378,21 @@ class TrainingJob(TrainingOrEvaluationJob):
                             )
                 self.config.set(self.config.get("model") + ".create_complete", False)
                 self.config.folder = worker_folder
-                self.model = self.model.cpu()
+                # self.model = self.model.cpu()
                 del self.optimizer
                 del self.model
                 del self.valid_job.model
                 gc.collect()
                 torch.cuda.empty_cache()
-                self.model = tmp_model
                 self.optimizer = tmp_optimizer
+                self.model = tmp_model.to(self.device)
+                del tmp_optimizer
             else:
                 self.kge_lr_scheduler.step()
             self.parameter_client.barrier()
-            self.model = self.model.to(self.device)
+            self.model = tmp_model.to(self.device)
+            del tmp_model
+            gc.collect()
 
         self.trace(event="train_completed")
 

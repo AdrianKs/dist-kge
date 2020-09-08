@@ -646,7 +646,7 @@ class KgeModel(KgeBase):
                     map(lambda p: p.numel(), self.parameters())
                 )
 
-            job.post_epoch_hooks.append(append_num_parameter)
+            # job.post_epoch_hooks.append(append_num_parameter)
 
     def penalty(self, **kwargs) -> List[Tensor]:
         # Note: If the subject and object embedder are identical, embeddings may be
