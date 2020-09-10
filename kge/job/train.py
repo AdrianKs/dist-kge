@@ -2,7 +2,6 @@ import itertools
 import os
 import math
 import time
-import sys
 import traceback
 import gc
 from collections import defaultdict
@@ -27,7 +26,7 @@ from kge.distributed.parameter_client import KgeParameterClient
 from kge.distributed.misc import MIN_RANK
 
 # from kge.distributed import KgeParameterClient, SchedulerClient
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional
 import kge.job.util
 
 SLOTS = [0, 1, 2]
