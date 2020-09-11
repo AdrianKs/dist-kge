@@ -467,6 +467,10 @@ class TrainingJob(TrainingOrEvaluationJob):
             forward_time = 0.0
             backward_time = 0.0
             optimizer_time = 0.0
+            unique_time = 0.0
+            entity_pull_time = 0.0
+            relation_pull_time = 0.0
+            cpu_gpu_time = 0.0
             scheduler_time = -time.time()
 
             # load new work package
@@ -677,6 +681,10 @@ class TrainingJob(TrainingOrEvaluationJob):
                 forward_time += batch_forward_time
                 backward_time += batch_backward_time
                 optimizer_time += batch_optimizer_time
+                entity_pull_time += batch_result.entity_pull_time
+                relation_pull_time += batch_result.relation_pull_time
+                unique_time += batch_result.unique_time
+                cpu_gpu_time += batch_result.cpu_gpu_time
 
             # all done; now trace and log
             epoch_time += time.time()
@@ -703,6 +711,10 @@ class TrainingJob(TrainingOrEvaluationJob):
                     avg_cost=sum_loss / self.num_examples + sum_penalty / len(self.loader),
                     epoch_time=epoch_time,
                     prepare_time=prepare_time,
+                    unique_time=unique_time,
+                    entity_pull_time=entity_pull_time,
+                    relation_pull_time=relation_pull_time,
+                    cpu_gpu_time=cpu_gpu_time,
                     forward_time=forward_time,
                     backward_time=backward_time,
                     optimizer_time=optimizer_time,
@@ -756,6 +768,10 @@ class TrainingJob(TrainingOrEvaluationJob):
         prepare_time: float = 0.0
         forward_time: float = 0.0
         backward_time: float = 0.0
+        entity_pull_time: float = 0.0
+        relation_pull_time: float = 0.0
+        unique_time: float = 0.0
+        cpu_gpu_time: float = 0.0
 
     def _process_batch(self, batch_index, batch) -> _ProcessBatchResult:
         "Breaks a batch into subbatches and processes them in turn."
@@ -1170,21 +1186,29 @@ class TrainingJobNegativeSampling(TrainingJob):
         ]
         if self.config.get("job.distributed.load_batch"):
             if self.entity_sync_level == "batch":
+                result.unique_time -= time.time()
                 unique_entities = torch.unique(torch.cat((batch["triples"][:, [S,O]].view(-1), batch["negative_samples"][S].unique_samples(), batch["negative_samples"][O].unique_samples())))
+                result.unique_time += time.time()
                 for wait_value in self.optimizer.entity_async_wait_values:
                     self.parameter_client.wait(wait_value)
                 self.optimizer.entity_async_wait_values.clear()
                 if self.entity_localize:
                     self.model.get_s_embedder().localize(unique_entities)
-                self.model.get_s_embedder()._pull_embeddings(unique_entities)
+                entity_pull_time, cpu_gpu_time = self.model.get_s_embedder()._pull_embeddings(unique_entities)
+                result.entity_pull_time += entity_pull_time
+                result.cpu_gpu_time += cpu_gpu_time
             if self.relation_sync_level == "batch":
+                result.unique_time -= time.time()
                 unique_relations = torch.unique(torch.cat((batch["triples"][:, [P]].view(-1), batch["negative_samples"][P].unique_samples())))
+                result.unique_time += time.time()
                 for wait_value in self.optimizer.relation_async_wait_values:
                     self.parameter_client.wait(wait_value)
                 self.optimizer.relation_async_wait_values.clear()
                 if self.relation_localize:
                     self.model.get_p_embedder().localize(unique_relations)
-                self.model.get_p_embedder()._pull_embeddings(unique_relations)
+                relation_pull_time, cpu_gpu_time = self.model.get_p_embedder()._pull_embeddings(unique_relations)
+                result.relation_pull_time += relation_pull_time
+                result.cpu_gpu_time += cpu_gpu_time
 
         batch["labels"] = [None] * 3  # reuse label tensors b/w subbatches
         result.size = len(batch["triples"])

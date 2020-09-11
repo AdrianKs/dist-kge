@@ -1,3 +1,4 @@
+import time
 from torch import Tensor
 import torch.nn
 import torch.nn.functional
@@ -84,6 +85,8 @@ class DistributedLookupEmbedder(LookupEmbedder):
 
     @torch.no_grad()
     def _pull_embeddings(self, indexes):
+        cpu_gpu_time = 0.0
+        pull_time = 0.0
         device = self._embeddings.weight.device
         if self.load_batch:
             new_local_indexes = torch.arange(len(indexes), device=self._embeddings.weight.device, dtype=torch.long)
@@ -93,12 +96,16 @@ class DistributedLookupEmbedder(LookupEmbedder):
             #pull_tensor = self._embeddings.weight[: len(indexes), :].detach().cpu()
             pull_tensor = self.pull_tensor[:len(indexes)]
             # pull_tensor = self.pull_tensor.expand(len(indexes), self.pull_dim).contiguous()
+            pull_time -= time.time()
             self.parameter_client.pull(pull_indexes, pull_tensor)
+            pull_time += time.time()
+            cpu_gpu_time -= time.time()
             pull_tensor = pull_tensor.to(device)
+            cpu_gpu_time += time.time()
             pulled_embeddings, pulled_optim_values = torch.split(pull_tensor, [self.dim, self.optimizer_dim], dim=1)
             self._embeddings.weight.index_copy_(0, new_local_indexes, pulled_embeddings)
             self.optimizer_values.index_copy_(0, new_local_indexes, pulled_optim_values)
-            return
+            return pull_time, cpu_gpu_time
         local_indexes = self.local_index_mapper[indexes]
         missing_mask = local_indexes == -1
         num_missing = torch.sum(missing_mask).item()
