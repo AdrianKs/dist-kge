@@ -1170,7 +1170,15 @@ class TrainingJobNegativeSampling(TrainingJob):
             negative_samples = list()
             for slot in [S, P, O]:
                 negative_samples.append(self._sampler.sample(triples, slot))
-            return {"triples": triples, "negative_samples": negative_samples}
+            unique_time = -time.time()
+            unique_entities = torch.unique(torch.cat((triples[:, [S, O]].view(-1),
+                                                      negative_samples[S].unique_samples(),
+                                                      negative_samples[
+                                                          O].unique_samples())))
+            unique_relations = torch.unique(torch.cat((
+                triples[:, [P]].view(-1), negative_samples[P].unique_samples())))
+            unique_time += time.time()
+            return {"triples": triples, "negative_samples": negative_samples, "unique_entities": unique_entities, "unique_relations": unique_relations, "unique_time": unique_time}
 
         return collate
 
@@ -1186,11 +1194,13 @@ class TrainingJobNegativeSampling(TrainingJob):
         batch["negative_samples"] = [
             ns.to(self.device) for ns in batch["negative_samples"]
         ]
+        result.unique_time += batch["unique_time"]
         if self.config.get("job.distributed.load_batch"):
             if self.entity_sync_level == "batch":
-                result.unique_time -= time.time()
-                unique_entities = torch.unique(torch.cat((batch["triples"][:, [S,O]].view(-1), batch["negative_samples"][S].unique_samples(), batch["negative_samples"][O].unique_samples())))
-                result.unique_time += time.time()
+                #result.unique_time -= time.time()
+                unique_entities = batch["unique_entities"]
+                # unique_entities = torch.unique(torch.cat((batch["triples"][:, [S,O]].view(-1), batch["negative_samples"][S].unique_samples(), batch["negative_samples"][O].unique_samples())))
+                #result.unique_time += time.time()
                 for wait_value in self.optimizer.entity_async_wait_values:
                     self.parameter_client.wait(wait_value)
                 self.optimizer.entity_async_wait_values.clear()
@@ -1200,9 +1210,10 @@ class TrainingJobNegativeSampling(TrainingJob):
                 result.entity_pull_time += entity_pull_time
                 result.cpu_gpu_time += cpu_gpu_time
             if self.relation_sync_level == "batch":
-                result.unique_time -= time.time()
-                unique_relations = torch.unique(torch.cat((batch["triples"][:, [P]].view(-1), batch["negative_samples"][P].unique_samples())))
-                result.unique_time += time.time()
+                # result.unique_time -= time.time()
+                unique_relations = batch["unique_relations"]
+                # unique_relations = torch.unique(torch.cat((batch["triples"][:, [P]].view(-1), batch["negative_samples"][P].unique_samples())))
+                # result.unique_time += time.time()
                 for wait_value in self.optimizer.relation_async_wait_values:
                     self.parameter_client.wait(wait_value)
                 self.optimizer.relation_async_wait_values.clear()
