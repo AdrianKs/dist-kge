@@ -72,7 +72,8 @@ class WorkerProcess(mp.get_context("spawn").Process):
         checkpoint: Optional[Dict] = None,
     ):
         # rank = rank + 1
-        super().__init__(daemon=True, name=f"Worker #{rank}")
+        daemon = config.get("train.num_workers") <= 0
+        super().__init__(daemon=daemon, name=f"Worker #{rank}")
         self.rank = rank
         self.num_total_workers = num_total_workers
         self.num_keys = num_keys

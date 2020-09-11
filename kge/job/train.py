@@ -1139,6 +1139,7 @@ class TrainingJobNegativeSampling(TrainingJob):
 
         self.num_examples = self.dataset.split(self.train_split).size(0)
         self.dataloader_dataset = NumberDataset(self.num_examples)
+        mp_context = torch.multiprocessing.get_context("fork") if self.config.get("train.num_workers") > 0 else None
         self.loader = torch.utils.data.DataLoader(
             # range(self.num_examples),
             self.dataloader_dataset,
@@ -1148,6 +1149,7 @@ class TrainingJobNegativeSampling(TrainingJob):
             num_workers=self.config.get("train.num_workers"),
             worker_init_fn=_generate_worker_init_fn(self.config),
             pin_memory=self.config.get("train.pin_memory"),
+            multiprocessing_context=mp_context,
         )
 
     def _get_collate_fun(self):
