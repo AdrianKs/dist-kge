@@ -468,9 +468,11 @@ class TrainingJob(TrainingOrEvaluationJob):
             backward_time = 0.0
             optimizer_time = 0.0
             unique_time = 0.0
+            pull_and_map_time = 0.0
             entity_pull_time = 0.0
             relation_pull_time = 0.0
             cpu_gpu_time = 0.0
+            ps_wait_time = 0.0
             scheduler_time = -time.time()
 
             # load new work package
@@ -681,10 +683,12 @@ class TrainingJob(TrainingOrEvaluationJob):
                 forward_time += batch_forward_time
                 backward_time += batch_backward_time
                 optimizer_time += batch_optimizer_time
+                pull_and_map_time += batch_result.pull_and_map_time
                 entity_pull_time += batch_result.entity_pull_time
                 relation_pull_time += batch_result.relation_pull_time
                 unique_time += batch_result.unique_time
                 cpu_gpu_time += batch_result.cpu_gpu_time
+                ps_wait_time += batch_result.ps_wait_time
 
             # all done; now trace and log
             epoch_time += time.time()
@@ -711,7 +715,9 @@ class TrainingJob(TrainingOrEvaluationJob):
                     avg_cost=sum_loss / self.num_examples + sum_penalty / len(self.loader),
                     epoch_time=epoch_time,
                     prepare_time=prepare_time,
+                    ps_wait_time=ps_wait_time,
                     unique_time=unique_time,
+                    pull_and_map_time=pull_and_map_time,
                     entity_pull_time=entity_pull_time,
                     relation_pull_time=relation_pull_time,
                     cpu_gpu_time=cpu_gpu_time,
@@ -720,9 +726,12 @@ class TrainingJob(TrainingOrEvaluationJob):
                     optimizer_time=optimizer_time,
                     scheduler_time=scheduler_time,
                     other_time=other_time,
+                    embedding_mapping_time=self.model.get_s_embedder().mapping_time + self.model.get_p_embedder().mapping_time,
                     event="epoch_completed",
                 )
             )
+            self.model.get_p_embedder().mapping_time = 0.0
+            self.model.get_s_embedder().mapping_time = 0.0
             print("work done", self.parameter_client.rank)
             if self.entity_sync_level == "partition":
                 # todo: optimizer write back missing
@@ -768,10 +777,12 @@ class TrainingJob(TrainingOrEvaluationJob):
         prepare_time: float = 0.0
         forward_time: float = 0.0
         backward_time: float = 0.0
+        pull_and_map_time: float = 0.0
         entity_pull_time: float = 0.0
         relation_pull_time: float = 0.0
         unique_time: float = 0.0
         cpu_gpu_time: float = 0.0
+        ps_wait_time: float = 0.0
 
     def _process_batch(self, batch_index, batch) -> _ProcessBatchResult:
         "Breaks a batch into subbatches and processes them in turn."
@@ -1128,6 +1139,8 @@ class TrainingJobNegativeSampling(TrainingJob):
         self.load_batch = self.config.get("job.distributed.load_batch")
         self.entity_localize = self.config.get("job.distributed.entity_localize")
         self.relation_localize = self.config.get("job.distributed.relation_localize")
+        self.entity_async_write_back = self.config.get("job.distributed.entity_async_write_back")
+        self.relation_async_write_back = self.config.get("job.distributed.relation_async_write_back")
 
         if self.__class__ == TrainingJobNegativeSampling:
             for f in Job.job_created_hooks:
@@ -1201,12 +1214,18 @@ class TrainingJobNegativeSampling(TrainingJob):
                 unique_entities = batch["unique_entities"]
                 # unique_entities = torch.unique(torch.cat((batch["triples"][:, [S,O]].view(-1), batch["negative_samples"][S].unique_samples(), batch["negative_samples"][O].unique_samples())))
                 #result.unique_time += time.time()
-                for wait_value in self.optimizer.entity_async_wait_values:
-                    self.parameter_client.wait(wait_value)
-                self.optimizer.entity_async_wait_values.clear()
+
+                result.ps_wait_time -= time.time()
+                if not self.entity_async_write_back:
+                    for wait_value in self.optimizer.entity_async_wait_values:
+                          self.parameter_client.wait(wait_value)
+                    self.optimizer.entity_async_wait_values.clear()
+                result.ps_wait_time += time.time()
                 if self.entity_localize:
                     self.model.get_s_embedder().localize(unique_entities)
+                result.pull_and_map_time -= time.time()
                 entity_pull_time, cpu_gpu_time = self.model.get_s_embedder()._pull_embeddings(unique_entities)
+                result.pull_and_map_time += time.time()
                 result.entity_pull_time += entity_pull_time
                 result.cpu_gpu_time += cpu_gpu_time
             if self.relation_sync_level == "batch":
@@ -1214,12 +1233,17 @@ class TrainingJobNegativeSampling(TrainingJob):
                 unique_relations = batch["unique_relations"]
                 # unique_relations = torch.unique(torch.cat((batch["triples"][:, [P]].view(-1), batch["negative_samples"][P].unique_samples())))
                 # result.unique_time += time.time()
-                for wait_value in self.optimizer.relation_async_wait_values:
-                    self.parameter_client.wait(wait_value)
-                self.optimizer.relation_async_wait_values.clear()
+                result.ps_wait_time -= time.time()
+                if not self.relation_async_write_back:
+                    for wait_value in self.optimizer.relation_async_wait_values:
+                        self.parameter_client.wait(wait_value)
+                    self.optimizer.relation_async_wait_values.clear()
+                result.ps_wait_time += time.time()
                 if self.relation_localize:
                     self.model.get_p_embedder().localize(unique_relations)
+                result.pull_and_map_time -= time.time()
                 relation_pull_time, cpu_gpu_time = self.model.get_p_embedder()._pull_embeddings(unique_relations)
+                result.pull_and_map_time += time.time()
                 result.relation_pull_time += relation_pull_time
                 result.cpu_gpu_time += cpu_gpu_time
 

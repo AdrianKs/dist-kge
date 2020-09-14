@@ -123,6 +123,14 @@ class DistAdagrad(Optimizer):
             closure (callable, optional): A closure that reevaluates the model
                 and returns the loss.
         """
+        if self.async_write_back[0]:
+            for wait_value in self.entity_async_wait_values:
+                self.parameter_client.wait(wait_value)
+            self.entity_async_wait_values.clear()
+        if self.async_write_back[1]:
+            for wait_value in self.relation_async_wait_values:
+                self.parameter_client.wait(wait_value)
+            self.relation_async_wait_values.clear()
         loss = None
         if closure is not None:
             with torch.enable_grad():
@@ -191,7 +199,8 @@ class DistAdagrad(Optimizer):
                         self.async_wait_values[i].append(self.parameter_client.push(
                             self.push_keys[i],
                             self.push_tensors[i],
-                            asynchronous=self.async_write_back[i]
+                            asynchronous=True,
+                            #asynchronous=self.async_write_back[i]
                         ))
                     else:
                         p.data.index_add_(0, grad_indices, update_value)

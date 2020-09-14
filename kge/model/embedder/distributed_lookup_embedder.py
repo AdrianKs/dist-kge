@@ -61,6 +61,7 @@ class DistributedLookupEmbedder(LookupEmbedder):
         # self.pull_tensor = torch.empty((1, self.dim + self.optimizer_dim), dtype=torch.float32, device="cpu", requires_grad=False)
         self.pull_tensor = torch.empty((self.vocab_size, self.dim + self.optimizer_dim), dtype=torch.float32, device="cpu", requires_grad=False)
         self.num_pulled = 0
+        self.mapping_time = 0.0
 
     def to_device(self, move_optim_data=True):
         """Needs to be called after model.to(self.device)"""
@@ -153,9 +154,12 @@ class DistributedLookupEmbedder(LookupEmbedder):
             with torch.no_grad():
                 long_unique_indexes = torch.unique(long_indexes)
                 self._pull_embeddings(long_unique_indexes)
+        self.mapping_time -= time.time()
+        mapped_indexes = self.local_index_mapper[long_indexes]
+        self.mapping_time += time.time()
         return self._postprocess(
             self._embeddings(
-                self.local_index_mapper[long_indexes]
+                mapped_indexes
             )
         )
 
