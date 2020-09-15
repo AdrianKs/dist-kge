@@ -66,11 +66,6 @@ class DistAdagrad(Optimizer):
             model.dataset.num_entities() + model.dataset.num_relations()
         )
         self.lapse_indexes = lapse_indexes
-        # self.local_index_mappers = local_index_mappers
-        self.local_index_mappers = [
-            model._entity_embedder.local_index_mapper,
-            model._relation_embedder.local_index_mapper,
-        ]
         self.local_to_lapse_mappers = [
             model._entity_embedder.local_to_lapse_mapper,
             model._relation_embedder.local_to_lapse_mapper,

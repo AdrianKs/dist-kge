@@ -262,6 +262,10 @@ class BatchNegativeSample(Configurable):
         self.positive_triples = self.positive_triples.to(device)
         return self
 
+    def map_samples(self, mapper):
+        """Maps samples to new ids"""
+        raise NotImplementedError
+
     def score(self, model, indexes=None) -> torch.Tensor:
         """Score the negative samples for the batch with the provided model.
 
@@ -381,6 +385,9 @@ class DefaultBatchNegativeSample(BatchNegativeSample):
         self._samples = self._samples.to(device)
         return self
 
+    def map_samples(self, mapper):
+        self._samples = mapper[self._samples]
+
 
 class NaiveSharedNegativeSample(BatchNegativeSample):
     """Implementation for naive shared sampling.
@@ -426,6 +433,9 @@ class NaiveSharedNegativeSample(BatchNegativeSample):
             negative_samples1[num_unique:] = self._unique_samples[self._repeat_indexes]
 
         return negative_samples1.unsqueeze(0).expand((chunk_size, -1))
+
+    def map_samples(self, mapper):
+        self._unique_samples = mapper[self._unique_samples]
 
     def score(self, model, indexes=None) -> torch.Tensor:
         if self._implementation != "batch":
@@ -501,6 +511,9 @@ class DefaultSharedNegativeSample(BatchNegativeSample):
             not_drop_mask[drop_index[0]] = False
             return self._unique_samples[not_drop_mask]
         return self._unique_samples
+
+    def map_samples(self, mapper):
+        self._unique_samples = mapper[self._unique_samples]
 
     def samples(self, indexes=None) -> torch.Tensor:
         num_samples = self.num_samples

@@ -484,6 +484,7 @@ class TrainingJob(TrainingOrEvaluationJob):
             if self.entity_sync_level == "partition":
                 if work_entities is not None:
                     self.model.get_s_embedder()._pull_embeddings(work_entities)
+                    self.model.get_s_embedder().global_to_local_mapper[work_entities] = torch.arange(len(work_entities), dtype=torch.long, device="cpu")
                 else:
                     raise ValueError(
                         "the used work-scheduler seems not to support "
@@ -492,6 +493,7 @@ class TrainingJob(TrainingOrEvaluationJob):
             if self.relation_sync_level == "partition":
                 if work_relations is not None:
                     self.model.get_p_embedder()._pull_embeddings(work_relations)
+                    self.model.get_p_embedder().global_to_local_mapper[work_entities] = torch.arange(len(work_entities), dtype=torch.long, device="cpu")
                 else:
                     raise ValueError(
                         "the used work-scheduler seems not to support "
@@ -766,13 +768,12 @@ class TrainingJob(TrainingOrEvaluationJob):
             self.model.get_s_embedder().mapping_time = 0.0
             print("work done", self.parameter_client.rank)
             if self.entity_sync_level == "partition":
-                # todo: optimizer write back missing
                 self.model.get_s_embedder().set_embeddings()
-                # self.optimizer.set_entities()
+                self.model.get_s_embedder().global_to_local_mapper[:] = -1
                 self.model.get_s_embedder().push_back()
             if self.relation_sync_level == "partition":
                 self.model.get_p_embedder().set_embeddings()
-                # self.optimizer.set_relations()
+                self.model.get_p_embedder().global_to_local_mapper[:] = -1
                 self.model.get_p_embedder().push_back()
             self.work_scheduler_client.work_done()
 
@@ -1225,6 +1226,24 @@ class TrainingJobNegativeSampling(TrainingJob):
             unique_relations = torch.unique(torch.cat((
                 triples[:, [P]].view(-1), negative_samples[P].unique_samples())))
             unique_time += time.time()
+
+            # map ids to local ids
+            if self.entity_sync_level == "partition":
+                entity_mapper = self.model.get_s_embedder().global_to_local_mapper
+            else:
+                entity_mapper = torch.full((self.dataset.num_entities(),), -1, dtype=torch.long)
+                entity_mapper[unique_entities] = torch.arange(len(unique_entities), dtype=torch.long)
+            if self.relation_sync_level == "partition":
+                relation_mapper = self.model.get_p_embedder().global_to_local_mapper
+            else:
+                relation_mapper = torch.full((self.dataset.num_relations(),), -1, dtype=torch.long)
+                relation_mapper[unique_relations] = torch.arange(len(unique_relations), dtype=torch.long)
+            triples[:, S] = entity_mapper[triples[:, S]]
+            triples[:, P] = relation_mapper[triples[:, P]]
+            triples[:, O] = entity_mapper[triples[:, O]]
+            negative_samples[S].map_samples(entity_mapper)
+            negative_samples[P].map_samples(relation_mapper)
+            negative_samples[O].map_samples(entity_mapper)
             return {"triples": triples, "negative_samples": negative_samples, "unique_entities": unique_entities, "unique_relations": unique_relations, "unique_time": unique_time}
 
         return collate
