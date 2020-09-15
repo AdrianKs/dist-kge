@@ -106,7 +106,7 @@ class DistributedLookupEmbedder(LookupEmbedder):
         new_local_indexes = torch.arange(len(indexes),
                                          device=device,
                                          dtype=torch.long)
-        pull_indexes = self.lapse_index[indexes.cpu()]
+        pull_indexes = (indexes + self.lapse_offset).cpu()
         pull_tensor_index, pull_tensor = self._get_free_pull_tensor()
         pull_tensor = pull_tensor[:len(indexes)]
         pull_future = self.parameter_client.pull(pull_indexes, pull_tensor, asynchronous=True)
