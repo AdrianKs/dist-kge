@@ -133,7 +133,7 @@ class DistributedLookupEmbedder(LookupEmbedder):
     def localize(self, indexes: Tensor, make_unique=False):
         if make_unique:
             indexes = torch.unique(indexes)
-        self.parameter_client.localize(indexes.cpu())
+        self.parameter_client.localize(self.lapse_index[indexes.cpu()])
         # TODO: also pull the embeddings and store in a tensor on gpu
         #  this needs to be handled in the background somehow
         #  to device can be done in background, but this needs to wait for localize
