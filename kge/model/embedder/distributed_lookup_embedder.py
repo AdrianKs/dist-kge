@@ -63,7 +63,6 @@ class DistributedLookupEmbedder(LookupEmbedder):
         self.pull_dim = self.dim + self.optimizer_dim
         # self.pull_tensor = torch.empty((1, self.dim + self.optimizer_dim), dtype=torch.float32, device="cpu", requires_grad=False)
         self.pull_tensor = torch.empty((self.vocab_size, self.dim + self.optimizer_dim), dtype=torch.float32, device="cpu", requires_grad=False)
-        self.pre_pull_tensor = torch.empty((self.vocab_size, self.dim + self.optimizer_dim), dtype=torch.float32, device="cpu", requires_grad=False)
         self.pull_tensors = [[True, torch.empty((self.vocab_size, self.dim + self.optimizer_dim), dtype=torch.float32, device="cpu", requires_grad=False).pin_memory()],
                              [True, torch.empty((self.vocab_size, self.dim + self.optimizer_dim), dtype=torch.float32, device="cpu", requires_grad=False).pin_memory()],]
         self.num_pulled = 0
