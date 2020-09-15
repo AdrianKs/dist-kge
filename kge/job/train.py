@@ -471,6 +471,7 @@ class TrainingJob(TrainingOrEvaluationJob):
             pull_and_map_time = 0.0
             entity_pull_time = 0.0
             relation_pull_time = 0.0
+            pre_pull_time = 0.0
             cpu_gpu_time = 0.0
             ps_wait_time = 0.0
             scheduler_time = -time.time()
@@ -516,7 +517,9 @@ class TrainingJob(TrainingOrEvaluationJob):
                 if batch is None and pre_load_batch is None:
                     pre_load_batch = next(iter_dataloader)
                     prepare_time -= time.time()
+                    pre_pull_time -= time.time()
                     self._prepare_batch_ahead(pre_load_batch)
+                    pre_pull_time += time.time()
                     prepare_time += time.time()
                     continue
                     # batch = next(iter_dataloader)
@@ -525,7 +528,9 @@ class TrainingJob(TrainingOrEvaluationJob):
                 try:
                     pre_load_batch = next(iter_dataloader)
                     prepare_time -= time.time()
+                    pre_pull_time -= time.time()
                     self._prepare_batch_ahead(pre_load_batch)
+                    pre_pull_time += time.time()
                     prepare_time += time.time()
                 except StopIteration:
                     epoch_done = True
@@ -744,6 +749,7 @@ class TrainingJob(TrainingOrEvaluationJob):
                     ps_wait_time=ps_wait_time,
                     unique_time=unique_time,
                     pull_and_map_time=pull_and_map_time,
+                    pre_pull_time=pre_pull_time,
                     entity_pull_time=entity_pull_time,
                     relation_pull_time=relation_pull_time,
                     cpu_gpu_time=cpu_gpu_time,
