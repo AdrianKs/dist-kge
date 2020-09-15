@@ -25,6 +25,7 @@ class DistributedLookupEmbedder(LookupEmbedder):
         parameter_client: "KgeParameterClient",
         lapse_index: torch.Tensor,
         complete_vocab_size,
+        lapse_offset=0,
         init_for_load_only=False,
     ):
         super().__init__(
@@ -47,6 +48,7 @@ class DistributedLookupEmbedder(LookupEmbedder):
 
         self.complete_vocab_size = complete_vocab_size
         self.parameter_client = parameter_client
+        self.lapse_offset = lapse_offset
         self.lapse_index = (
             lapse_index  # maps the id from the dataset to the id stored in lapse
         )
@@ -89,14 +91,14 @@ class DistributedLookupEmbedder(LookupEmbedder):
         cpu_gpu_time = 0.0
         pull_time = 0.0
         device = self._embeddings.weight.device
+        len_indexes = len(indexes)
         if self.load_batch:
-            new_local_indexes = torch.arange(len(indexes), device=self._embeddings.weight.device, dtype=torch.long)
-            pull_indexes = self.lapse_index[indexes.cpu()]
+            new_local_indexes = torch.arange(len_indexes, device=device, dtype=torch.long)
+            # pull_indexes = self.lapse_index[indexes.cpu()]
+            pull_indexes = (indexes + self.lapse_offset).cpu()
             self.local_index_mapper[indexes] = new_local_indexes
-            self.local_to_lapse_mapper[new_local_indexes] = pull_indexes
-            #pull_tensor = self._embeddings.weight[: len(indexes), :].detach().cpu()
-            pull_tensor = self.pull_tensor[:len(indexes)]
-            # pull_tensor = self.pull_tensor.expand(len(indexes), self.pull_dim).contiguous()
+            self.local_to_lapse_mapper[:len_indexes] = pull_indexes
+            pull_tensor = self.pull_tensor[:len_indexes]
             pull_time -= time.time()
             self.parameter_client.pull(pull_indexes, pull_tensor)
             pull_time += time.time()

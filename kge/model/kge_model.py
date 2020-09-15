@@ -250,6 +250,7 @@ class KgeEmbedder(KgeBase):
         init_for_load_only=False,
         parameter_client=None,
         lapse_index=None,
+        lapse_offset=0,
         complete_vocab_size=None,
     ) -> "KgeEmbedder":
         """Factory method for embedder creation."""
@@ -274,6 +275,7 @@ class KgeEmbedder(KgeBase):
                     init_for_load_only=init_for_load_only,
                     parameter_client=parameter_client,
                     lapse_index=lapse_index,
+                    lapse_offset=lapse_offset,
                     complete_vocab_size=complete_vocab_size
                 )
             else:
@@ -407,6 +409,7 @@ class KgeModel(KgeBase):
                 init_for_load_only=init_for_load_only,
                 parameter_client=parameter_client,
                 lapse_index=torch.arange(dataset.num_entities(), dtype=torch.long),
+                lapse_offset=0,
                 complete_vocab_size=dataset.num_entities()
             )
 
@@ -420,6 +423,8 @@ class KgeModel(KgeBase):
                 init_for_load_only=init_for_load_only,
                 parameter_client=parameter_client,
                 lapse_index=torch.arange(dataset.num_relations(), dtype=torch.long)+dataset.num_entities(),
+                lapse_offset=dataset.num_entities(),
+                complete_vocab_size=dataset.num_relations(),
             )
 
             if not init_for_load_only:
