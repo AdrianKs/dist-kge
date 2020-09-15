@@ -6,6 +6,7 @@ import numpy as np
 
 import torch
 import lapse
+from  collections import deque
 
 from kge import Config, Dataset
 from kge.model import LookupEmbedder, KgeEmbedder
@@ -62,8 +63,13 @@ class DistributedLookupEmbedder(LookupEmbedder):
         self.pull_dim = self.dim + self.optimizer_dim
         # self.pull_tensor = torch.empty((1, self.dim + self.optimizer_dim), dtype=torch.float32, device="cpu", requires_grad=False)
         self.pull_tensor = torch.empty((self.vocab_size, self.dim + self.optimizer_dim), dtype=torch.float32, device="cpu", requires_grad=False)
+        self.pre_pull_tensor = torch.empty((self.vocab_size, self.dim + self.optimizer_dim), dtype=torch.float32, device="cpu", requires_grad=False)
+        self.pull_tensors = [[True, torch.empty((self.vocab_size, self.dim + self.optimizer_dim), dtype=torch.float32, device="cpu", requires_grad=False).pin_memory()],
+                             [True, torch.empty((self.vocab_size, self.dim + self.optimizer_dim), dtype=torch.float32, device="cpu", requires_grad=False).pin_memory()],]
         self.num_pulled = 0
         self.mapping_time = 0.0
+        # self.pre_pulled = None
+        self.pre_pulled = deque()
 
     def to_device(self, move_optim_data=True):
         """Needs to be called after model.to(self.device)"""
@@ -86,13 +92,53 @@ class DistributedLookupEmbedder(LookupEmbedder):
         set_tensor = torch.cat((self._embeddings.weight[local_indexes].detach(), self.optimizer_values[local_indexes]), dim=1).cpu()
         self.parameter_client.set(lapse_indexes, set_tensor)
 
+    def _get_free_pull_tensor(self):
+        for i, (free, pull_tensor) in enumerate(self.pull_tensors):
+            if free:
+                self.pull_tensors[i][0] = False
+                return i, pull_tensor
+
+    @torch.no_grad()
+    def pre_pull(self, indexes):
+        # new_local_indexes =
+        device = self._embeddings.weight.device
+
+        new_local_indexes = torch.arange(len(indexes),
+                                         device=device,
+                                         dtype=torch.long)
+        pull_indexes = self.lapse_index[indexes.cpu()]
+        pull_tensor_index, pull_tensor = self._get_free_pull_tensor()
+        pull_tensor = pull_tensor[:len(indexes)]
+        pull_future = self.parameter_client.pull(pull_indexes, pull_tensor, asynchronous=True)
+        self.pre_pulled.append({
+            "indexes": indexes,
+            "new_local_indexes": new_local_indexes,
+            "pull_indexes": pull_indexes,
+            "pull_tensor": pull_tensor,
+            "pull_future": pull_future,
+            "pull_tensor_index": pull_tensor_index,
+        })
+
     @torch.no_grad()
     def _pull_embeddings(self, indexes):
         cpu_gpu_time = 0.0
         pull_time = 0.0
         device = self._embeddings.weight.device
         len_indexes = len(indexes)
-        if self.load_batch:
+        if len(self.pre_pulled) > 0:
+            pre_pulled = self.pre_pulled.popleft()
+            self.parameter_client.wait(pre_pulled["pull_future"])
+            self.local_index_mapper[pre_pulled["indexes"]] = pre_pulled["new_local_indexes"]
+            self.local_to_lapse_mapper[pre_pulled["new_local_indexes"]] = pre_pulled["pull_indexes"]
+            cpu_gpu_time -= time.time()
+            pre_pulled_tensor = pre_pulled["pull_tensor"].to(device)
+            cpu_gpu_time += time.time()
+            pulled_embeddings, pulled_optim_values = torch.split(pre_pulled_tensor, [self.dim, self.optimizer_dim], dim=1)
+            self._embeddings.weight.index_copy_(0, pre_pulled["new_local_indexes"], pulled_embeddings)
+            self.optimizer_values.index_copy_(0, pre_pulled["new_local_indexes"], pulled_optim_values)
+            self.pull_tensors[pre_pulled["pull_tensor_index"]][0] = True
+            return pull_time, cpu_gpu_time
+        elif self.load_batch:
             new_local_indexes = torch.arange(len_indexes, device=device, dtype=torch.long)
             # pull_indexes = self.lapse_index[indexes.cpu()]
             pull_indexes = (indexes + self.lapse_offset).cpu()

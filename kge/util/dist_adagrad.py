@@ -123,6 +123,8 @@ class DistAdagrad(Optimizer):
             closure (callable, optional): A closure that reevaluates the model
                 and returns the loss.
         """
+        # we need to wait here for the previous push to finish, otherwise we can not
+        #  delete the push tensors
         if self.async_write_back[0]:
             for wait_value in self.entity_async_wait_values:
                 self.parameter_client.wait(wait_value)

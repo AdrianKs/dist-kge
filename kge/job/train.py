@@ -506,7 +506,31 @@ class TrainingJob(TrainingOrEvaluationJob):
             scheduler_time += time.time()
 
             # process each batch
-            for batch_index, batch in enumerate(self.loader):
+            pre_load_batch = None
+            batch = None
+            epoch_done = False
+            iter_dataloader = iter(self.loader)
+            batch_index = 0
+            #for batch_index, batch in enumerate(self.loader):
+            while not epoch_done:
+                if batch is None and pre_load_batch is None:
+                    pre_load_batch = next(iter_dataloader)
+                    prepare_time -= time.time()
+                    self._prepare_batch_ahead(pre_load_batch)
+                    prepare_time += time.time()
+                    continue
+                    # batch = next(iter_dataloader)
+                else:
+                    batch = pre_load_batch
+                try:
+                    pre_load_batch = next(iter_dataloader)
+                    prepare_time -= time.time()
+                    self._prepare_batch_ahead(pre_load_batch)
+                    prepare_time += time.time()
+                except StopIteration:
+                    epoch_done = True
+
+
                 # create initial batch trace (yet incomplete)
                 self.current_trace["batch"] = {
                     "type": self.type_str,
@@ -689,6 +713,8 @@ class TrainingJob(TrainingOrEvaluationJob):
                 unique_time += batch_result.unique_time
                 cpu_gpu_time += batch_result.cpu_gpu_time
                 ps_wait_time += batch_result.ps_wait_time
+
+                batch_index += 1
 
             # all done; now trace and log
             epoch_time += time.time()
@@ -1141,6 +1167,8 @@ class TrainingJobNegativeSampling(TrainingJob):
         self.relation_localize = self.config.get("job.distributed.relation_localize")
         self.entity_async_write_back = self.config.get("job.distributed.entity_async_write_back")
         self.relation_async_write_back = self.config.get("job.distributed.relation_async_write_back")
+        self.entity_pre_pull = self.config.get("job.distributed.entity_pre_pull")
+        self.relation_pre_pull = self.config.get("job.distributed.relation_pre_pull")
 
         if self.__class__ == TrainingJobNegativeSampling:
             for f in Job.job_created_hooks:
@@ -1194,6 +1222,12 @@ class TrainingJobNegativeSampling(TrainingJob):
             return {"triples": triples, "negative_samples": negative_samples, "unique_entities": unique_entities, "unique_relations": unique_relations, "unique_time": unique_time}
 
         return collate
+
+    def _prepare_batch_ahead(self, batch):
+        if self.entity_sync_level == "batch" and self.entity_pre_pull:
+            self.model.get_s_embedder().pre_pull(batch["unique_entities"])
+        if self.relation_sync_level == "batch" and self.relation_pre_pull:
+            self.model.get_p_embedder().pre_pull(batch["unique_relations"])
 
     def _prepare_batch(
         self, batch_index, batch, result: TrainingJob._ProcessBatchResult

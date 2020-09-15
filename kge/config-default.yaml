@@ -32,6 +32,8 @@ job:
     relation_async_write_back: True  # write to parameter server asynchronous
     entity_localize: False
     relation_localize: False
+    entity_pre_pull: False
+    relation_pre_pull: False
     repartition_epoch: True  # currently only works with 2d_block_partition
     scheduling_order: 'random'  # block ordering for 2d_block_partition: random, sequential
     load_batch: True  # load all embeddings once at beginning of the batch
