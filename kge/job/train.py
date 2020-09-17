@@ -779,6 +779,9 @@ class TrainingJob(TrainingOrEvaluationJob):
                 self.model.get_p_embedder().global_to_local_mapper[:] = -1
                 self.model.get_p_embedder().push_back()
             self.work_scheduler_client.work_done()
+            # todo: this barrier is only added for the new schedule in 2d block
+            #  should be moved to the scheduler
+            self.parameter_client.barrier()
 
             # run hooks (may modify trace)
             for f in self.post_epoch_hooks:
