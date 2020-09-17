@@ -8,6 +8,7 @@ from copy import deepcopy
 import numpy as np
 import torch
 from kge.misc import set_seeds
+from kge.distributed.two_d_block_schedule_creator import TwoDBlockScheduleCreator
 from torch import multiprocessing as mp
 from torch import distributed as dist
 from enum import IntEnum
@@ -566,6 +567,8 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         repartition_epoch=True,
     ):
         self.partition_type = "2d_block_partition"
+        self.schedule_creator = TwoDBlockScheduleCreator(num_partitions=num_partitions, num_workers=num_clients, randomize_iterations=True)
+        self.fixed_schedule = [item for sublist in self.schedule_creator.create_schedule() for item in sublist]
         super(TwoDBlockWorkScheduler, self).__init__(
             config=config,
             world_size=world_size,
@@ -705,7 +708,20 @@ class TwoDBlockWorkScheduler(WorkScheduler):
     ) -> Tuple[
         Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor], bool
     ]:
+        if self.fixed_schedule is not None:
+            return self._acquire_bucket_by_fixed_schedule(rank)
         return self._acquire_bucket(rank)
+
+    def _acquire_bucket_by_fixed_schedule(self, rank):
+        try:
+            block = self.fixed_schedule.pop()
+            block_data = self.partitions[block]
+            entities_in_block = self._entities_in_bucket.get(block)
+            self.running_blocks[rank] = block
+            return block_data, entities_in_block, None, False
+        except IndexError:
+            return None, None, None, False
+
 
     def _acquire_bucket(
         self, rank
@@ -777,6 +793,7 @@ class TwoDBlockWorkScheduler(WorkScheduler):
     def _refill_work(self):
         if self.repartition_epoch:
             self._repartition()
+        self.fixed_schedule = [item for sublist in self.schedule_creator.create_schedule() for item in sublist]
         self.work_to_do = self._order_by_schedule(deepcopy(self.partitions))
 
     def _load_partitions(self, dataset_folder, num_partitions):
