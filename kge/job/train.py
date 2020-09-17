@@ -4,7 +4,7 @@ import math
 import time
 import traceback
 import gc
-from collections import defaultdict
+from collections import defaultdict, deque
 
 from dataclasses import dataclass
 
@@ -156,6 +156,8 @@ class TrainingJob(TrainingOrEvaluationJob):
         self.valid_job = EvaluationJob.create(
             valid_conf, dataset, parent_job=self, model=self.model
         )
+        self.entity_pre_pull = self.config.get("job.distributed.entity_pre_pull")
+        self.relation_pre_pull = self.config.get("job.distributed.relation_pre_pull")
 
         # attributes filled in by implementing classes
         self.loader = None
@@ -509,33 +511,36 @@ class TrainingJob(TrainingOrEvaluationJob):
             scheduler_time += time.time()
 
             # process each batch
-            pre_load_batch = None
+            pre_load_batches = deque()
             batch = None
             epoch_done = False
             iter_dataloader = iter(self.loader)
             batch_index = 0
+            num_prepulls = max(self.entity_pre_pull, self.relation_pre_pull, 1)
             #for batch_index, batch in enumerate(self.loader):
             while not epoch_done:
-                if batch is None and pre_load_batch is None:
-                    pre_load_batch = next(iter_dataloader)
-                    prepare_time -= time.time()
-                    pre_pull_time -= time.time()
-                    self._prepare_batch_ahead(pre_load_batch)
-                    pre_pull_time += time.time()
-                    prepare_time += time.time()
-                    continue
-                    # batch = next(iter_dataloader)
-                else:
-                    batch = pre_load_batch
+                if batch_index > 2500:
+                    break
                 try:
-                    pre_load_batch = next(iter_dataloader)
+                    if batch is None and len(pre_load_batches) < num_prepulls:
+                        pre_load_batches.append(next(iter_dataloader))
+                        prepare_time -= time.time()
+                        pre_pull_time -= time.time()
+                        self._prepare_batch_ahead(pre_load_batches)
+                        pre_pull_time += time.time()
+                        prepare_time += time.time()
+                        continue
+                    else:
+                        batch = pre_load_batches.popleft()
+                    pre_load_batches.append(next(iter_dataloader))
                     prepare_time -= time.time()
                     pre_pull_time -= time.time()
-                    self._prepare_batch_ahead(pre_load_batch)
+                    self._prepare_batch_ahead(pre_load_batches)
                     pre_pull_time += time.time()
                     prepare_time += time.time()
                 except StopIteration:
-                    epoch_done = True
+                    if len(pre_load_batches) == 0:
+                        epoch_done = True
 
 
                 # create initial batch trace (yet incomplete)
@@ -664,7 +669,7 @@ class TrainingJob(TrainingOrEvaluationJob):
                     {
                         "size": batch_result.size,
                         "avg_loss": batch_result.avg_loss,
-                        "penalties": [p.item() for k, p in penalties_torch],
+                        #"penalties": [p.item() for k, p in penalties_torch],
                         "penalty": penalty,
                         "cost": cost_value,
                         "prepare_time": batch_result.prepare_time,
@@ -787,6 +792,9 @@ class TrainingJob(TrainingOrEvaluationJob):
             )
         self.current_trace["epoch"] = None
         return trace_entry
+
+    def _prepare_batch_ahead(self, batches: deque):
+        pass
 
     def _prepare(self):
         """Prepare this job for running.
@@ -1174,8 +1182,6 @@ class TrainingJobNegativeSampling(TrainingJob):
         self.relation_localize = self.config.get("job.distributed.relation_localize")
         self.entity_async_write_back = self.config.get("job.distributed.entity_async_write_back")
         self.relation_async_write_back = self.config.get("job.distributed.relation_async_write_back")
-        self.entity_pre_pull = self.config.get("job.distributed.entity_pre_pull")
-        self.relation_pre_pull = self.config.get("job.distributed.relation_pre_pull")
 
         if self.__class__ == TrainingJobNegativeSampling:
             for f in Job.job_created_hooks:
@@ -1248,11 +1254,20 @@ class TrainingJobNegativeSampling(TrainingJob):
 
         return collate
 
-    def _prepare_batch_ahead(self, batch):
-        if self.entity_sync_level == "batch" and self.entity_pre_pull:
-            self.model.get_s_embedder().pre_pull(batch["unique_entities"])
-        if self.relation_sync_level == "batch" and self.relation_pre_pull:
-            self.model.get_p_embedder().pre_pull(batch["unique_relations"])
+    def _prepare_batch_ahead(self, batches: deque):
+        if self.entity_pre_pull > 1 or self.relation_pre_pull > 1:
+            batches[0]["triples"] = batches[0]["triples"].to(self.device)
+            for ns in batches[0]["negative_samples"]:
+                ns.positive_triples = batches[0]["triples"]
+            batches[0]["negative_samples"] = [
+                ns.to(self.device) for ns in batches[0]["negative_samples"]
+            ]
+        if self.entity_sync_level == "batch" and self.entity_pre_pull > 0:
+            self.model.get_s_embedder().pre_pull(batches[-1]["unique_entities"])
+            self.model.get_s_embedder().pre_pulled_to_device()
+        if self.relation_sync_level == "batch" and self.relation_pre_pull > 0:
+            self.model.get_p_embedder().pre_pull(batches[-1]["unique_relations"])
+            self.model.get_p_embedder().pre_pulled_to_device()
 
     def _prepare_batch(
         self, batch_index, batch, result: TrainingJob._ProcessBatchResult
@@ -1260,12 +1275,14 @@ class TrainingJobNegativeSampling(TrainingJob):
         # move triples and negatives to GPU. With some implementaiton effort, this may
         # be avoided.
         result.prepare_time -= time.time()
+        #result.cpu_gpu_time -= time.time()
         batch["triples"] = batch["triples"].to(self.device)
         for ns in batch["negative_samples"]:
             ns.positive_triples = batch["triples"]
         batch["negative_samples"] = [
             ns.to(self.device) for ns in batch["negative_samples"]
         ]
+        #result.cpu_gpu_time += time.time()
         result.unique_time += batch["unique_time"]
         if self.config.get("job.distributed.load_batch"):
             if self.entity_sync_level == "batch":
@@ -1325,6 +1342,9 @@ class TrainingJobNegativeSampling(TrainingJob):
         subbatch_size = len(triples)
         result.prepare_time += time.time()
         labels = batch["labels"]  # reuse b/w subbatches
+
+        #time.sleep(0.001)
+        #return
 
         # process the subbatch for each slot separately
         for slot in [S, P, O]:

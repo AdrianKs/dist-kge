@@ -53,10 +53,10 @@ class DistributedLookupEmbedder(LookupEmbedder):
             torch.zeros(vocab_size, dtype=torch.long) - 1
         )  # maps the local embeddings to the embeddings in lapse
         self.pull_dim = self.dim + self.optimizer_dim
-        # self.pull_tensor = torch.empty((1, self.dim + self.optimizer_dim), dtype=torch.float32, device="cpu", requires_grad=False)
-        self.pull_tensor = torch.empty((self.vocab_size, self.dim + self.optimizer_dim), dtype=torch.float32, device="cpu", requires_grad=False)
         self.pull_tensors = [[True, torch.empty((self.vocab_size, self.dim + self.optimizer_dim), dtype=torch.float32, device="cpu", requires_grad=False).pin_memory()],
+                             [True, torch.empty((self.vocab_size, self.dim + self.optimizer_dim), dtype=torch.float32, device="cpu", requires_grad=False).pin_memory()],
                              [True, torch.empty((self.vocab_size, self.dim + self.optimizer_dim), dtype=torch.float32, device="cpu", requires_grad=False).pin_memory()],]
+
         self.num_pulled = 0
         self.mapping_time = 0.0
         # self.pre_pulled = None
@@ -102,6 +102,14 @@ class DistributedLookupEmbedder(LookupEmbedder):
             "pull_tensor_index": pull_tensor_index,
         })
 
+    def pre_pulled_to_device(self):
+        if len(self.pre_pulled) > 2:
+            # id 0 is from the batch currently processed
+            # last one is the one pulled from ps
+            # we are moving the second last
+            self.parameter_client.wait(self.pre_pulled[-2]["pull_future"])
+            self.pre_pulled[-2]["pull_tensor"] = self.pre_pulled[-2]["pull_tensor"].to(self._embeddings.weight.device, non_blocking=True)
+
     @torch.no_grad()
     def _pull_embeddings(self, indexes):
         cpu_gpu_time = 0.0
@@ -125,7 +133,7 @@ class DistributedLookupEmbedder(LookupEmbedder):
         self.pulled_ids = indexes
         pull_indexes = (indexes + self.lapse_offset).cpu()
         self.local_to_lapse_mapper[:len_indexes] = pull_indexes
-        pull_tensor = self.pull_tensor[:len_indexes]
+        pull_tensor = self.pull_tensors[0][1][:len_indexes]
         pull_time -= time.time()
         self.parameter_client.pull(pull_indexes, pull_tensor)
         pull_time += time.time()
