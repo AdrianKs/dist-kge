@@ -40,7 +40,9 @@ class DistributedLookupEmbedder(LookupEmbedder):
             self.optimizer_dim = 1
         else:
             raise NotImplementedError(f"Optimizer {optimizer} not implemented")
-        self.optimizer_values = torch.zeros((self.vocab_size, self.optimizer_dim), dtype=torch.float32)
+        self.optimizer_values = torch.zeros(
+            (self.vocab_size, self.optimizer_dim), dtype=torch.float32
+        )
 
         self.complete_vocab_size = complete_vocab_size
         self.parameter_client = parameter_client
@@ -48,14 +50,46 @@ class DistributedLookupEmbedder(LookupEmbedder):
         self.pulled_ids = None
         self.load_batch = self.config.get("job.distributed.load_batch")
         # global to local mapper only used in sync level partition
-        self.global_to_local_mapper = torch.full((self.dataset.num_entities(),), -1, dtype=torch.long, device="cpu")
-        self.local_to_lapse_mapper = (
-            torch.zeros(vocab_size, dtype=torch.long) - 1
-        )  # maps the local embeddings to the embeddings in lapse
+        self.global_to_local_mapper = torch.full(
+            (self.dataset.num_entities(),), -1, dtype=torch.long, device="cpu"
+        )
+
+        # maps the local embeddings to the embeddings in lapse
+        # used in optimizer
+        self.local_to_lapse_mapper = torch.full((vocab_size,), -1, dtype=torch.long)
         self.pull_dim = self.dim + self.optimizer_dim
-        self.pull_tensors = [[True, torch.empty((self.vocab_size, self.dim + self.optimizer_dim), dtype=torch.float32, device="cpu", requires_grad=False).pin_memory()],
-                             [True, torch.empty((self.vocab_size, self.dim + self.optimizer_dim), dtype=torch.float32, device="cpu", requires_grad=False).pin_memory()],
-                             [True, torch.empty((self.vocab_size, self.dim + self.optimizer_dim), dtype=torch.float32, device="cpu", requires_grad=False).pin_memory()],]
+
+        # 3 pull tensors to pre-pull up to 3 batches
+        # first boolean denotes if the tensor is free
+        self.pull_tensors = [
+            [
+                True,
+                torch.empty(
+                    (self.vocab_size, self.dim + self.optimizer_dim),
+                    dtype=torch.float32,
+                    device="cpu",
+                    requires_grad=False,
+                ).pin_memory(),
+            ],
+            [
+                True,
+                torch.empty(
+                    (self.vocab_size, self.dim + self.optimizer_dim),
+                    dtype=torch.float32,
+                    device="cpu",
+                    requires_grad=False,
+                ).pin_memory(),
+            ],
+            [
+                True,
+                torch.empty(
+                    (self.vocab_size, self.dim + self.optimizer_dim),
+                    dtype=torch.float32,
+                    device="cpu",
+                    requires_grad=False,
+                ).pin_memory(),
+            ],
+        ]
 
         self.num_pulled = 0
         self.mapping_time = 0.0
@@ -65,12 +99,17 @@ class DistributedLookupEmbedder(LookupEmbedder):
     def to_device(self, move_optim_data=True):
         """Needs to be called after model.to(self.device)"""
         if move_optim_data:
-            self.optimizer_values = self.optimizer_values.to(self._embeddings.weight.device)
+            self.optimizer_values = self.optimizer_values.to(
+                self._embeddings.weight.device
+            )
 
     def push_all(self):
         self.parameter_client.push(
             torch.arange(self.vocab_size) + self.lapse_offset,
-            torch.cat((self._embeddings.weight.detach().cpu(), self.optimizer_values.cpu()), dim=1),
+            torch.cat(
+                (self._embeddings.weight.detach().cpu(), self.optimizer_values.cpu()),
+                dim=1,
+            ),
         )
 
     def pull_all(self):
@@ -79,7 +118,13 @@ class DistributedLookupEmbedder(LookupEmbedder):
     def set_embeddings(self):
         lapse_indexes = self.pulled_ids + self.lapse_offset
         num_pulled = len(lapse_indexes)
-        set_tensor = torch.cat((self._embeddings.weight[:num_pulled].detach(), self.optimizer_values[:num_pulled]), dim=1).cpu()
+        set_tensor = torch.cat(
+            (
+                self._embeddings.weight[:num_pulled].detach(),
+                self.optimizer_values[:num_pulled],
+            ),
+            dim=1,
+        ).cpu()
         self.parameter_client.set(lapse_indexes, set_tensor)
 
     def _get_free_pull_tensor(self):
@@ -92,15 +137,19 @@ class DistributedLookupEmbedder(LookupEmbedder):
     def pre_pull(self, indexes):
         pull_indexes = (indexes + self.lapse_offset).cpu()
         pull_tensor_index, pull_tensor = self._get_free_pull_tensor()
-        pull_tensor = pull_tensor[:len(indexes)]
-        pull_future = self.parameter_client.pull(pull_indexes, pull_tensor, asynchronous=True)
-        self.pre_pulled.append({
-            "indexes": indexes,
-            "pull_indexes": pull_indexes,
-            "pull_tensor": pull_tensor,
-            "pull_future": pull_future,
-            "pull_tensor_index": pull_tensor_index,
-        })
+        pull_tensor = pull_tensor[: len(indexes)]
+        pull_future = self.parameter_client.pull(
+            pull_indexes, pull_tensor, asynchronous=True
+        )
+        self.pre_pulled.append(
+            {
+                "indexes": indexes,
+                "pull_indexes": pull_indexes,
+                "pull_tensor": pull_tensor,
+                "pull_future": pull_future,
+                "pull_tensor_index": pull_tensor_index,
+            }
+        )
 
     def pre_pulled_to_device(self):
         if len(self.pre_pulled) > 2:
@@ -108,7 +157,9 @@ class DistributedLookupEmbedder(LookupEmbedder):
             # last one is the one pulled from ps
             # we are moving the second last
             self.parameter_client.wait(self.pre_pulled[-2]["pull_future"])
-            self.pre_pulled[-2]["pull_tensor"] = self.pre_pulled[-2]["pull_tensor"].to(self._embeddings.weight.device, non_blocking=True)
+            self.pre_pulled[-2]["pull_tensor"] = self.pre_pulled[-2]["pull_tensor"].to(
+                self._embeddings.weight.device, non_blocking=True
+            )
 
     @torch.no_grad()
     def _pull_embeddings(self, indexes):
@@ -124,7 +175,9 @@ class DistributedLookupEmbedder(LookupEmbedder):
             cpu_gpu_time -= time.time()
             pre_pulled_tensor = pre_pulled["pull_tensor"].to(device)
             cpu_gpu_time += time.time()
-            pulled_embeddings, pulled_optim_values = torch.split(pre_pulled_tensor, [self.dim, self.optimizer_dim], dim=1)
+            pulled_embeddings, pulled_optim_values = torch.split(
+                pre_pulled_tensor, [self.dim, self.optimizer_dim], dim=1
+            )
             self._embeddings.weight[:len_indexes] = pulled_embeddings
             self.optimizer_values[:len_indexes] = pulled_optim_values
             self.pull_tensors[pre_pulled["pull_tensor_index"]][0] = True
@@ -140,7 +193,9 @@ class DistributedLookupEmbedder(LookupEmbedder):
         cpu_gpu_time -= time.time()
         pull_tensor = pull_tensor.to(device)
         cpu_gpu_time += time.time()
-        pulled_embeddings, pulled_optim_values = torch.split(pull_tensor, [self.dim, self.optimizer_dim], dim=1)
+        pulled_embeddings, pulled_optim_values = torch.split(
+            pull_tensor, [self.dim, self.optimizer_dim], dim=1
+        )
         self._embeddings.weight[:len_indexes] = pulled_embeddings
         self.optimizer_values[:len_indexes] = pulled_optim_values
         return pull_time, cpu_gpu_time
@@ -155,17 +210,11 @@ class DistributedLookupEmbedder(LookupEmbedder):
 
     def _embed(self, indexes: Tensor) -> Tensor:
         long_indexes = indexes.long()
-        return self._embeddings(
-            long_indexes
-        )
+        return self._embeddings(long_indexes)
 
     def embed(self, indexes: Tensor) -> Tensor:
         long_indexes = indexes.long()
-        return self._postprocess(
-            self._embeddings(
-                long_indexes
-            )
-        )
+        return self._postprocess(self._embeddings(long_indexes))
 
     def embed_all(self) -> Tensor:
         raise NotImplementedError
