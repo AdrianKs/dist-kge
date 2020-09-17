@@ -8,6 +8,7 @@ from collections import deque
 
 from kge import Config, Dataset
 from kge.model import LookupEmbedder, KgeEmbedder
+from kge.distributed.misc import get_optimizer_dim
 
 from typing import List
 
@@ -31,15 +32,7 @@ class DistributedLookupEmbedder(LookupEmbedder):
             vocab_size,
             init_for_load_only=init_for_load_only,
         )
-        optimizer = self.config.get("train.optimizer")
-        if optimizer == "dist_sgd":
-            self.optimizer_dim = 0
-        elif optimizer == "dist_adagrad":
-            self.optimizer_dim = self.dim
-        elif optimizer == "dist_rowadagrad":
-            self.optimizer_dim = 1
-        else:
-            raise NotImplementedError(f"Optimizer {optimizer} not implemented")
+        self.optimizer_dim = get_optimizer_dim(config, self.dim)
         self.optimizer_values = torch.zeros(
             (self.vocab_size, self.optimizer_dim), dtype=torch.float32
         )

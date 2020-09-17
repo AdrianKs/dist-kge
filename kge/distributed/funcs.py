@@ -4,7 +4,7 @@ from kge import Config, Dataset
 from kge.distributed.parameter_server import init_torch_server, init_lapse_scheduler
 from kge.distributed.worker_process import WorkerProcessPool
 from kge.distributed.work_scheduler import WorkScheduler
-from kge.distributed.misc import MIN_RANK
+from kge.distributed.misc import MIN_RANK, get_optimizer_dim
 
 import torch
 from torch import multiprocessing as mp
@@ -95,14 +95,4 @@ def create_and_run_distributed(config: Config, dataset: Optional[Dataset] = None
     for p in processes:
         p.join()
 
-def get_optimizer_dim(config: Config, dim):
-    optimizer = config.get("train.optimizer")
-    if optimizer == "dist_sgd":
-        optimizer_dim = 0
-    elif optimizer == "dist_adagrad":
-        optimizer_dim = dim
-    elif optimizer == "dist_rowadagrad":
-        optimizer_dim = 1
-    else:
-        raise NotImplementedError(f"Optimizer {optimizer} not implemented")
-    return optimizer_dim
+
