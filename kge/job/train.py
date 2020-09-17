@@ -519,8 +519,6 @@ class TrainingJob(TrainingOrEvaluationJob):
             num_prepulls = max(self.entity_pre_pull, self.relation_pre_pull, 1)
             #for batch_index, batch in enumerate(self.loader):
             while not epoch_done:
-                if batch_index > 2500:
-                    break
                 try:
                     if batch is None and len(pre_load_batches) < num_prepulls:
                         pre_load_batches.append(next(iter_dataloader))
