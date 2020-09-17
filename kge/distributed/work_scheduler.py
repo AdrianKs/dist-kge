@@ -7,6 +7,7 @@ from collections import deque, OrderedDict
 from copy import deepcopy
 import numpy as np
 import torch
+from kge.misc import set_seeds
 from torch import multiprocessing as mp
 from torch import distributed as dist
 from enum import IntEnum
@@ -27,6 +28,7 @@ class SCHEDULER_CMDS(IntEnum):
 class WorkScheduler(mp.get_context("spawn").Process):
     def __init__(
         self,
+        config,
         world_size,
         master_ip,
         master_port,
@@ -36,6 +38,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
         rank=1,
     ):
         super(WorkScheduler, self).__init__(daemon=True, name="work-scheduler")
+        self.config = config
         self.rank = rank
         self.num_clients = num_clients
         self.world_size = world_size
@@ -50,6 +53,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
 
     @staticmethod
     def create(
+        config,
         partition_type,
         world_size,
         master_ip,
@@ -63,6 +67,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
     ):
         if partition_type == "block_partition":
             return BlockWorkScheduler(
+                config=config,
                 world_size=world_size,
                 master_ip=master_ip,
                 master_port=master_port,
@@ -72,6 +77,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
             )
         elif partition_type == "random_partition":
             return RandomWorkScheduler(
+                config=config,
                 world_size=world_size,
                 master_ip=master_ip,
                 master_port=master_port,
@@ -83,6 +89,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
             )
         elif partition_type == "relation_partition":
             return RelationWorkScheduler(
+                config=config,
                 world_size=world_size,
                 master_ip=master_ip,
                 master_port=master_port,
@@ -92,6 +99,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
             )
         elif partition_type == "metis_partition":
             return MetisWorkScheduler(
+                config=config,
                 world_size=world_size,
                 master_ip=master_ip,
                 master_port=master_port,
@@ -101,6 +109,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
             )
         elif partition_type == "2d_block_partition":
             return TwoDBlockWorkScheduler(
+                config=config,
                 world_size=world_size,
                 master_ip=master_ip,
                 master_port=master_port,
@@ -115,7 +124,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
             raise NotImplementedError()
 
     def run(self):
-        # todo: we also need to init torch dist in lapse now, to enable scheduling
+        set_seeds(config=self.config)
         os.environ["MASTER_ADDR"] = self.master_ip
         os.environ["MASTER_PORT"] = self.master_port
         # we have to have a huge timeout here, since it is only called after a complete
@@ -323,6 +332,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
 class BlockWorkScheduler(WorkScheduler):
     def __init__(
         self,
+        config,
         world_size,
         master_ip,
         master_port,
@@ -332,6 +342,7 @@ class BlockWorkScheduler(WorkScheduler):
     ):
         self.partition_type = "block_partition"
         super(BlockWorkScheduler, self).__init__(
+            config,
             world_size,
             master_ip,
             master_port,
@@ -367,6 +378,7 @@ class BlockWorkScheduler(WorkScheduler):
 class RandomWorkScheduler(WorkScheduler):
     def __init__(
         self,
+        config,
         world_size,
         master_ip,
         master_port,
@@ -380,6 +392,7 @@ class RandomWorkScheduler(WorkScheduler):
         self.dataset = dataset
         self.repartition_epoch = repartition_epoch
         super(RandomWorkScheduler, self).__init__(
+            config,
             world_size,
             master_ip,
             master_port,
@@ -415,6 +428,7 @@ class RandomWorkScheduler(WorkScheduler):
 class RelationWorkScheduler(WorkScheduler):
     def __init__(
         self,
+        config,
         world_size,
         master_ip,
         master_port,
@@ -424,6 +438,7 @@ class RelationWorkScheduler(WorkScheduler):
     ):
         self.partition_type = "relation_partition"
         super(RelationWorkScheduler, self).__init__(
+            config,
             world_size,
             master_ip,
             master_port,
@@ -474,6 +489,7 @@ class RelationWorkScheduler(WorkScheduler):
 class MetisWorkScheduler(WorkScheduler):
     def __init__(
         self,
+        config,
         world_size,
         master_ip,
         master_port,
@@ -483,6 +499,7 @@ class MetisWorkScheduler(WorkScheduler):
     ):
         self.partition_type = "metis_partition"
         super(MetisWorkScheduler, self).__init__(
+            config,
             world_size,
             master_ip,
             master_port,
@@ -537,6 +554,7 @@ class TwoDBlockWorkScheduler(WorkScheduler):
 
     def __init__(
         self,
+        config,
         world_size,
         master_ip,
         master_port,
@@ -549,6 +567,7 @@ class TwoDBlockWorkScheduler(WorkScheduler):
     ):
         self.partition_type = "2d_block_partition"
         super(TwoDBlockWorkScheduler, self).__init__(
+            config=config,
             world_size=world_size,
             master_ip=master_ip,
             master_port=master_port,

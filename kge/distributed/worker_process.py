@@ -8,6 +8,7 @@ from torch import multiprocessing as mp
 from torch import distributed as dist
 
 from kge import Dataset
+from kge.misc import set_seeds
 from kge.job import Job
 from .parameter_client import KgeParameterClient
 from .misc import MIN_RANK
@@ -86,6 +87,9 @@ class WorkerProcess(mp.get_context("spawn").Process):
         self.checkpoint = checkpoint
 
     def run(self):
+        # seeds need to be set in every process
+        set_seeds(self.config)
+
         os.environ["MASTER_ADDR"] = self.config.get("job.distributed.master_ip")
         os.environ["MASTER_PORT"] = self.config.get("job.distributed.master_port")
         print("before init", self.rank + MIN_RANK)

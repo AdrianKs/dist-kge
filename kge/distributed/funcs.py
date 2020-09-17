@@ -68,6 +68,7 @@ def create_and_run_distributed(config: Config, dataset: Optional[Dataset] = None
         # create a work scheduler
         partition_type = config.get("job.distributed.partition_type")
         scheduler = WorkScheduler.create(
+            config=config,
             partition_type=partition_type,
             world_size=num_workers + 2,
             master_ip=master_ip,
