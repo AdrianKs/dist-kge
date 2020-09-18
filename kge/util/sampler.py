@@ -833,9 +833,12 @@ class KgePooledSampler(KgeSampler):
     def _sample_shared(
         self, positive_triples: torch.Tensor, slot: int, num_samples: int
     ):
-        if not self.shared_type == "naive":
-            raise NotImplementedError("currently only naive shared samping supported for pooled")
-        # determine number of distinct negative samples for each positive
+        # if not self.shared_type == "naive":
+        #     raise NotImplementedError("currently only naive shared samping supported for pooled")
+        # # determine number of distinct negative samples for each positive
+
+        batch_size = len(positive_triples)
+
         if self.with_replacement:
             # Simple way to get a sample from the distribution of number of distinct
             # values in the negative sample (for "default" type: WR sampling except the
@@ -844,8 +847,9 @@ class KgePooledSampler(KgeSampler):
                 np.unique(
                     np.random.choice(
                         self.sample_pools[slot]
-                        if self.shared_type == "naive"
-                        else self.vocabulary_size[slot] - 1,
+                        # if self.shared_type == "naive"
+                        # else self.vocabulary_size[slot] - 1,
+                        ,
                         num_samples,
                         replace=True,
                     )
@@ -886,6 +890,34 @@ class KgePooledSampler(KgeSampler):
                 torch.tensor(unique_samples, dtype=torch.long),
                 repeat_indexes,
             )
+
+        # For default, we now filter the positives. For each row i (positive triple),
+        # select a sample to drop. For rows that contain its positive as a negative
+        # example, drop that positive. For all other rows, drop a random position. Here
+        # we start with random drop position for each row and then update the ones that
+        # contain its positive in the negative samples
+        positives = positive_triples[:, slot].numpy()
+        drop_index = np.random.choice(num_unique + 1, batch_size, replace=True)
+        # TODO can we do the following quicker?
+        unique_samples_index = {s: j for j, s in enumerate(unique_samples)}
+        for i, v in [
+            (i, unique_samples_index.get(positives[i]))
+            for i in range(batch_size)
+            if positives[i] in unique_samples_index
+        ]:
+            drop_index[i] = v
+
+        # now we are done for default
+        return DefaultSharedNegativeSample(
+            self.config,
+            self.configuration_key,
+            positive_triples,
+            slot,
+            num_samples,
+            torch.tensor(unique_samples, dtype=torch.long),
+            torch.tensor(drop_index),
+            repeat_indexes,
+        )
 
     def update_pools(self):
         self.sample_pools[S] = torch.randperm(self.vocabulary_size[S])[
