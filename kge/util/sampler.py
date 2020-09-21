@@ -246,7 +246,7 @@ class BatchNegativeSample(Configurable):
         """
         raise NotImplementedError
 
-    def unique_samples(self, indexes=None, return_inverse=False):
+    def unique_samples(self, indexes=None, return_inverse=False, remove_dropped=True):
         """Returns the unique negative samples.
 
         If `indexes` is provided, only consider the corresponding subset of the batch.
@@ -410,7 +410,7 @@ class NaiveSharedNegativeSample(BatchNegativeSample):
         self._unique_samples = unique_samples
         self._repeat_indexes = repeat_indexes
 
-    def unique_samples(self, indexes=None, return_inverse=False) -> torch.Tensor:
+    def unique_samples(self, indexes=None, return_inverse=False, remove_dropped=True) -> torch.Tensor:
         if return_inverse:
             # slow but probably rarely used anyway
             samples = self.samples(indexes)
@@ -498,18 +498,19 @@ class DefaultSharedNegativeSample(BatchNegativeSample):
         self._drop_index = drop_index
         self._repeat_indexes = repeat_indexes
 
-    def unique_samples(self, indexes=None, return_inverse=False) -> torch.Tensor:
+    def unique_samples(self, indexes=None, return_inverse=False, remove_dropped=True) -> torch.Tensor:
         if return_inverse:
             # slow but probably rarely used anyway
             return super(DefaultSharedNegativeSample, self).unique_samples(
                 indexes=indexes, return_inverse=return_inverse
             )
-        drop_index = self._drop_index if indexes is None else self._drop_index[indexes]
-        if torch.all(drop_index == drop_index[0]).item():
-            # same sample dropped for every triple in the batch
-            not_drop_mask = torch.ones(len(self._unique_samples), dtype=torch.bool)
-            not_drop_mask[drop_index[0]] = False
-            return self._unique_samples[not_drop_mask]
+        if remove_dropped:
+            drop_index = self._drop_index if indexes is None else self._drop_index[indexes]
+            if torch.all(drop_index == drop_index[0]).item():
+                # same sample dropped for every triple in the batch
+                not_drop_mask = torch.ones(len(self._unique_samples), dtype=torch.bool)
+                not_drop_mask[drop_index[0]] = False
+                return self._unique_samples[not_drop_mask]
         return self._unique_samples
 
     def map_samples(self, mapper):

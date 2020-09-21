@@ -1227,11 +1227,11 @@ class TrainingJobNegativeSampling(TrainingJob):
                 negative_samples.append(self._sampler.sample(triples, slot))
             unique_time = -time.time()
             unique_entities = torch.unique(torch.cat((triples[:, [S, O]].view(-1),
-                                                      negative_samples[S].unique_samples(),
+                                                      negative_samples[S].unique_samples(remove_dropped=False),
                                                       negative_samples[
-                                                          O].unique_samples())))
+                                                          O].unique_samples(remove_dropped=False))))
             unique_relations = torch.unique(torch.cat((
-                triples[:, [P]].view(-1), negative_samples[P].unique_samples())))
+                triples[:, [P]].view(-1), negative_samples[P].unique_samples(remove_dropped=False))))
             unique_time += time.time()
 
             # map ids to local ids
