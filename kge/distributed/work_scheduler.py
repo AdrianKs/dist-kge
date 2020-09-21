@@ -147,7 +147,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
             # refill work and distribute to all asking workers
             if len(self.done_workers) == self.num_clients:
                 epoch_time += time.time()
-                print("epoch time", epoch_time)
+                self.config.log(f"complete_epoch_time: {epoch_time}")
                 epoch_time = None
                 self._refill_work()
                 for worker in self.asking_workers:

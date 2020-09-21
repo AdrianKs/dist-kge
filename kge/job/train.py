@@ -1344,9 +1344,6 @@ class TrainingJobNegativeSampling(TrainingJob):
         result.prepare_time += time.time()
         labels = batch["labels"]  # reuse b/w subbatches
 
-        #time.sleep(0.001)
-        #return
-
         # process the subbatch for each slot separately
         for slot in [S, P, O]:
             num_samples = self._sampler.num_samples[slot]
