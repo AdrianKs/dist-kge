@@ -34,12 +34,7 @@ def create_and_run_distributed(config: Config, dataset: Optional[Dataset] = None
     # meta keys. contains for example a variable indicating whether to stop or
     #  not
     num_keys += num_meta_keys
-    # todo: we should define server, scheduler and worker ranks here
-    #  then create a extra dist worker group after every init
-    #  we can create the scheduler-clients in the worker generation
-    #  and provide them with the scheduler rank
-    #  then we can remove this ugly mock process and can have a barrier
-    #  for the workers only
+
     if config.get("job.distributed.machine_id") == 0:
         if config.get("job.distributed.parameter_server") == "lapse":
             p = mp.Process(
@@ -82,6 +77,8 @@ def create_and_run_distributed(config: Config, dataset: Optional[Dataset] = None
         )
         scheduler.start()
         processes.append(scheduler)
+
+    # create all train-workers in a worker pool
     num_workers = config.get("job.distributed.num_workers")
     num_workers_machine = config.get("job.distributed.num_workers_machine")
     if num_workers_machine <= 0:

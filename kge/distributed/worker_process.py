@@ -15,6 +15,9 @@ from .misc import MIN_RANK
 
 
 class WorkerProcessPool:
+    """
+    Creates all the train-workers for distributed training
+    """
     def __init__(
         self,
         num_total_workers,
@@ -36,7 +39,6 @@ class WorkerProcessPool:
         for rank in range(num_workers_machine):
             configs[rank] = deepcopy(config)
             configs[rank].set(config.get("model") + ".create_complete", False)
-            # configs[rank].folder = os.path.join(config.folder, f"server-{rank}")
             configs[rank].init_folder()
             worker = WorkerProcess(
                 rank + already_init_workers,
@@ -54,11 +56,13 @@ class WorkerProcessPool:
             self.workers.append(worker)
 
     def join(self):
+        """Wait for all workers"""
         for worker in self.workers:
             worker.join()
 
 
 class WorkerProcess(mp.get_context("spawn").Process):
+    """Train worker"""
     def __init__(
         self,
         rank,
@@ -101,6 +105,8 @@ class WorkerProcess(mp.get_context("spawn").Process):
         )
         worker_ranks = list(range(MIN_RANK, self.num_total_workers+MIN_RANK))
         worker_group = dist.new_group(worker_ranks)
+
+        # create parameter server
         server = None
         if self.config.get("job.distributed.parameter_server") == "lapse":
             os.environ["DMLC_NUM_WORKER"] = "0"
@@ -118,25 +124,18 @@ class WorkerProcess(mp.get_context("spawn").Process):
             server = lapse.Server(self.num_keys, self.embedding_dim + self.optimizer_dim)
         elif self.config.get("job.distributed.parameter_server") == "shared":
             server = self.parameters
-        configs = {}
-        datasets = {}
-        w = 0
+
+        # create train-worker config, dataset and folder
         device_pool: list = self.config.get("job.device_pool")
         if len(device_pool) == 0:
             device_pool.append(self.config.get("job.device"))
         worker_id = self.rank
-        configs[w] = deepcopy(self.config)
-        configs[w].set("job.device", device_pool[worker_id % len(device_pool)])
-        configs[w].folder = os.path.join(self.config.folder, f"worker-{self.rank}")
-        configs[w].init_folder()
-        datasets[w] = deepcopy(self.dataset)
-        # datasets[w] = Dataset.create(
-        #     configs[w],
-        #     folder=os.path.join(self.dataset.folder, f"partition_{worker_id}"),
-        # )
-        # datasets[w] = Dataset.create(configs[w], dataset.folder)
-        # kv = lapse.Worker(0, worker_id + 1, s)
-        # kv = LapseWorker(0, worker_id + 1, s, num_meta_keys)
+        config = deepcopy(self.config)
+        config.set("job.device", device_pool[worker_id % len(device_pool)])
+        config.folder = os.path.join(self.config.folder, f"worker-{self.rank}")
+        config.init_folder()
+        dataset = deepcopy(self.dataset)
+
         parameter_client = KgeParameterClient.create(
             client_type=self.config.get("job.distributed.parameter_server"),
             server_id=0,
@@ -147,18 +146,19 @@ class WorkerProcess(mp.get_context("spawn").Process):
             worker_group=worker_group,
         )
         init_for_load_only = False
+
+        # load data from checkpoint and create job
         if parameter_client.rank == MIN_RANK and self.checkpoint is not None:
             # Todo: we still create a complete new job after creating the resume job
             #  therefore epoch numbers will not be handled correctly, for example
             job = Job.create_from(self.checkpoint, parameter_client=parameter_client)
             job.model.get_s_embedder().push_all()
             job.model.get_p_embedder().push_all()
-            #job.optimizer.push_all()
             init_for_load_only = True
-            #del self.checkpoint
+
         job = Job.create(
-            configs[w],
-            datasets[w],
+            config=config,
+            dataset=dataset,
             parameter_client=parameter_client,
             init_for_load_only=init_for_load_only,
         )
@@ -166,11 +166,17 @@ class WorkerProcess(mp.get_context("spawn").Process):
             job.epoch = self.checkpoint["epoch"]
             job.valid_trace = self.checkpoint["valid_trace"]
             del self.checkpoint
+
         job.run()
 
+        # all done, clean up
         job.work_scheduler_client.shutdown()
         parameter_client.shutdown()
-        del job
+        # delete all occurrences of the parameter client to properly shutdown lapse
+        # del job
+        del job.parameter_client
+        del job.model
+        del job.optimizer
         del parameter_client
         gc.collect()  # make sure lapse-worker destructor is called
         # shutdown server
