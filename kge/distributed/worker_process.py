@@ -37,6 +37,10 @@ class WorkerProcessPool:
         if config.get("job.distributed.parameter_server") == "shared":
             parameters = torch.empty((num_keys, embedding_dim + optimizer_dim), dtype=torch.float32, requires_grad=False).share_memory_()
         for rank in range(num_workers_machine):
+            if rank == 0:
+                self.recv_end, send_end = mp.Pipe(False)
+            else:
+                send_end = None
             configs[rank] = deepcopy(config)
             configs[rank].set(config.get("model") + ".create_complete", False)
             configs[rank].init_folder()
@@ -51,14 +55,17 @@ class WorkerProcessPool:
                 dataset,
                 parameters=parameters,
                 checkpoint=checkpoint,
+                result_pipe=send_end
             )
             worker.start()
             self.workers.append(worker)
 
     def join(self):
         """Wait for all workers"""
+        valid_trace = self.recv_end.recv()
         for worker in self.workers:
             worker.join()
+        return valid_trace
 
 
 class WorkerProcess(mp.get_context("spawn").Process):
@@ -75,6 +82,7 @@ class WorkerProcess(mp.get_context("spawn").Process):
         dataset,
         parameters=None,
         checkpoint: Optional[Dict] = None,
+        result_pipe=None,
     ):
         # rank = rank + 1
         daemon = config.get("train.num_workers") <= 0
@@ -89,6 +97,7 @@ class WorkerProcess(mp.get_context("spawn").Process):
         self.dataset = dataset
         self.parameters = parameters
         self.checkpoint = checkpoint
+        self.result_pipe = result_pipe
 
     def run(self):
         # seeds need to be set in every process
@@ -175,6 +184,8 @@ class WorkerProcess(mp.get_context("spawn").Process):
         # delete all occurrences of the parameter client to properly shutdown lapse
         # del job
         del job.parameter_client
+        del job.model.get_s_embedder().parameter_client
+        del job.model.get_p_embedder().parameter_client
         del job.model
         del job.optimizer
         del parameter_client
@@ -182,3 +193,5 @@ class WorkerProcess(mp.get_context("spawn").Process):
         # shutdown server
         if server is not None:
             server.shutdown()
+        if self.result_pipe is not None:
+            self.result_pipe.send(job.valid_trace)

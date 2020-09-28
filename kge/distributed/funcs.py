@@ -88,8 +88,9 @@ def create_and_run_distributed(config: Config, dataset: Optional[Dataset] = None
         num_workers, num_workers_machine, already_init_workers, num_keys,
         num_meta_keys, dim, optimizer_dim, config, dataset, checkpoint
     )
-    worker_process_pool.join()
+    valid_trace = worker_process_pool.join()
     for p in processes:
         p.join()
+    return valid_trace
 
 
