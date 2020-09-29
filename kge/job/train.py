@@ -495,7 +495,7 @@ class TrainingJob(TrainingOrEvaluationJob):
             if self.relation_sync_level == "partition":
                 if work_relations is not None:
                     self.model.get_p_embedder()._pull_embeddings(work_relations)
-                    self.model.get_p_embedder().global_to_local_mapper[work_entities] = torch.arange(len(work_entities), dtype=torch.long, device="cpu")
+                    self.model.get_p_embedder().global_to_local_mapper[work_relations] = torch.arange(len(work_relations), dtype=torch.long, device="cpu")
                 else:
                     raise ValueError(
                         "the used work-scheduler seems not to support "
