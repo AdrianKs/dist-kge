@@ -101,7 +101,7 @@ class WorkerProcess(mp.get_context("spawn").Process):
 
     def run(self):
         # seeds need to be set in every process
-        set_seeds(self.config)
+        set_seeds(self.config, self.rank)
 
         os.environ["MASTER_ADDR"] = self.config.get("job.distributed.master_ip")
         os.environ["MASTER_PORT"] = self.config.get("job.distributed.master_port")

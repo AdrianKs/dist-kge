@@ -124,17 +124,21 @@ def round_to_points(round_points_to: List[int], to_be_rounded: int):
             )
         )
 
-def set_seeds(config):
+
+def set_seeds(config, rank=0):
     # set random seeds
+    import random
+    import torch
+    import numpy.random
     if config.get("random_seed.python") > -1:
-        import random
-
-        random.seed(config.get("random_seed.python"))
+        random.seed(config.get("random_seed.python") + rank)
+    else:
+        random.seed()
     if config.get("random_seed.torch") > -1:
-        import torch
-
-        torch.manual_seed(config.get("random_seed.torch"))
+        torch.manual_seed(config.get("random_seed.torch") + rank)
+    else:
+        torch.seed()
     if config.get("random_seed.numpy") > -1:
-        import numpy.random
-
-        numpy.random.seed(config.get("random_seed.numpy"))
+        numpy.random.seed(config.get("random_seed.numpy") + rank)
+    else:
+        numpy.random.seed()
