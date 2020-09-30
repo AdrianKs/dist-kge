@@ -197,7 +197,11 @@ def main():
                 #         "No checkpoint found or specified, starting from scratch..."
                 #     )
             # else:
-            create_and_run_distributed(config, dataset, checkpoint)
+            if config.get("job.type") == "train" and config.get("job.distributed.num_workers") > 0:
+                create_and_run_distributed(config, dataset, checkpoint)
+            else:
+                job = Job.create(config, dataset)
+                job.run()
 
             # job.run()
     except BaseException as e:
