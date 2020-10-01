@@ -5,7 +5,6 @@ import concurrent.futures
 from kge.job import Job, Trace
 from kge.config import _process_deprecated_options
 from kge.util.io import get_checkpoint_file, load_checkpoint
-from kge.distributed.funcs import create_and_run_distributed
 
 
 class SearchJob(Job):
@@ -180,6 +179,7 @@ def _run_train_job(sicnk, device=None):
                 copy_to_search_trace(None, trace_entry)
         else:
             if train_job_config.get("job.distributed.num_workers") > 0:
+                from kge.distributed.funcs import create_and_run_distributed
                 valid_trace = create_and_run_distributed(config=train_job_config, dataset=search_job.dataset)
             else:
                 job = Job.create(
