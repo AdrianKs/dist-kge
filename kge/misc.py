@@ -137,7 +137,7 @@ def set_seeds(config, rank=0):
     if config.get("random_seed.torch") > -1:
         torch.manual_seed(config.get("random_seed.torch") + rank)
     else:
-        torch.seed()
+        torch.manual_seed(random.randint(0, 2**32))
     if config.get("random_seed.numpy") > -1:
         numpy.random.seed(config.get("random_seed.numpy") + rank)
     else:
