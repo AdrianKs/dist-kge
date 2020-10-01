@@ -547,6 +547,9 @@ class MetisWorkScheduler(WorkScheduler):
             )
         return entities_in_partition
 
+    def _get_max_entities(self):
+        return max([len(i) for i in self.entities_to_partition.values()])
+
 
 class TwoDBlockWorkScheduler(WorkScheduler):
     """
