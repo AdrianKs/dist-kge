@@ -351,13 +351,21 @@ class TrainingJob(TrainingOrEvaluationJob):
                     if checkpoint_every == 0:
                         # do not keep any old checkpoints
                         delete_checkpoint_epoch = self.epoch - 1
-                    elif (self.epoch - 1) % checkpoint_every != 0:
-                        # delete checkpoints that are not in the checkpoint.every schedule
-                        delete_checkpoint_epoch = self.epoch - 1
+                    # in the distributed setup we only save checkpoints when we evaluate
+                    #  since it is expensive to create the complete model
+                    # therefore checkpoint every does not work
+                    # elif (self.epoch - 1) % checkpoint_every != 0:
+                    #     # delete checkpoints that are not in the checkpoint.every schedule
+                    #     delete_checkpoint_epoch = self.epoch - 1
                     elif checkpoint_keep > 0:
                         # keep a maximum number of checkpoint_keep checkpoints
+                        # since in distributed setup we only create checkpoints when
+                        #  we evaluate, checkpoint_keep needs to refer to valid.every
+                        # delete_checkpoint_epoch = (
+                        #     self.epoch - checkpoint_every * checkpoint_keep
+                        # )
                         delete_checkpoint_epoch = (
-                            self.epoch - 1 - checkpoint_every * checkpoint_keep
+                                self.epoch - self.config.get("valid.every") * checkpoint_keep
                         )
                     if delete_checkpoint_epoch > 0:
                         if os.path.exists(
