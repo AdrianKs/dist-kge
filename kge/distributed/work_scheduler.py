@@ -2,11 +2,11 @@ import os
 import math
 import datetime
 import time
-import random
-from collections import deque, OrderedDict
-from copy import deepcopy
+import concurrent.futures
 import numpy as np
 import torch
+from collections import deque, OrderedDict
+from copy import deepcopy
 from kge.misc import set_seeds
 from kge.distributed.two_d_block_schedule_creator import TwoDBlockScheduleCreator
 from torch import multiprocessing as mp
@@ -37,8 +37,9 @@ class WorkScheduler(mp.get_context("spawn").Process):
         num_clients,
         dataset_folder,
         rank=1,
+        repartition_epoch=True,
     ):
-        super(WorkScheduler, self).__init__(daemon=True, name="work-scheduler")
+        super(WorkScheduler, self).__init__(daemon=False, name="work-scheduler")
         self.config = config
         self.rank = rank
         self.num_clients = num_clients
@@ -51,6 +52,10 @@ class WorkScheduler(mp.get_context("spawn").Process):
         self.asking_workers = []
         self.work_to_do = deque(list(range(num_partitions)))
         self.wait_time = 2
+        self.repartition_epoch = repartition_epoch
+        if self.repartition_epoch:
+            self.repartition_future = None
+            self.repartition_worker_pool = None
 
     @staticmethod
     def create(
@@ -140,6 +145,14 @@ class WorkScheduler(mp.get_context("spawn").Process):
         barrier_count = 0
         shutdown_count = 0
         epoch_time = None
+        if self.repartition_epoch:
+            if self.repartition_worker_pool is None:
+                self.repartition_worker_pool = concurrent.futures.ProcessPoolExecutor(
+                    max_workers=1,
+                    mp_context=torch.multiprocessing.get_context("fork"),
+                )
+            self._repartition_in_background()
+
         while True:
             # cmd_buffer consists of cmd_number, key_len
             cmd_buffer = torch.full((2,), -1, dtype=torch.long)
@@ -179,6 +192,10 @@ class WorkScheduler(mp.get_context("spawn").Process):
                 shutdown_count += 1
                 if shutdown_count == self.num_clients:
                     print("shutting down work scheduler")
+                    if self.repartition_future is not None:
+                        self.repartition_future.cancel()
+                    if self.repartition_worker_pool is not None:
+                        self.repartition_worker_pool.shutdown()
                     break
             if cmd == SCHEDULER_CMDS.INIT_INFO:
                 self._handle_init_info(rank)
@@ -192,6 +209,9 @@ class WorkScheduler(mp.get_context("spawn").Process):
 
     def _refill_work(self):
         self.work_to_do = deque(list(range(self.num_partitions)))
+
+    def _repartition_in_background(self):
+        pass
 
     def _send_work(self, rank, cmd_buffer):
         work, entities, relations, wait = self._next_work(rank)
@@ -391,7 +411,6 @@ class RandomWorkScheduler(WorkScheduler):
     ):
         self.partition_type = "random_partition"
         self.dataset = dataset
-        self.repartition_epoch = repartition_epoch
         super(RandomWorkScheduler, self).__init__(
             config,
             world_size,
@@ -400,6 +419,7 @@ class RandomWorkScheduler(WorkScheduler):
             num_partitions,
             num_clients,
             dataset_folder,
+            repartition_epoch=repartition_epoch,
         )
 
     def _next_work(
@@ -580,6 +600,7 @@ class TwoDBlockWorkScheduler(WorkScheduler):
             num_partitions=num_partitions,
             num_clients=num_clients,
             dataset_folder=dataset_folder,
+            repartition_epoch=repartition_epoch,
         )
         # dictionary: key=worker_rank, value=block
         self.running_blocks: Dict[int, Tuple[int, int]] = {}
@@ -588,10 +609,9 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         entities_to_partition = self._load_entities_to_partitions_file(
             self.partition_type, dataset_folder, num_partitions
         )
-        self._entities_in_bucket = self._get_entities_in_bucket(entities_to_partition)
+        self._entities_in_bucket = self._get_entities_in_bucket(entities_to_partition, self.partitions)
         self.dataset = dataset
         self.scheduling_order = scheduling_order
-        self.repartition_epoch = repartition_epoch
         self.work_to_do: Dict[Tuple[int, int], torch.Tensor] = self._order_by_schedule(
             deepcopy(self.partitions)
         )
@@ -645,13 +665,27 @@ class TwoDBlockWorkScheduler(WorkScheduler):
             sorted_partitions[key] = partitions[key]
         return sorted_partitions
 
-    def _repartition(self):
+    @staticmethod
+    def _repartition(data, num_entities, num_partitions):
+        """
+        This needs to be a static method so that we can pickle and run in background
+        Args:
+            data: data to repartition (train-set)
+            num_entities: dataset.num_entities()
+            num_partitions: self.num_partitions
+
+        Returns:
+            partitions: dict of structure {(block_id 1, block_id 2): [triple ids]}
+            entities_in_bucket:
+                dict of structure {(block_id 1, block_id 2): list of entity ids}
+        """
         print("repartitioning data")
+        start = -time.time()
 
         def random_map_entities():
-            mapper = torch.randperm(self.dataset.num_entities()).type(torch.int32)
+            mapper = torch.randperm(num_entities).type(torch.int32)
             mapped_data = deepcopy(
-                self.dataset.split("train")
+                data
             )  # drop reference to dataset
             mapped_data[:, 0] = mapper[mapped_data[:, 0].long()]
             mapped_data[:, 2] = mapper[mapped_data[:, 2].long()]
@@ -670,29 +704,32 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         print("repartition s")
         s_block = v_get_partition(
             mapped_data[:, 0],
-            num_entities=self.dataset.num_entities(),
-            num_partitions=self.num_partitions,
+            num_entities=num_entities,
+            num_partitions=num_partitions,
         )
         print("repartition o")
         o_block = v_get_partition(
             mapped_data[:, 2],
-            num_entities=self.dataset.num_entities(),
-            num_partitions=self.num_partitions,
+            num_entities=num_entities,
+            num_partitions=num_partitions,
         )
         print("map entity ids to partition")
         entity_to_partition = v_get_partition(
             mapped_entities,
-            num_entities=self.dataset.num_entities(),
-            num_partitions=self.num_partitions,
+            num_entities=num_entities,
+            num_partitions=num_partitions,
         )
         triple_partition_assignment = np.stack([s_block, o_block], axis=1)
-        self.partitions = self._construct_partitions(triple_partition_assignment)
-        self._entities_in_bucket = self._get_entities_in_bucket(entity_to_partition)
+        partitions = TwoDBlockWorkScheduler._construct_partitions(triple_partition_assignment)
+        entities_in_bucket = TwoDBlockWorkScheduler._get_entities_in_bucket(entity_to_partition, partitions)
         print("repartitioning done")
+        print("repartition_time", start+time.time())
+        return partitions, entities_in_bucket
 
-    def _get_entities_in_bucket(self, entities_to_partition):
+    @staticmethod
+    def _get_entities_in_bucket(entities_to_partition, partitions):
         entities_in_bucket = dict()
-        for partition in self.partitions:
+        for partition in partitions:
             entities_in_bucket[partition] = torch.from_numpy(
                 np.where(
                     np.ma.mask_or(
@@ -724,7 +761,6 @@ class TwoDBlockWorkScheduler(WorkScheduler):
             return block_data, entities_in_block, None, False
         except IndexError:
             return None, None, None, False
-
 
     def _acquire_bucket(
         self, rank
@@ -793,9 +829,18 @@ class TwoDBlockWorkScheduler(WorkScheduler):
     def _handle_work_done(self, rank):
         del self.running_blocks[rank]
 
+    def _repartition_in_background(self):
+        self.repartition_future = self.repartition_worker_pool.submit(
+            self._repartition,
+            self.dataset.split("train"),
+            self.dataset.num_entities(),
+            self.num_partitions
+        )
+
     def _refill_work(self):
         if self.repartition_epoch:
-            self._repartition()
+            self.partitions, self._entities_in_bucket = self.repartition_future.result()
+            self._repartition_in_background()
         self.fixed_schedule = [item for sublist in self.schedule_creator.create_schedule() for item in sublist]
         self.work_to_do = self._order_by_schedule(deepcopy(self.partitions))
 
