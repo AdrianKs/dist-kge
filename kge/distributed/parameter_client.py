@@ -26,7 +26,10 @@ class KgeParameterClient:
         raise NotImplementedError()
 
     def shutdown(self):
-        raise NotImplementedError()
+        pass
+
+    def stop(self):
+        pass
 
     def is_stopped(self):
         return False
@@ -37,6 +40,7 @@ class KgeParameterClient:
         server_id,
         client_id,
         embedding_dim,
+        num_keys,
         worker_group,
         server=None,
         num_meta_keys=0,
@@ -54,6 +58,8 @@ class KgeParameterClient:
                 server_rank=server_id,
                 rank=client_id,
                 dim=embedding_dim,
+                num_keys=num_keys,
+                num_meta_keys=num_meta_keys,
                 worker_group=worker_group,
             )
         elif client_type == "shared":
@@ -125,7 +131,7 @@ class LapseParameterClient(lapse.Worker, KgeParameterClient):
     def wait(self, wait_value):
         super(LapseParameterClient, self).wait(wait_value)
 
-    def shutdown(self):
+    def stop(self):
         super(LapseParameterClient, self).push(
             self._stop_key, torch.ones((1, self.key_size), dtype=torch.float32)
         )
@@ -171,12 +177,16 @@ class LapseParameterClient(lapse.Worker, KgeParameterClient):
 
 
 class TorchParameterClient(KgeParameterClient):
-    def __init__(self, server_rank, rank, dim, worker_group):
+    def __init__(self, server_rank, rank, dim, num_keys, num_meta_keys, worker_group):
         self.server_rank = server_rank
         self.rank = rank
         self.dim = dim
+        self.num_keys = num_keys
+        self.num_meta_keys = num_meta_keys
         self.data_type = torch.float32
         self.lr_buffer = torch.zeros(1, dtype=torch.float32)
+        self._stop_key = torch.LongTensor([self.num_keys - self.num_meta_keys])
+        self._stop_value_tensor = torch.zeros((1, self.dim), dtype=torch.float32)
         self.worker_group = worker_group
 
     def pull(self, keys, pull_tensor=None, asynchronous=False):
@@ -205,9 +215,21 @@ class TorchParameterClient(KgeParameterClient):
     def barrier(self):
         dist.barrier(group=self.worker_group)
 
+    def stop(self):
+        self.push(
+            self._stop_key, torch.ones((1, self.dim), dtype=torch.float32)
+        )
+
     def shutdown(self):
         cmd = torch.LongTensor([TORCH_PARAMETER_SERVER_CMDS.SHUTDOWN_CMD, 0])
         dist.send(cmd, dst=self.server_rank)
+
+    def is_stopped(self) -> bool:
+        self.pull(self._stop_key, self._stop_value_tensor)
+        if torch.any(self._stop_value_tensor[0] == 1):
+            return True
+        else:
+            return False
 
     def step_optim(self, parameter_index):
         cmd = torch.LongTensor(
@@ -283,8 +305,7 @@ class SharedParameterClient(KgeParameterClient):
     def barrier(self):
         dist.barrier(group=self.worker_group)
 
-
-    def shutdown(self):
+    def stop(self):
         self.push(
             self._stop_key, torch.ones((1, self.dim), dtype=torch.float32)
         )

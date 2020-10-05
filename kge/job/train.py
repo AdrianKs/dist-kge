@@ -246,9 +246,9 @@ class TrainingJob(TrainingOrEvaluationJob):
                         )
                         + "in the last {} validation runs).".format(patience)
                     )
-                    self.parameter_client.shutdown()
+                    self.parameter_client.stop()
                     # break
-                if self.epoch > self.config.get(
+                elif self.epoch > self.config.get(
                     "valid.early_stopping.min_threshold.epochs"
                 ) and self.valid_trace[best_index][metric_name] < self.config.get(
                     "valid.early_stopping.min_threshold.metric_value"
@@ -258,7 +258,7 @@ class TrainingJob(TrainingOrEvaluationJob):
                             metric_name, self.epoch
                         )
                     )
-                    self.parameter_client.shutdown()
+                    self.parameter_client.stop()
                     # self.work_scheduler_client.shutdown()
                     # break
 
@@ -269,6 +269,7 @@ class TrainingJob(TrainingOrEvaluationJob):
 
             self.parameter_client.barrier()
             if self.parameter_client.is_stopped():
+                self.config.log(f"Shutting down Trainer {self.parameter_client.rank}")
                 break
 
             # start a new epoch

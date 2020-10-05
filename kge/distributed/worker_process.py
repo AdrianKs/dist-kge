@@ -151,6 +151,7 @@ class WorkerProcess(mp.get_context("spawn").Process):
             client_id=worker_id + MIN_RANK,
             embedding_dim=self.embedding_dim + self.optimizer_dim,
             server=server,
+            num_keys=self.num_keys,
             num_meta_keys=self.num_meta_keys,
             worker_group=worker_group,
         )
