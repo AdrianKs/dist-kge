@@ -138,7 +138,7 @@ class LapseParameterClient(lapse.Worker, KgeParameterClient):
 
     def is_stopped(self) -> bool:
         super(LapseParameterClient, self).pull(self._stop_key, self._stop_value_tensor)
-        if torch.any(self._stop_value_tensor[0] == 1):
+        if self._stop_value_tensor[0, 0].item() == 1:
             return True
         else:
             return False
