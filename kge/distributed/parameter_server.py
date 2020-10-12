@@ -11,12 +11,14 @@ class TORCH_PARAMETER_SERVER_CMDS(IntEnum):
     PULL_CMD = 0
     PUSH_CMD = 1
     SET_CMD = 2
-    GET_LR_CMD = 3
-    SET_LR_CMD = 4
-    GET_OPTIM_STEP_CMD = 5
-    STEP_OPTIM_CMD = 6
-    BARRIER_CMD = 7
-    SHUTDOWN_CMD = 8
+    GET_ENTITY_LR_CMD = 3
+    GET_RELATION_LR_CMD = 4
+    SET_ENTITY_LR_CMD = 5
+    SET_RELATION_LR_CMD = 6
+    GET_OPTIM_STEP_CMD = 7
+    STEP_OPTIM_CMD = 8
+    BARRIER_CMD = 9
+    SHUTDOWN_CMD = 10
 
 
 class KgeParameterServer:
@@ -46,7 +48,8 @@ class TorchParameterServer:
         self.dim = dim
         self.data_type = torch.float32
         self.data = torch.zeros((num_keys, dim), dtype=self.data_type)
-        self.lr = 0
+        self.entity_lr = 0
+        self.relation_lr = 0
         self.entity_optim_step = 0
         self.relation_optim_step = 0
         self.start()
@@ -73,12 +76,18 @@ class TorchParameterServer:
                 key_len = cmd_buffer[1].item()
                 keys = self._receive_keys(rank, key_len)
                 self._handle_set(rank, keys)
-            if cmd == TORCH_PARAMETER_SERVER_CMDS.GET_LR_CMD:
-                lr_buffer[0] = self.lr
+            if cmd == TORCH_PARAMETER_SERVER_CMDS.GET_ENTITY_LR_CMD:
+                lr_buffer[0] = self.entity_lr
                 dist.send(lr_buffer, rank)
-            if cmd == TORCH_PARAMETER_SERVER_CMDS.SET_LR_CMD:
+            if cmd == TORCH_PARAMETER_SERVER_CMDS.GET_RELATION_LR_CMD:
+                lr_buffer[0] = self.relation_lr
+                dist.send(lr_buffer, rank)
+            if cmd == TORCH_PARAMETER_SERVER_CMDS.SET_ENTITY_LR_CMD:
                 dist.recv(lr_buffer, src=rank)
-                self.lr = lr_buffer.item()
+                self.entity_lr = lr_buffer.item()
+            if cmd == TORCH_PARAMETER_SERVER_CMDS.SET_RELATION_LR_CMD:
+                dist.recv(lr_buffer, src=rank)
+                self.relation_lr = lr_buffer.item()
             if cmd == TORCH_PARAMETER_SERVER_CMDS.GET_OPTIM_STEP_CMD:
                 parameter_index = cmd_buffer[1].item()
                 if parameter_index == 0:

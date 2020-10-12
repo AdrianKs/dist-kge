@@ -19,7 +19,7 @@ def create_and_run_distributed(config: Config, dataset: Optional[Dataset] = None
         "job.distributed.gloo_socket_ifname")
     processes = []
     num_keys = dataset.num_entities() + dataset.num_relations()
-    num_meta_keys = 2
+    num_meta_keys = 3
     num_workers = config.get("job.distributed.num_workers")
     master_ip = config.get("job.distributed.master_ip")
     master_port = config.get("job.distributed.master_port")
@@ -28,7 +28,7 @@ def create_and_run_distributed(config: Config, dataset: Optional[Dataset] = None
     dist_world_size = num_workers + MIN_RANK
     dim = config.get("lookup_embedder.dim")
     optimizer_dim = get_optimizer_dim(config, dim)
-    if config.get("train.optimizer") in ["dist_adagrad", "dist_rowadagrad"]:
+    if config.get("train.optimizer.default.type") in ["dist_adagrad", "dist_rowadagrad"]:
     #    num_keys *= 2
         num_meta_keys += 2
     # meta keys. contains for example a variable indicating whether to stop or

@@ -14,33 +14,32 @@ class KgeOptimizer:
     @staticmethod
     def create(config, model, parameter_client=None, lapse_indexes=None):
         """ Factory method for optimizer creation """
-        if config.get("train.optimizer") == "dist_sgd":
+        if config.get("train.optimizer.default.type") == "dist_sgd":
             optimizer = DistSGD(
                 model,
                 parameter_client=parameter_client,
                 lapse_indexes=lapse_indexes,
-                **config.get("train.optimizer_args"),
+                **config.get("train.optimizer.default.args"),
             )
             return optimizer
-        if config.get("train.optimizer") in ["dist_adagrad", "dist_rowadagrad"]:
+        if config.get("train.optimizer.default.type") in ["dist_adagrad", "dist_rowadagrad"]:
             is_row=False
             use_lr_scheduler=False
-            if config.get("train.optimizer") == "dist_rowadagrad":
+            if config.get("train.optimizer.default.type") == "dist_rowadagrad":
                 is_row = True
             if config.get("train.lr_scheduler") != "":
                 use_lr_scheduler = True
             optimizer = DistAdagrad(
-                model,
+                #model,
+                KgeOptimizer._get_parameters_and_optimizer_args(config, model),
                 parameter_client=parameter_client,
                 lapse_indexes=lapse_indexes,
-                sync_levels=[
-                    config.get("job.distributed.entity_sync_level"),
-                    config.get("job.distributed.relation_sync_level"),
-                ],
-                async_write_back=[config.get("job.distributed.entity_async_write_back"), config.get("job.distributed.relation_async_write_back")],
+                lapse_optimizer_index_offset=model.dataset.num_entities() + model.dataset.num_relations(),
+                async_write_back=[config.get("job.distributed.entity_async_write_back"),
+                                  config.get("job.distributed.relation_async_write_back")],
                 is_row=is_row,
                 use_lr_scheduler=use_lr_scheduler,
-                **config.get("train.optimizer_args"),
+                **config.get("train.optimizer.default.args"),
             )
             return optimizer
         else:
@@ -104,6 +103,20 @@ class KgeOptimizer:
                 named_parameters[param] for param in params
             ]
             optimizer_settings[group_name]["args"]["name"] = group_name
+            if group_name == "entity" or group_name == "relation":
+                optimizer_settings[group_name]["args"][
+                    "async_write_back"] = config.get(
+                    f"job.distributed.{group_name}_async_write_back")
+                optimizer_settings[group_name]["args"]["sync_level"] = config.get(
+                    f"job.distributed.{group_name}_sync_level")
+                optimizer_settings[group_name]["args"][
+                    "local_to_lapse_mapper"] = getattr(
+                    model,
+                    f"_{group_name}_embedder").local_to_lapse_mapper
+                optimizer_settings[group_name]["args"]["optimizer_values"] = getattr(
+                    model,
+                    f"_{group_name}_embedder"
+                ).optimizer_values
             resulting_parameters.append(optimizer_settings[group_name]["args"])
 
         # add unmatched parameters to default group

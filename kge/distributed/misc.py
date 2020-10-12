@@ -4,7 +4,7 @@ MIN_RANK = 2
 
 
 def get_optimizer_dim(config: Config, dim):
-    optimizer = config.get("train.optimizer")
+    optimizer = config.get("train.optimizer.default.type")
     if optimizer == "dist_sgd":
         optimizer_dim = -1
     elif optimizer == "dist_adagrad":

@@ -94,7 +94,8 @@ class LapseParameterClient(lapse.Worker, KgeParameterClient):
         self._optim_relation_step_key = torch.LongTensor(
             [self.num_keys - self.num_meta_keys + 2]
         )
-        self._lr_key = torch.LongTensor([self.num_keys - self.num_meta_keys + 3])
+        self._entity_lr_key = torch.LongTensor([self.num_keys - self.num_meta_keys + 3])
+        self._relation_lr_key = torch.LongTensor([self.num_keys - self.num_meta_keys + 4])
         self._stop_value_tensor = torch.zeros((1, self.key_size), dtype=torch.float32)
         self._optim_entity_step_value_tensor = torch.zeros(
             (1, self.key_size), dtype=torch.float32
@@ -102,7 +103,8 @@ class LapseParameterClient(lapse.Worker, KgeParameterClient):
         self._optim_relation_step_value_tensor = torch.zeros(
             (1, self.key_size), dtype=torch.float32
         )
-        self._lr_tensor = torch.zeros((1, self.key_size), dtype=torch.float32)
+        self._entity_lr_tensor = torch.zeros((1, self.key_size), dtype=torch.float32)
+        self._relation_lr_tensor = torch.zeros((1, self.key_size), dtype=torch.float32)
         self.meta_key_tensor = torch.zeros(
             (self.num_meta_keys, self.key_size), dtype=torch.float32
         )
@@ -143,37 +145,30 @@ class LapseParameterClient(lapse.Worker, KgeParameterClient):
         else:
             return False
 
-    def step_optim(self, parameter_index):
-        if parameter_index == 0:
-            super(LapseParameterClient, self).push(
-                self._optim_entity_step_key,
-                torch.ones((1, self.key_size), dtype=torch.float32),
-            )
-        else:
-            super(LapseParameterClient, self).push(
-                self._optim_relation_step_key,
-                torch.ones((1, self.key_size), dtype=torch.float32),
-            )
+    def step_optim(self, group_name, parameter_index=0):
+        super(LapseParameterClient, self).push(
+            getattr(self, f"_optim_{group_name}_step_key"),
+            torch.ones((1, self.key_size), dtype=torch.float32),
+        )
 
-    def get_step_optim(self, parameter_index):
-        if parameter_index == 0:
-            super(LapseParameterClient, self).pull(
-                self._optim_entity_step_key, self._optim_entity_step_value_tensor
-            )
-            return self._optim_relation_step_value_tensor[0, 0].item()
-        else:
-            super(LapseParameterClient, self).pull(
-                self._optim_relation_step_key, self._optim_relation_step_value_tensor
-            )
-            return self._optim_relation_step_value_tensor[0, 0].item()
+    def get_step_optim(self, group_name, parameter_index=0):
+        super(LapseParameterClient, self).pull(
+            getattr(self, f"_optim_{group_name}_step_key"),
+            getattr(self, f"_optim_{group_name}_step_value_tensor")
+        )
+        return getattr(self, f"_optim_{group_name}_step_value_tensor")[0, 0].item()
 
-    def get_lr(self):
-        super(LapseParameterClient, self).pull(self._lr_key, self._lr_tensor)
-        return self._lr_tensor[0, 0].item()
+    def get_lr(self, group_name):
+        super(LapseParameterClient, self).pull(getattr(self, f"_{group_name}_lr_key"),
+                                               getattr(self, f"_{group_name}_lr_tensor"))
+        return getattr(self, f"_{group_name}_lr_tensor")[0, 0].item()
 
-    def set_lr(self, lr):
-        self._lr_tensor[:] = lr
-        super(LapseParameterClient, self).set(self._lr_key, self._lr_tensor)
+    def set_lr(self, group_name, lr):
+        getattr(self, f"_{group_name}_lr_tensor")[:] = lr
+        super(LapseParameterClient, self).set(
+            getattr(self, f"_{group_name}_lr_key"),
+            getattr(self, f"_{group_name}_lr_tensor")
+        )
 
 
 class TorchParameterClient(KgeParameterClient):
@@ -231,13 +226,21 @@ class TorchParameterClient(KgeParameterClient):
         else:
             return False
 
-    def step_optim(self, parameter_index):
+    def step_optim(self, group_name):
+        if group_name == "entity":
+            parameter_index = 0
+        else:
+            parameter_index = 1
         cmd = torch.LongTensor(
             [TORCH_PARAMETER_SERVER_CMDS.STEP_OPTIM_CMD, parameter_index]
         )
         dist.send(cmd, dst=self.server_rank)
 
-    def get_step_optim(self, parameter_index):
+    def get_step_optim(self, group_name):
+        if group_name == "entity":
+            parameter_index = 0
+        else:
+            parameter_index = 1
         cmd = torch.LongTensor(
             [TORCH_PARAMETER_SERVER_CMDS.GET_OPTIM_STEP_CMD, parameter_index]
         )
@@ -245,14 +248,14 @@ class TorchParameterClient(KgeParameterClient):
         dist.recv(cmd, src=self.server_rank)
         return cmd[1].item()
 
-    def get_lr(self):
-        cmd = torch.LongTensor([TORCH_PARAMETER_SERVER_CMDS.GET_LR_CMD, 0])
+    def get_lr(self, group_name):
+        cmd = torch.LongTensor([getattr(TORCH_PARAMETER_SERVER_CMDS, f"GET_{group_name.upper()}_LR_CMD"), 0])
         dist.send(cmd, dst=self.server_rank)
         dist.recv(self.lr_buffer, src=self.server_rank)
         return self.lr_buffer[0].item()
 
-    def set_lr(self, lr):
-        cmd = torch.LongTensor([TORCH_PARAMETER_SERVER_CMDS.SET_LR_CMD, 0])
+    def set_lr(self, group_name, lr):
+        cmd = torch.LongTensor([getattr(TORCH_PARAMETER_SERVER_CMDS, f"SET_{group_name.upper()}_LR_CMD"), 0])
         dist.send(cmd, dst=self.server_rank)
         self.lr_buffer[0] = lr
         dist.send(self.lr_buffer, dst=self.server_rank)
@@ -275,7 +278,8 @@ class SharedParameterClient(KgeParameterClient):
         self._optim_relation_step_key = torch.LongTensor(
             [self.num_keys - self.num_meta_keys + 2]
         )
-        self._lr_key = torch.LongTensor([self.num_keys - self.num_meta_keys + 3])
+        self._entity_lr_key = torch.LongTensor([self.num_keys - self.num_meta_keys + 3])
+        self._relation_lr_key = torch.LongTensor([self.num_keys - self.num_meta_keys + 4])
         self._stop_value_tensor = torch.zeros((1, self.dim), dtype=torch.float32)
         self._optim_entity_step_value_tensor = torch.zeros(
             (1, self.dim), dtype=torch.float32
@@ -283,7 +287,8 @@ class SharedParameterClient(KgeParameterClient):
         self._optim_relation_step_value_tensor = torch.zeros(
             (1, self.dim), dtype=torch.float32
         )
-        self._lr_tensor = torch.zeros((1, self.dim), dtype=torch.float32)
+        self._entity_lr_tensor = torch.zeros((1, self.dim), dtype=torch.float32)
+        self._relation_lr_tensor = torch.zeros((1, self.dim), dtype=torch.float32)
         self.meta_key_tensor = torch.zeros(
             (self.num_meta_keys, self.dim), dtype=torch.float32
         )
@@ -317,35 +322,24 @@ class SharedParameterClient(KgeParameterClient):
         else:
             return False
 
-    def step_optim(self, parameter_index):
-        if parameter_index == 0:
-            self.push(
-                self._optim_entity_step_key,
-                torch.ones((1, self.dim), dtype=torch.float32),
-            )
-        else:
-            self.push(
-                self._optim_relation_step_key,
-                torch.ones((1, self.dim), dtype=torch.float32),
-            )
+    def step_optim(self, group_name, parameter_index=0):
+        self.push(
+            getattr(self, f"_optim_{group_name}_step_key"),
+            torch.ones((1, self.dim), dtype=torch.float32),
+        )
 
-    def get_step_optim(self, parameter_index):
-        if parameter_index == 0:
-            self.pull(
-                self._optim_entity_step_key, self._optim_entity_step_value_tensor
-            )
-            return self._optim_relation_step_value_tensor[0, 0].item()
-        else:
-            self.pull(
-                self._optim_relation_step_key, self._optim_relation_step_value_tensor
-            )
-            return self._optim_relation_step_value_tensor[0, 0].item()
+    def get_step_optim(self, group_name, parameter_index=0):
+        self.pull(
+            getattr(self, f"_optim_{group_name}_step_key"),
+            getattr(self, f"_optim_{group_name}_step_value_tensor")
+        )
+        return getattr(self, f"_optim_{group_name}_step_value_tensor")[0, 0].item()
 
-    def get_lr(self):
-        self.pull(self._lr_key, self._lr_tensor)
-        return self._lr_tensor[0, 0].item()
+    def get_lr(self, group_name):
+        self.pull(getattr(self, f"_{group_name}_lr_key"), getattr(self, f"_{group_name}_lr_tensor"))
+        return getattr(self, f"_{group_name}_lr_tensor")[0, 0].item()
 
-    def set_lr(self, lr):
-        self._lr_tensor[:] = lr
-        self.set(self._lr_key, self._lr_tensor)
+    def set_lr(self, group_name, lr):
+        getattr(self, f"_{group_name}_lr_tensor")[:] = lr
+        self.set(getattr(self, f"_{group_name}_lr_key"), getattr(self, f"_{group_name}_lr_tensor"))
 

@@ -31,7 +31,8 @@ class DistAdagrad(Optimizer):
 
     def __init__(
         self,
-        model,
+        #model,
+        params,
         lr=1e-2,
         lr_decay=0,
         weight_decay=0,
@@ -39,12 +40,11 @@ class DistAdagrad(Optimizer):
         eps=1e-10,
         parameter_client=None,
         lapse_indexes=None,
-        sync_levels=[],
+        lapse_optimizer_index_offset=0,
         async_write_back=[],
         is_row=False,
         use_lr_scheduler=False,
     ):
-        params = [p for p in model.parameters() if p.requires_grad]
         if not 0.0 <= lr:
             raise ValueError("Invalid learning rate: {}".format(lr))
         if not 0.0 <= lr_decay:
@@ -60,32 +60,35 @@ class DistAdagrad(Optimizer):
         if not 0.0 <= eps:
             raise ValueError("Invalid epsilon value: {}".format(eps))
 
-        self.optimizer_values = [model._entity_embedder.optimizer_values, model._relation_embedder.optimizer_values]
-
-        self.lapse_optimizer_index_offset = (
-            model.dataset.num_entities() + model.dataset.num_relations()
-        )
+        self.lapse_optimizer_index_offset = lapse_optimizer_index_offset
         self.lapse_indexes = lapse_indexes
-        self.local_to_lapse_mappers = [
-            model._entity_embedder.local_to_lapse_mapper,
-            model._relation_embedder.local_to_lapse_mapper,
-        ]
         self.pulled_parameters = [None, None]
         self.async_write_back = async_write_back
 
-        self.sync_levels = sync_levels
         self.is_row = is_row
 
         self.parameter_client = parameter_client
         # this array stores helper cpu tensors in which we pull data from the parameter
         # client. We don't want to create a new tensor in every step.
-        self.pull_tensors = [None, None]
-        self.push_keys = [None, None]
-        self.push_tensors = [None, None]
+        self.pull_tensors = {
+            "entity": None,
+            "relation": None
+        }
+        self.push_keys = {
+            "entity": None,
+            "relation": None
+        }
+        self.push_tensors = {
+            "entity": None,
+            "relation": None,
+        }
         self.use_lr_scheduler = use_lr_scheduler
         self.entity_async_wait_values = deque()
         self.relation_async_wait_values = deque()
-        self.async_wait_values = [self.entity_async_wait_values, self.relation_async_wait_values]
+        self.async_wait_values = {
+            "entity": self.entity_async_wait_values,
+            "relation": self.relation_async_wait_values
+        }
 
         defaults = dict(
             lr=lr,
@@ -144,13 +147,13 @@ class DistAdagrad(Optimizer):
                     # we only need to synchronize steps between workers if we actually
                     #  use the step variable for something
                     self.parameter_client.step_optim(i)
-                    state["step"] = self.parameter_client.get_step_optim(i)
+                    state["step"] = self.parameter_client.get_step_optim(group["name"])
                 else:
                     state["step"] += 1
                 if self.use_lr_scheduler:
                     if self.parameter_client.rank == 2:
                         self.parameter_client.set_lr(group["lr"])
-                    group["lr"] = self.parameter_client.get_lr()
+                    group["lr"] = self.parameter_client.get_lr(group["name"])
 
                 if group["weight_decay"] != 0:
                     if p.grad.is_sparse:
@@ -171,7 +174,7 @@ class DistAdagrad(Optimizer):
                     size = grad.size()
 
                     # pull the current internal optimizer parameters
-                    state_sum = self.optimizer_values[i][grad_indices]
+                    state_sum = group["optimizer_values"][grad_indices]
 
                     if not self.is_row:
                         sum_update_values = grad_values.pow(2)
@@ -179,23 +182,23 @@ class DistAdagrad(Optimizer):
                         sum_update_values = grad_values.pow(2).mean(1).view(-1, 1)
                     state_sum.add_(sum_update_values)
                     #state["sum"].add_(make_sparse(sum_update_values))
-                    if self.sync_levels[i] == "batch":
+                    if group["sync_level"] == "batch":
                         pass
                     else:
                         # state["sum"][grad_indices_flat] = state_sum
-                        self.optimizer_values[i][grad_indices] = state_sum
+                        group["optimizer_values"][grad_indices] = state_sum
 
                     #std = state["sum"].sparse_mask(grad)
                     #std_values = std._values().sqrt_().add_(group["eps"])
                     std_values = state_sum.sqrt_().add_(group["eps"])
                     update_value = (grad_values / std_values).mul_(-clr)
-                    if self.sync_levels[i] == "batch":
+                    if group["sync_level"] == "batch":
                         update_indexes = grad_indices.cpu()
-                        self.push_keys[i] = self.local_to_lapse_mappers[i][update_indexes]
-                        self.push_tensors[i] = torch.cat((update_value, sum_update_values), dim=1).cpu()
-                        self.async_wait_values[i].append(self.parameter_client.push(
-                            self.push_keys[i],
-                            self.push_tensors[i],
+                        self.push_keys[group["name"]] = group["local_to_lapse_mapper"][update_indexes]
+                        self.push_tensors[group["name"]] = torch.cat((update_value, sum_update_values), dim=1).cpu()
+                        self.async_wait_values[group["name"]].append(self.parameter_client.push(
+                            self.push_keys[group["name"]],
+                            self.push_tensors[group["name"]],
                             asynchronous=True,
                             #asynchronous=self.async_write_back[i]
                         ))
@@ -205,12 +208,12 @@ class DistAdagrad(Optimizer):
                     # p.add_(make_sparse(grad_values / std_values), alpha=-clr)
                 else:
                     # pull the current internal optimizer parameters
-                    update_mask = self.local_to_lapse_mappers[i] != -1
+                    update_mask = group["local_to_lapse_mapper"] != -1
                     update_tensor = torch.zeros(
                         (torch.sum(update_mask).item(), p.shape[1]), dtype=torch.float32
                     )
                     keys_optim = (
-                        self.local_to_lapse_mappers[i]
+                        group["local_to_lapse_mapper"]
                         + self.lapse_optimizer_index_offset
                     )[update_mask]
                     self.parameter_client.pull(keys_optim, update_tensor)
@@ -230,7 +233,7 @@ class DistAdagrad(Optimizer):
                     # p.addcdiv_(grad, std, value=-clr)
                     update_value = -clr * grad / std
                     self.parameter_client.push(
-                        self.local_to_lapse_mappers[i][update_mask].astype(np.uint64),
+                        group["local_to_lapse_mapper"][update_mask].astype(np.uint64),
                         update_value.cpu()[update_mask],
                         asynchronous=True,
                     )
@@ -245,7 +248,9 @@ class DistAdagrad(Optimizer):
         """
         for group in self.param_groups:
             for i, p in enumerate(group["params"]):
-                self.state[p]["sum"] = self.optimizer_values[i]
-                self.state[p]["step"] = self.parameter_client.get_step_optim(i)
-            group["lr"] = self.parameter_client.get_lr()
+                self.state[p]["sum"] = group["optimizer_values"]
+                self.state[p]["step"] = self.parameter_client.get_step_optim(group["name"])
+            if group["name"] == "default":
+                continue
+            group["lr"] = self.parameter_client.get_lr(group["name"])
 

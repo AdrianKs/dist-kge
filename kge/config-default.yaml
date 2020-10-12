@@ -245,6 +245,14 @@ train:
       # to set the learning rate to 0.1.
       args:
         +++: +++
+    entity:
+      regex: .*_entity_embedder.*
+      args:
+        +++: +++
+    relation:
+      regex: .*_relation_embedder.*
+      args:
+        +++: +++
 
     # Specific optimizer options for parameters matched with regex expressions can be
     # overwritten. Allows for example to define a separate learning rate for all relation
