@@ -1,7 +1,25 @@
 # config-default.yaml: LibKGE's default configuration options
 
-# Whether to output progress information to the console
-verbose: True
+# Control output is printed to the console.
+console:
+  # If set, no console output is produced
+  quiet: False
+
+  # Formatting of trace entries for console output after certain events, such as
+  # finishing an epoch. Each entry is a key-value pair, where the key refers to
+  # the type of event and the value is a Python expression (which may access
+  # variables "trace" and "config" as well as all trace entries). If no
+  # expression for a given key is specified or if the expression is empty, the
+  # full trace is produced.
+  #
+  # Supported keys: train_epoch, eval_epoch
+  #
+  # Example (one liners for train and eval):
+  # format:
+  #   train_epoch: 'f"{config.get(''train.type'')}-{config.get(''train.loss'')}: epoch={epoch:3d} avg_cost={avg_cost:.4E} avg_loss={avg_loss:.4E} avg_pens={sum(avg_penalties.values()):.4E} time={epoch_time:.2f}"'
+  #   eval_epoch: 'f"{config.get(''eval.type'')}: epoch={epoch:3d} {config.get(''valid.metric'')}={trace[config.get(''valid.metric'')]:.4E} time={epoch_time:.2f}"'
+  format: {}
+
 
 # Job-level configuration options.
 job:
@@ -218,12 +236,30 @@ train:
   num_workers: 0
 
   # Optimizer used for training.
-  optimizer: Adagrad           # sgd, adagrad, adam
+  optimizer:
+    default:
+      type: Adagrad           # sgd, adagrad, adam
 
-  # Additional arguments for the optimizer. Arbitrary key-value pairs can be
-  # added here and will be passed along to the optimizer. E.g., use entry lr:0.1
-  # to set the learning rate to 0.1.
-  optimizer_args:
+      # Additional arguments for the optimizer. Arbitrary key-value pairs can be
+      # added here and will be passed along to the optimizer. E.g., use entry lr:0.1
+      # to set the learning rate to 0.1.
+      args:
+        +++: +++
+
+    # Specific optimizer options for parameters matched with regex expressions can be
+    # overwritten. Allows for example to define a separate learning rate for all relation
+    # parameters.
+    # Example:
+    # optimizer:
+    #   relation:
+    #     regex: .*_relation_embedder.*
+    #     args:
+    #       lr: 0.1
+    # Names of child keys of optimizer will be set as parameter group name.
+    # Parameters are named by their variable names and can be retrieved by:
+    # model.named_parameters()
+    # or from a checkpoint by:
+    # kge dump checkpoint checkpoint_file.pt | grep parameter_names
     +++: +++
 
   # Learning rate scheduler to use. Any scheduler from torch.optim.lr_scheduler
@@ -385,6 +421,7 @@ eval:
   # Other options
   pin_memory: False
 
+
 # Configuration options for model validation/selection during training. Applied
 # in addition to the options set under "eval" above.
 valid:
@@ -397,14 +434,21 @@ valid:
   every: 5
 
   # Name of the trace entry that holds the validation metric (higher value is
-  # better)
+  # better). To add a custom metric, set this to a fresh name and define
+  # metric_expr below.
   metric: mean_reciprocal_rank_filtered_with_test
 
   # If the above metric is not present in trace (e.g., because a custom metric
   # should be used), a Python expression to compute the metric. Can refer to
   # trace entries directly and to configuration options via config.
+  #
   # Example: 'math.sqrt(mean_reciprocal_rank) + config.get("user.par")'
   metric_expr: 'float("nan")'
+
+  # Whether the metric should be maximized (True, large value is better) or
+  # minimized (False, small value is better). Affects things such as early
+  # abort, learning rate scheduling, or hyperparameter search.
+  metric_max: True
 
   early_stopping:
     # Grace period of validation runs before a training run is stopped early
@@ -413,11 +457,11 @@ valid:
     # result so far) in the validation metric during the last n validation runs.
     patience: 5
 
-    # A minimum validation metric value threshold that should be reached after
-    # n epochs, set to 0 epoch to turn off. Should be set very very conservatively
-    # and the main purpose is for pruning completely useless hyperparameter
-    # settings during hyper-parameter optimization.
-    min_threshold:
+    # A target validation metric value that should be reached after n epochs,
+    # set to 0 epoch to turn off. Should be set very very conservatively and the
+    # main purpose is for pruning completely useless hyperparameter settings
+    # during hyper-parameter optimization.
+    threshold:
       epochs: 0
       metric_value: 0.0
 

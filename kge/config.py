@@ -402,7 +402,7 @@ class Config:
 
     def print(self, *args, **kwargs):
         "Prints the given message unless console output is disabled"
-        if not self.exists("verbose") or self.get("verbose"):
+        if not self.exists("console.quiet") or not self.get("console.quiet"):
             print(*args, **kwargs)
 
     def trace(
@@ -719,6 +719,25 @@ def _process_deprecated_options(options: Dict[str, Any]):
                 if rename_value(key, old_value, new_value):
                     renamed_keys.add(key)
         return renamed_keys
+
+    # 09.10.20
+    rename_key("train.optimizer", "train.optimizer.default.type")
+    rename_keys_re("^train\.optimizer_args", "train.optimizer.default.args")
+
+    # 30.9.2020
+    if "verbose" in options:
+        rename_key("verbose", "console.quiet")
+        options["console.quiet"] = not options["console.quiet"]
+
+    # 21.9.2020
+    tucker_reg_key = "tucker3_relation_embedder.regularize_args.p"
+    if tucker_reg_key in options and isinstance(options[tucker_reg_key], int):
+        options[tucker_reg_key] = float(options[tucker_reg_key])
+
+    # 15.9.2020
+    rename_keys_re(
+        "^valid\.early_stopping\.min_threshold\.", "valid.early_stopping.threshold."
+    )
 
     # 31.8.2020
     rename_key("negative_sampling.chunk_size", "train.subbatch_size")

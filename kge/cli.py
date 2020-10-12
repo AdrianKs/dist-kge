@@ -65,7 +65,7 @@ def main():
                 file=sys.stderr,
             )
 
-        if args.verbose != False:
+        if not vars(args)["console.quiet"]:
             print("Loading configuration {}...".format(args.config))
         config.load(args.config)
 
@@ -73,7 +73,7 @@ def main():
     if args.command == "resume":
         if os.path.isdir(args.config) and os.path.isfile(args.config + "/config.yaml"):
             args.config += "/config.yaml"
-        if args.verbose != False:
+        if not vars(args)["console.quiet"]:
             print("Resuming from configuration {}...".format(args.config))
         config.load(args.config)
         config.folder = os.path.dirname(args.config)
@@ -204,10 +204,10 @@ def main():
                 job.run()
 
             # job.run()
-    except BaseException as e:
+    except BaseException:
         tb = traceback.format_exc()
         config.log(tb, echo=False)
-        raise e from None
+        raise
 
 
 if __name__ == "__main__":

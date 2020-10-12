@@ -152,6 +152,7 @@ class Job:
         """
         if not self._is_prepared:
             self._prepare()
+            self._is_prepared = True
 
         for f in self.pre_run_hooks:
             f(self)
@@ -177,7 +178,6 @@ class Job:
         return self.config.trace(
             job_id=self.job_id, job=self.config.get("job.type"), **kwargs
         )
-
 
 class TrainingOrEvaluationJob(Job):
     """Abstract superclass for training and eval jobs."""

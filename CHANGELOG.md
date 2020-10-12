@@ -1,4 +1,8 @@
+#### October 2020
+- [d275419](https://github.com/uma-pi1/kge/commit/d275419bbd1e2eea6872d733fc10f30c171e9f45), [87c5463](https://github.com/uma-pi1/kge/commit/87c54630807e7ecf71ad05c042d3b1c953c44807): Support parameter groups with group-specific optimizer args
+
 #### September 2020
+- PR [#147](https://github.com/uma-pi1/kge/pull/147): Support both minimization and maximization of metrics
 - PR [#144](https://github.com/uma-pi1/kge/pull/144): Support to tune subbatch size automatically
 - PR [#143](https://github.com/uma-pi1/kge/pull/143): Allow processing of large batches in smaller subbatches to save memory
 

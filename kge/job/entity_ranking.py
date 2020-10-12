@@ -18,11 +18,35 @@ class EntityRankingJob(EvaluationJob):
             ["rounded_mean_rank", "best_rank", "worst_rank"],
         )
         self.tie_handling = self.config.get("entity_ranking.tie_handling")
-        self.is_prepared = False
+
+        self.filter_with_test = config.get("entity_ranking.filter_with_test")
+        self.filter_splits = self.config.get("entity_ranking.filter_splits")
+        if self.eval_split not in self.filter_splits:
+            self.filter_splits.append(self.eval_split)
+
+        max_k = min(
+            self.dataset.num_entities(),
+            max(self.config.get("entity_ranking.hits_at_k_s")),
+        )
+        self.hits_at_k_s = list(
+            filter(lambda x: x <= max_k, self.config.get("entity_ranking.hits_at_k_s"))
+        )
+
+        #: Whether to create additional histograms for head and tail slot
+        self.head_and_tail = config.get("entity_ranking.metrics_per.head_and_tail")
+
+        #: Hooks after computing the ranks for each batch entry.
+        #: Signature: hists, s, p, o, s_ranks, o_ranks, job, **kwargs
+        self.hist_hooks = [hist_all]
+        if config.get("entity_ranking.metrics_per.relation_type"):
+            self.hist_hooks.append(hist_per_relation_type)
+        if config.get("entity_ranking.metrics_per.argument_frequency"):
+            self.hist_hooks.append(hist_per_frequency_percentile)
 
         if self.__class__ == EntityRankingJob:
             for f in Job.job_created_hooks:
                 f(self)
+
 
     def _prepare(self):
         super()._prepare()
@@ -46,9 +70,6 @@ class EntityRankingJob(EvaluationJob):
             num_workers=self.config.get("eval.num_workers"),
             pin_memory=self.config.get("eval.pin_memory"),
         )
-        # let the model add some hooks, if it wants to do so
-        self.model.prepare_job(self)
-        self.is_prepared = True
 
     def _collate(self, batch):
         "Looks up true triples for each triple in the batch"
@@ -77,14 +98,7 @@ class EntityRankingJob(EvaluationJob):
         return batch, label_coords, test_label_coords
 
     @torch.no_grad()
-    def _run(self) -> dict:
-        was_training = self.model.training
-        self.model.eval()
-        self.config.log(
-            "Evaluating on "
-            + self.eval_split
-            + " data (epoch {})...".format(self.epoch)
-        )
+    def _evaluate(self):
         num_entities = self.dataset.num_entities()
 
         # we also filter with test data if requested
@@ -421,33 +435,6 @@ class EntityRankingJob(EvaluationJob):
             dict(epoch_time=epoch_time, event="eval_completed", **metrics,)
         )
 
-        # if validation metric is not present, try to compute it
-        metric_name = self.config.get("valid.metric")
-        if metric_name not in self.current_trace["epoch"]:
-            self.current_trace["epoch"][metric_name] = eval(
-                self.config.get("valid.metric_expr"),
-                None,
-                dict(config=self.config, **self.current_trace["epoch"]),
-            )
-
-        # run hooks (may modify trace)
-        for f in self.post_epoch_hooks:
-            f(self)
-
-        # output the trace, then clear it
-        trace_entry = self.trace(
-            **self.current_trace["epoch"], echo=True, echo_prefix="  ", log=True
-        )
-        self.current_trace["epoch"] = None
-
-        # reset model and return metrics
-        if was_training:
-            self.model.train()
-
-        self.config.log("Finished evaluating on " + self.eval_split + " split.")
-
-        return trace_entry
-
     def _densify_chunk_of_labels(
         self, labels: torch.Tensor, chunk_start: int, chunk_end: int
     ) -> torch.Tensor:
@@ -598,3 +585,94 @@ num_ties for each true score.
             metrics["hits_at_{}{}".format(k, suffix)] = hits_at_k[k - 1]
 
         return metrics
+
+# HISTOGRAM COMPUTATION ###############################################################
+
+
+def __initialize_hist(hists, key, job):
+    """If there is no histogram with given `key` in `hists`, add an empty one."""
+    if key not in hists:
+        hists[key] = torch.zeros(
+            [job.dataset.num_entities()],
+            device=job.config.get("job.device"),
+            dtype=torch.float,
+        )
+
+
+def hist_all(hists, s, p, o, s_ranks, o_ranks, job, **kwargs):
+    """Create histogram of all subject/object ranks (key: "all").
+
+    `hists` a dictionary of histograms to update; only key "all" will be affected. `s`,
+    `p`, `o` are true triples indexes for the batch. `s_ranks` and `o_ranks` are the
+    rank of the true answer for (?,p,o) and (s,p,?) obtained from a model.
+
+    """
+    __initialize_hist(hists, "all", job)
+    if job.head_and_tail:
+        __initialize_hist(hists, "head", job)
+        __initialize_hist(hists, "tail", job)
+        hist_head = hists["head"]
+        hist_tail = hists["tail"]
+
+    hist = hists["all"]
+    for r in o_ranks:
+        hist[r] += 1
+        if job.head_and_tail:
+            hist_tail[r] += 1
+    for r in s_ranks:
+        hist[r] += 1
+        if job.head_and_tail:
+            hist_head[r] += 1
+
+
+def hist_per_relation_type(hists, s, p, o, s_ranks, o_ranks, job, **kwargs):
+    for rel_type, rels in job.dataset.index("relations_per_type").items():
+        __initialize_hist(hists, rel_type, job)
+        hist = hists[rel_type]
+        if job.head_and_tail:
+            __initialize_hist(hists, f"{rel_type}_head", job)
+            __initialize_hist(hists, f"{rel_type}_tail", job)
+            hist_head = hists[f"{rel_type}_head"]
+            hist_tail = hists[f"{rel_type}_tail"]
+
+        mask = [_p in rels for _p in p.tolist()]
+        for r, m in zip(o_ranks, mask):
+            if m:
+                hists[rel_type][r] += 1
+                if job.head_and_tail:
+                    hist_tail[r] += 1
+
+        for r, m in zip(s_ranks, mask):
+            if m:
+                hists[rel_type][r] += 1
+                if job.head_and_tail:
+                    hist_head[r] += 1
+
+
+def hist_per_frequency_percentile(hists, s, p, o, s_ranks, o_ranks, job, **kwargs):
+    # initialize
+    frequency_percs = job.dataset.index("frequency_percentiles")
+    for arg, percs in frequency_percs.items():
+        for perc, value in percs.items():
+            __initialize_hist(hists, "{}_{}".format(arg, perc), job)
+
+    # go
+    for perc in frequency_percs["subject"].keys():  # same for relation and object
+        for r, m_s, m_r in zip(
+            s_ranks,
+            [id in frequency_percs["subject"][perc] for id in s.tolist()],
+            [id in frequency_percs["relation"][perc] for id in p.tolist()],
+        ):
+            if m_s:
+                hists["{}_{}".format("subject", perc)][r] += 1
+            if m_r:
+                hists["{}_{}".format("relation", perc)][r] += 1
+        for r, m_o, m_r in zip(
+            o_ranks,
+            [id in frequency_percs["object"][perc] for id in o.tolist()],
+            [id in frequency_percs["relation"][perc] for id in p.tolist()],
+        ):
+            if m_o:
+                hists["{}_{}".format("object", perc)][r] += 1
+            if m_r:
+                hists["{}_{}".format("relation", perc)][r] += 1
