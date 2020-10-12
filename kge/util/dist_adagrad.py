@@ -100,8 +100,9 @@ class DistAdagrad(Optimizer):
         super(DistAdagrad, self).__init__(params, defaults)
 
         for group in self.param_groups:
-            if parameter_client.rank == 2 and parameter_client.get_lr(group["name"]) == 0 and group["name"] != "default":
-                self.parameter_client.set_lr(group["name"], group["lr"])
+            if parameter_client.rank == 2 and group["name"] != "default":
+                if parameter_client.get_lr(group["name"]) == 0:
+                    self.parameter_client.set_lr(group["name"], group["lr"])
             for i, p in enumerate(group["params"]):
                 state = self.state[p]
                 state["step"] = 0
