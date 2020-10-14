@@ -586,10 +586,10 @@ class TrainingJob(TrainingOrEvaluationJob):
                     "batch": batch_index,
                     "batches": len(self.loader),
                     }
-            if not self.is_forward_only:
-                self.current_trace["batch"].update(
-                    lr=[group["lr"] for group in self.optimizer.param_groups],
-                )
+                if not self.is_forward_only:
+                    self.current_trace["batch"].update(
+                        lr=[group["lr"] for group in self.optimizer.param_groups],
+                    )
 
                 # run the pre-batch hooks (may update the trace)
                 for f in self.pre_batch_hooks:
