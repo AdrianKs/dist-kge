@@ -192,8 +192,9 @@ class WorkScheduler(mp.get_context("spawn").Process):
                 shutdown_count += 1
                 if shutdown_count == self.num_clients:
                     print("shutting down work scheduler")
-                    if self.repartition_future is not None:
-                        self.repartition_future.cancel()
+                    if self.repartition_epoch:
+                        if self.repartition_future is not None:
+                            self.repartition_future.cancel()
                     if self.repartition_worker_pool is not None:
                         self.repartition_worker_pool.shutdown()
                     break
