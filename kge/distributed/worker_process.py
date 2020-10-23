@@ -161,9 +161,15 @@ class WorkerProcess(mp.get_context("spawn").Process):
         if parameter_client.rank == MIN_RANK and self.checkpoint is not None:
             # Todo: we still create a complete new job after creating the resume job
             #  therefore epoch numbers will not be handled correctly, for example
-            job = Job.create_from(self.checkpoint, parameter_client=parameter_client)
+
+            self.config.set(self.config.get("model") + ".create_complete", True)
+            tmp_device = self.config.get("job.device")
+            self.config.set("job.device", "cpu")
+            job = Job.create_from(self.checkpoint, new_config=self.config, parameter_client=parameter_client)
             job.model.get_s_embedder().push_all()
             job.model.get_p_embedder().push_all()
+            self.config.set("job.device", tmp_device)
+            self.config.set(self.config.get("model") + ".create_complete", False)
             init_for_load_only = True
 
         job = Job.create(

@@ -439,7 +439,7 @@ class KgeModel(KgeBase):
                 complete_vocab_size=dataset.num_relations(),
             )
 
-            if not init_for_load_only:
+            if not init_for_load_only and self.get_option("create_complete"):
                 # load pretrained embeddings
                 pretrained_entities_filename = ""
                 pretrained_relations_filename = ""

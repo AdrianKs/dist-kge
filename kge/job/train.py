@@ -98,18 +98,19 @@ class TrainingJob(TrainingOrEvaluationJob):
             "job.distributed.relation_sync_level"
         )
         # here we create one large model to init lapse and remove it afterwards
-        self.parameter_client.barrier()
-        if self.parameter_client.rank == MIN_RANK and not init_for_load_only:
-            self.config.set(self.config.get("model") + ".create_complete", True)
-            init_model = KgeModel.create(
-                self.config, self.dataset, parameter_client=self.parameter_client
-            )
-            init_model.get_s_embedder().push_all()
-            init_model.get_p_embedder().push_all()
-            del init_model
-            gc.collect()
-            self.config.set(self.config.get("model") + ".create_complete", False)
-        self.parameter_client.barrier()
+        if not init_for_load_only:
+            self.parameter_client.barrier()
+            if self.parameter_client.rank == MIN_RANK:
+                self.config.set(self.config.get("model") + ".create_complete", True)
+                init_model = KgeModel.create(
+                    self.config, self.dataset, parameter_client=self.parameter_client
+                )
+                init_model.get_s_embedder().push_all()
+                init_model.get_p_embedder().push_all()
+                del init_model
+                gc.collect()
+                self.config.set(self.config.get("model") + ".create_complete", False)
+            self.parameter_client.barrier()
 
         self.work_scheduler_client = SchedulerClient()
         (
