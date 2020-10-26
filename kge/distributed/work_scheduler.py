@@ -39,6 +39,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
         rank=1,
         repartition_epoch=True,
     ):
+        self._config_check(config)
         super(WorkScheduler, self).__init__(daemon=False, name="work-scheduler")
         self.config = config
         self.rank = rank
@@ -56,6 +57,10 @@ class WorkScheduler(mp.get_context("spawn").Process):
         if self.repartition_epoch:
             self.repartition_future = None
             self.repartition_worker_pool = None
+
+    def _config_check(self, config):
+        if config.get("job.distributed.entity_sync_level") == "partition" and not config.get("negative_sampling.sampling_type") == "pooled":
+            raise ValueError("entity sync level 'partition' only supported with 'pooled' sampling.")
 
     @staticmethod
     def create(
@@ -533,6 +538,12 @@ class MetisWorkScheduler(WorkScheduler):
             self.partition_type, dataset_folder, num_partitions
         )
         self.entities_to_partition = self._get_entities_in_partition()
+
+    def _config_check(self, config):
+        super(MetisWorkScheduler, self)._config_check(config)
+        if config.get("job.distributed.entity_sync_level") == "partition":
+            raise ValueError("Metis partitioning does not support entity sync level 'parititon'. "
+                             "Triples still have outside partition accesses.")
 
     def _next_work(
         self, rank
