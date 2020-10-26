@@ -41,7 +41,7 @@ job:
     master_ip: '127.0.0.1'
     master_port: '8888'
     lapse_port: '9091'
-    gloo_socket_ifname: 'eno1'
+    gloo_socket_ifname: 'lo'  # 'eno1'
     num_partitions: 2
     partition_type: 'random_partition'  # random_partition, relation_partition, 2d_block_partition
     entity_sync_level: 'batch'  # batch, partition
