@@ -52,7 +52,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
         self.done_workers = []
         self.asking_workers = []
         self.work_to_do = deque(list(range(num_partitions)))
-        self.wait_time = 2
+        self.wait_time = 0.4
         self.repartition_epoch = repartition_epoch
         if self.repartition_epoch:
             self.repartition_future = None
@@ -603,7 +603,8 @@ class TwoDBlockWorkScheduler(WorkScheduler):
     ):
         self.partition_type = "2d_block_partition"
         self.schedule_creator = TwoDBlockScheduleCreator(num_partitions=num_partitions, num_workers=num_clients, randomize_iterations=True)
-        self.fixed_schedule = [item for sublist in self.schedule_creator.create_schedule() for item in sublist]
+        #self.fixed_schedule = [item for sublist in self.schedule_creator.create_schedule() for item in sublist]
+        self.fixed_schedule = self.schedule_creator.create_schedule()
         super(TwoDBlockWorkScheduler, self).__init__(
             config=config,
             world_size=world_size,
@@ -627,6 +628,7 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         self.work_to_do: Dict[Tuple[int, int], torch.Tensor] = self._order_by_schedule(
             deepcopy(self.partitions)
         )
+        self.current_iteration = set()
 
     def _order_by_schedule(
         self, partitions: Dict[Tuple[int, int], torch.Tensor]
@@ -766,11 +768,24 @@ class TwoDBlockWorkScheduler(WorkScheduler):
 
     def _acquire_bucket_by_fixed_schedule(self, rank):
         try:
-            block = self.fixed_schedule.pop()
-            block_data = self.partitions[block]
-            entities_in_block = self._entities_in_bucket.get(block)
-            self.running_blocks[rank] = block
-            return block_data, entities_in_block, None, False
+            if len(self.current_iteration) == 0:
+                self.current_iteration = set(self.fixed_schedule.pop())
+            locked_entity_strata = set()
+            for strata in self.running_blocks.values():
+                locked_entity_strata.add(strata[0])
+                locked_entity_strata.add(strata[1])
+            for strata in self.current_iteration:
+                if strata[0] in locked_entity_strata:
+                    continue
+                if strata[1] in locked_entity_strata:
+                    continue
+                self.current_iteration.remove(strata)
+                strata_data = self.partitions[strata]
+                entities_in_strata = self._entities_in_bucket.get(strata)
+                self.running_blocks[rank] = strata
+                return strata_data, entities_in_strata, None, False
+            # return wait here
+            return None, None, None, True
         except IndexError:
             return None, None, None, False
 
@@ -853,7 +868,8 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         if self.repartition_epoch:
             self.partitions, self._entities_in_bucket = self.repartition_future.result()
             self._repartition_in_background()
-        self.fixed_schedule = [item for sublist in self.schedule_creator.create_schedule() for item in sublist]
+        #self.fixed_schedule = [item for sublist in self.schedule_creator.create_schedule() for item in sublist]
+        self.fixed_schedule = self.schedule_creator.create_schedule()
         self.work_to_do = self._order_by_schedule(deepcopy(self.partitions))
 
     def _load_partitions(self, dataset_folder, num_partitions):
