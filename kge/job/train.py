@@ -513,6 +513,7 @@ class TrainingJob(TrainingOrEvaluationJob):
             pre_pull_time = 0.0
             cpu_gpu_time = 0.0
             ps_wait_time = 0.0
+            ps_set_time = 0.0
             scheduler_time = -time.time()
 
             # load new work package
@@ -782,6 +783,21 @@ class TrainingJob(TrainingOrEvaluationJob):
                 - scheduler_time
             )
 
+            print("work done", self.parameter_client.rank)
+            if self.entity_sync_level == "partition":
+                ps_set_time -= time.time()
+                self.model.get_s_embedder().set_embeddings()
+                ps_set_time += time.time()
+                self.model.get_s_embedder().global_to_local_mapper[:] = -1
+                self.model.get_s_embedder().push_back()
+            if self.relation_sync_level == "partition":
+                ps_set_time -= time.time()
+                self.model.get_p_embedder().set_embeddings()
+                ps_set_time += time.time()
+                self.model.get_p_embedder().global_to_local_mapper[:] = -1
+                self.model.get_p_embedder().push_back()
+            self.work_scheduler_client.work_done()
+
             # add results to trace entry
             self.current_trace["epoch"].update(
                 dict(
@@ -800,6 +816,7 @@ class TrainingJob(TrainingOrEvaluationJob):
                     pre_pull_time=pre_pull_time,
                     entity_pull_time=entity_pull_time,
                     relation_pull_time=relation_pull_time,
+                    ps_set_time=ps_set_time,
                     cpu_gpu_time=cpu_gpu_time,
                     forward_time=forward_time,
                     backward_time=backward_time,
@@ -812,16 +829,7 @@ class TrainingJob(TrainingOrEvaluationJob):
             )
             self.model.get_p_embedder().mapping_time = 0.0
             self.model.get_s_embedder().mapping_time = 0.0
-            print("work done", self.parameter_client.rank)
-            if self.entity_sync_level == "partition":
-                self.model.get_s_embedder().set_embeddings()
-                self.model.get_s_embedder().global_to_local_mapper[:] = -1
-                self.model.get_s_embedder().push_back()
-            if self.relation_sync_level == "partition":
-                self.model.get_p_embedder().set_embeddings()
-                self.model.get_p_embedder().global_to_local_mapper[:] = -1
-                self.model.get_p_embedder().push_back()
-            self.work_scheduler_client.work_done()
+
 
             # run hooks (may modify trace)
             for f in self.post_epoch_hooks:
