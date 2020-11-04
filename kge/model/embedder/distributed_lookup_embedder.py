@@ -114,16 +114,19 @@ class DistributedLookupEmbedder(LookupEmbedder):
         self._pull_embeddings(torch.arange(self.complete_vocab_size))
 
     def set_embeddings(self):
-        lapse_indexes = self.pulled_ids + self.lapse_offset
-        num_pulled = len(lapse_indexes)
-        set_tensor = torch.cat(
+        # storing set_indexes and set_tensors in self to keep them alive until async
+        #  set is finished
+        # todo: make sure previous set is finished by looking at the future
+        self.set_indexes = self.pulled_ids + self.lapse_offset
+        num_pulled = len(self.set_indexes)
+        self.set_tensor = torch.cat(
             (
                 self._embeddings.weight[:num_pulled].detach(),
                 self.optimizer_values[:num_pulled],
             ),
             dim=1,
         ).cpu()
-        self.parameter_client.set(lapse_indexes, set_tensor)
+        self.parameter_client.set(self.set_indexes, self.set_tensor, asynchronous=True)
 
     def _get_free_pull_tensor(self):
         for i, (free, pull_tensor) in enumerate(self.pull_tensors):

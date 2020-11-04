@@ -122,7 +122,7 @@ class LapseParameterClient(lapse.Worker, KgeParameterClient):
         return super(LapseParameterClient, self).push(keys, push_tensor, asynchronous)
 
     def set(self, keys, set_tensor, asynchronous=False):
-        super(LapseParameterClient, self).set(keys, set_tensor)
+        super(LapseParameterClient, self).set(keys, set_tensor, asynchronous)
 
     def localize(self, keys, asynchronous=False):
         super(LapseParameterClient, self).localize(keys, asynchronous)
