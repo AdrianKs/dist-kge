@@ -523,8 +523,10 @@ class TrainingJob(TrainingOrEvaluationJob):
             self.dataloader_dataset.set_samples(work)
             if self.entity_sync_level == "partition":
                 if work_entities is not None:
+                    entity_pull_time -= time.time()
                     self.model.get_s_embedder()._pull_embeddings(work_entities)
                     self.model.get_s_embedder().global_to_local_mapper[work_entities] = torch.arange(len(work_entities), dtype=torch.long, device="cpu")
+                    entity_pull_time += time.time()
                 else:
                     raise ValueError(
                         "the used work-scheduler seems not to support "
@@ -532,8 +534,10 @@ class TrainingJob(TrainingOrEvaluationJob):
                     )
             if self.relation_sync_level == "partition":
                 if work_relations is not None:
+                    relation_pull_time -= time.time()
                     self.model.get_p_embedder()._pull_embeddings(work_relations)
                     self.model.get_p_embedder().global_to_local_mapper[work_relations] = torch.arange(len(work_relations), dtype=torch.long, device="cpu")
+                    relation_pull_time += time.time()
                 else:
                     raise ValueError(
                         "the used work-scheduler seems not to support "
