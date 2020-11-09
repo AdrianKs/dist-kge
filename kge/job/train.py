@@ -141,6 +141,11 @@ class TrainingJob(TrainingOrEvaluationJob):
         self.trace_batch: bool = self.config.get("train.trace_level") == "batch"
         self.epoch: int = 0
         self.is_forward_only = forward_only
+        self.entity_mapper_tensors = deque()
+        for i in range(self.config.get("train.num_workers") + 1):
+            self.entity_mapper_tensors.append(
+                torch.full((self.dataset.num_entities(),), -1, dtype=torch.long)
+            )
 
         if not self.is_forward_only:
             self.model.train()
@@ -593,7 +598,6 @@ class TrainingJob(TrainingOrEvaluationJob):
                 except StopIteration:
                     if len(pre_load_batches) == 0:
                         epoch_done = True
-
 
                 # create initial batch trace (yet incomplete)
                 self.current_trace["batch"] = {
@@ -1307,7 +1311,8 @@ class TrainingJobNegativeSampling(TrainingJob):
             if self.entity_sync_level == "partition":
                 entity_mapper = self.model.get_s_embedder().global_to_local_mapper
             else:
-                entity_mapper = torch.full((self.dataset.num_entities(),), -1, dtype=torch.long)
+                # entity_mapper = torch.full((self.dataset.num_entities(),), -1, dtype=torch.long)
+                entity_mapper = self.entity_mapper_tensors.popleft()
                 entity_mapper[unique_entities] = torch.arange(len(unique_entities), dtype=torch.long)
             if self.relation_sync_level == "partition":
                 relation_mapper = self.model.get_p_embedder().global_to_local_mapper
@@ -1320,6 +1325,10 @@ class TrainingJobNegativeSampling(TrainingJob):
             negative_samples[S].map_samples(entity_mapper)
             negative_samples[P].map_samples(relation_mapper)
             negative_samples[O].map_samples(entity_mapper)
+
+            # for debugging reset the entity mapper to -1
+            # entity_mapper[:] = -1
+            self.entity_mapper_tensors.append(entity_mapper)
             return {"triples": triples, "negative_samples": negative_samples, "unique_entities": unique_entities, "unique_relations": unique_relations, "unique_time": unique_time}
 
         return collate
