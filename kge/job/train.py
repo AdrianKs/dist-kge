@@ -102,6 +102,8 @@ class TrainingJob(TrainingOrEvaluationJob):
             self.parameter_client.barrier()
             if self.parameter_client.rank == MIN_RANK:
                 self.config.set(self.config.get("model") + ".create_complete", True)
+                device = self.config.get("job.device")
+                self.config.set("job.device", "cpu")
                 init_model = KgeModel.create(
                     self.config, self.dataset, parameter_client=self.parameter_client
                 )
@@ -109,6 +111,7 @@ class TrainingJob(TrainingOrEvaluationJob):
                 init_model.get_p_embedder().push_all()
                 del init_model
                 gc.collect()
+                self.config.set("job.device", device)
                 self.config.set(self.config.get("model") + ".create_complete", False)
             self.parameter_client.barrier()
 
