@@ -178,10 +178,24 @@ class EntityRankingJob(EvaluationJob):
             )
             labels_for_ranking["_filt"] = labels
 
+            # load the true entities into the model from the ps
+            unique_entities = torch.unique(torch.cat((s,o))).long()
+            self.model.get_s_embedder()._pull_embeddings(unique_entities)
+            # we still need to map entities since we don't do this in collate
+            entity_mapper = torch.full((self.dataset.num_entities(),), -1,
+                                       dtype=torch.long, device=self.device)
+            entity_mapper[unique_entities] = torch.arange(len(unique_entities),
+                                                          dtype=torch.long, device=self.device)
+            s_mapped = entity_mapper[s.long()]
+            o_mapped = entity_mapper[o.long()]
+
+            # load relations
+            self.model.get_p_embedder().pull_all()
+
             # compute true scores beforehand, since we can't get them from a chunked
             # score table
-            o_true_scores = self.model.score_spo(s, p, o, "o").view(-1)
-            s_true_scores = self.model.score_spo(s, p, o, "s").view(-1)
+            o_true_scores = self.model.score_spo(s_mapped, p, o_mapped, "o").view(-1)
+            s_true_scores = self.model.score_spo(s_mapped, p, o_mapped, "s").view(-1)
 
             # default dictionary storing rank and num_ties for each key in rankings
             # as list of len 2: [rank, num_ties]
@@ -204,9 +218,21 @@ class EntityRankingJob(EvaluationJob):
                 chunk_start = chunk_size * chunk_number
                 chunk_end = min(chunk_size * (chunk_number + 1), num_entities)
 
+                # now we need to load and map again for the complete chunk
+                chunk_entities = torch.arange(chunk_start, chunk_end, device=self.device)
+                unique_entities = torch.unique(torch.cat((s, o, chunk_entities))).long()
+                self.model.get_s_embedder()._pull_embeddings(unique_entities)
+                entity_mapper = torch.full((self.dataset.num_entities(),), -1,
+                                           dtype=torch.long, device=self.device)
+                entity_mapper[unique_entities] = torch.arange(len(unique_entities),
+                                                              dtype=torch.long, device=self.device)
+                s_mapped = entity_mapper[s.long()]
+                o_mapped = entity_mapper[o.long()]
+                chunk_mapped = entity_mapper[chunk_entities.long()]
+
                 # compute scores of chunk
                 scores = self.model.score_sp_po(
-                    s, p, o, torch.arange(chunk_start, chunk_end).to(self.device)
+                    s_mapped, p, o_mapped, chunk_mapped  # torch.arange(chunk_start, chunk_end).to(self.device)
                 )
                 scores_sp = scores[:, : chunk_end - chunk_start]
                 scores_po = scores[:, chunk_end - chunk_start :]

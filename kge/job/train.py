@@ -317,26 +317,17 @@ class TrainingJob(TrainingOrEvaluationJob):
                     tmp_optimizer = self.optimizer
                     # TODO: we also need to handle the learning rate scheduler somehow
                     #  in the checkpoint
-                    # create a new complete model, to be able to validate and store
-                    self.config.set(self.config.get("model") + ".create_complete", True)
-                    worker_folder = self.config.folder
-                    valid_folder = os.path.dirname(worker_folder)
-                    self.config.folder = valid_folder
-                    self.config.set("job.device", "cpu")
+
+                    # create a model for validation with entity embedder size
+                    #  batch_size x 2 + eval.chunk_size
+                    self.config.set(self.config.get("model") + ".create_eval", True)
                     self.model = KgeModel.create(
                         self.config, self.dataset, parameter_client=self.parameter_client
                     )
-                    self.model.get_s_embedder().pull_all()
-                    self.model.get_p_embedder().pull_all()
-                    self.optimizer = KgeOptimizer.create(
-                        self.config, self.model, parameter_client=self.parameter_client
-                    )
-                    self.optimizer.pull_all()
-                    self.config.set("job.device", self.device)
-                    self.model = self.model.to(self.device)
-                    # we need to move some mappers separately to device
                     self.model.get_s_embedder().to_device(move_optim_data=False)
                     self.model.get_p_embedder().to_device(move_optim_data=False)
+                    self.config.set(self.config.get("model") + ".create_eval", False)
+
                     self.valid_job.model = self.model
                     # validate and update learning rate
                     if (
@@ -354,6 +345,27 @@ class TrainingJob(TrainingOrEvaluationJob):
                         self.kge_lr_scheduler.step(trace_entry[metric_name])
                     else:
                         self.kge_lr_scheduler.step()
+
+                    # create a new complete model, to be able to store
+                    self.config.set(self.config.get("model") + ".create_complete", True)
+                    worker_folder = self.config.folder
+                    valid_folder = os.path.dirname(worker_folder)
+                    self.config.folder = valid_folder
+                    self.config.set("job.device", "cpu")
+                    self.model = KgeModel.create(
+                        self.config, self.dataset, parameter_client=self.parameter_client
+                    )
+                    self.model.get_s_embedder().pull_all()
+                    self.model.get_p_embedder().pull_all()
+                    self.optimizer = KgeOptimizer.create(
+                        self.config, self.model, parameter_client=self.parameter_client
+                    )
+                    self.optimizer.pull_all()
+                    self.config.set("job.device", self.device)
+                    # self.model = self.model.to(self.device)
+                    # we need to move some mappers separately to device
+                    # self.model.get_s_embedder().to_device(move_optim_data=False)
+                    # self.model.get_p_embedder().to_device(move_optim_data=False)
 
                     # create checkpoint and delete old one, if necessary
                     self.save(self.config.checkpoint_file(self.epoch))
