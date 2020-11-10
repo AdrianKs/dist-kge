@@ -913,21 +913,21 @@ class SchedulerClient:
             dist.send(cmd, dst=self.scheduler_rank)
             dist.recv(cmd, src=self.scheduler_rank)
             if cmd[0] == SCHEDULER_CMDS.WORK:
-                work_buffer = torch.full((cmd[1].item(),), -1, dtype=torch.long)
+                work_buffer = torch.empty((cmd[1].item(),), dtype=torch.long)
                 dist.recv(work_buffer, src=self.scheduler_rank)
                 # get partition entities
                 dist.recv(cmd, src=self.scheduler_rank)
                 num_entities = cmd[1].item()
                 entity_buffer = None
                 if num_entities != 0:
-                    entity_buffer = torch.full((num_entities,), -1, dtype=torch.long)
+                    entity_buffer = torch.empty((num_entities,), dtype=torch.long)
                     dist.recv(entity_buffer, src=self.scheduler_rank)
                 # get partition relations
                 dist.recv(cmd, src=self.scheduler_rank)
                 num_relations = cmd[1].item()
                 relation_buffer = None
                 if num_relations != 0:
-                    relation_buffer = torch.full((num_relations,), -1, dtype=torch.long)
+                    relation_buffer = torch.empty((num_relations,), dtype=torch.long)
                     dist.recv(relation_buffer, src=self.scheduler_rank)
                 return work_buffer, entity_buffer, relation_buffer
             elif cmd[0] == SCHEDULER_CMDS.WAIT:
