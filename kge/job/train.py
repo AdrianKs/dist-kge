@@ -55,18 +55,44 @@ def _generate_worker_init_fn(config):
 
 
 class NumberDataset(torch.utils.data.Dataset):
-    def __init__(self, num_samples):
+    def __init__(self, num_samples, dataset):
         self.samples = list(range(num_samples))
+        self.dataset = dataset
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx):
         return idx
-    #    return self.samples[idx]
+        # return self.dataset[self.samples[idx], :].long()
 
     def set_samples(self, samples):
         self.samples = samples
+
+class BatchDataset(torch.utils.data.Dataset):
+    def __init__(self, triples, batch_size, shuffle=True):
+        self.triples = triples
+        self.samples = None
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+
+    def __len__(self):
+        if self.samples is None:
+            return 0
+        return math.ceil(len(self.samples)/self.batch_size)
+
+    def __getitem__(self, idx):
+        """Gets a complete batch based on an idx"""
+        return self.samples[idx*self.batch_size:min((idx+1)*(self.batch_size), len(self.samples))].long()
+
+    def set_samples(self, samples: torch.Tensor):
+        if self.shuffle:
+            samples = samples.numpy()
+            np.random.shuffle(samples)
+            self.samples = torch.from_numpy(samples)
+            #self.samples = samples[torch.randperm(len(samples))]
+        else:
+            self.samples = samples
 
 
 class TrainingJob(TrainingOrEvaluationJob):
@@ -1266,14 +1292,13 @@ class TrainingJobNegativeSampling(TrainingJob):
         super()._prepare()
 
         self.num_examples = self.dataset.split(self.train_split).size(0)
-        self.dataloader_dataset = NumberDataset(self.num_examples)
+        self.dataloader_dataset = BatchDataset(self.dataset.split(self.train_split), batch_size=self.batch_size, shuffle=True)
         mp_context = torch.multiprocessing.get_context("fork") if self.config.get("train.num_workers") > 0 else None
         self.loader = torch.utils.data.DataLoader(
-            # range(self.num_examples),
             self.dataloader_dataset,
             collate_fn=self._get_collate_fun(),
-            shuffle=True,
-            batch_size=self.batch_size,
+            shuffle=False,  # shuffle needs to be False, since it is handled in the dataset object
+            #batch_size=self.batch_size,  # batch size needs to be 1 since it is handled in the dataset object
             num_workers=self.config.get("train.num_workers"),
             worker_init_fn=_generate_worker_init_fn(self.config),
             pin_memory=self.config.get("train.pin_memory"),
@@ -1290,10 +1315,7 @@ class TrainingJobNegativeSampling(TrainingJob):
               in order S,P,O)
             """
 
-            triples = self.dataset.split(self.train_split)[self.dataloader_dataset.samples[batch], :].long()
-            # labels = torch.zeros((len(batch), self._sampler.num_negatives_total + 1))
-            # labels[:, 0] = 1
-            # labels = labels.view(-1)
+            triples = self.dataset.split(self.train_split)[batch[0], :].long()
 
             negative_samples = list()
             for slot in [S, P, O]:
