@@ -518,6 +518,12 @@ entity_ranking:
   # entities and/or memory-intensive models are used.
   chunk_size: -1                  # default: no chunking
 
+  # A sparse labels tensor is held on device and used for filtering.
+  # On really large datasets (>100,000,000 triples) even this sparse tensor can take
+  # up up to some GB.
+  # To allow evaluating on these large graphs, labels can be stored on cpu
+  labels_on_cpu: False
+
   # Metrics are always computed over the entire evaluation data. Optionally,
   # certain more specific metrics can be computed in addition.
   metrics_per:
