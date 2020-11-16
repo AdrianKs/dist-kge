@@ -145,7 +145,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
             init_method="env://",
             world_size=self.world_size,
             rank=self.rank,
-            timeout=datetime.timedelta(hours=2),
+            timeout=datetime.timedelta(hours=6),
         )
         barrier_count = 0
         shutdown_count = 0
