@@ -52,8 +52,14 @@ job:
     relation_localize: False
     entity_pre_pull: 0  # number of entity batches to prepull: 1 - from ps, 2 - to gpu
     relation_pre_pull: 0  # number of relation batches to prepull: 1 - from ps, 2 - to gpu
-    repartition_epoch: True  # currently only works with 2d_block_partition
+    repartition_epoch: True  # currently only works with 2d_block_partition and random
     scheduling_order: 'random'  # block ordering for 2d_block_partition: random, sequential
+
+    # combine mirrored strata to reduce number of partitions
+    #  e.g.: (1,2) and (2,1)
+    #  diagonals lying next to each other will be combined
+    #  e.g.: (0,0) and (1,1)
+    combine_mirror_blocks: True  # combine mirrored blocks in strati
     load_batch: True  # load all embeddings once at beginning of the batch
 
 # The seeds of the PRNGs can be set manually for (increased) reproducibility.

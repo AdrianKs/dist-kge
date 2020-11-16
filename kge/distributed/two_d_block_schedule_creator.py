@@ -9,10 +9,11 @@ class TwoDBlockScheduleCreator:
     can only handle num partitions of base 2
     num partitions needs to be 2*num_workers
     """
-    def __init__(self, num_partitions, num_workers, randomize_iterations=False):
+    def __init__(self, num_partitions, num_workers, randomize_iterations=False, combine_mirror_blocks=False):
         self.num_partitions = num_partitions
         self.num_workers = num_workers
         self.randomize_iterations = randomize_iterations
+        self.combine_mirror_blocks = combine_mirror_blocks
 
     def create_schedule(self) -> List[List[Tuple[int, int]]]:
         """
@@ -39,12 +40,13 @@ class TwoDBlockScheduleCreator:
                     int(n_p / 2), x_offset=offset + int(n_p / 2), y_offset=offset
                 )
             )
-            # anti diagonal lower left quadrant
-            schedule.extend(
-                self._handle_anti_diagonal(
-                    int(n_p / 2), x_offset=offset, y_offset=offset + int(n_p / 2)
+            if not self.combine_mirror_blocks:
+                # anti diagonal lower left quadrant
+                schedule.extend(
+                    self._handle_anti_diagonal(
+                        int(n_p / 2), x_offset=offset, y_offset=offset + int(n_p / 2)
+                    )
                 )
-            )
             # both diagonal blocks
             schedule.extend(
                 self._concat_schedules(
@@ -56,8 +58,8 @@ class TwoDBlockScheduleCreator:
             )
             return schedule
 
-    @staticmethod
-    def _handle_2x2_diagonal(offset=0) -> List[List[Tuple[int, int]]]:
+    #@staticmethod
+    def _handle_2x2_diagonal(self, offset=0) -> List[List[Tuple[int, int]]]:
         """
         handle smallest diagonal block
         2x2 with one worker
@@ -68,9 +70,17 @@ class TwoDBlockScheduleCreator:
             List of iterations for one worker
         """
         schedule = list()
-        for i in range(2):
-            for j in range(2):
-                schedule.append([(i + offset, j + offset)])
+        if not self.combine_mirror_blocks:
+            for i in range(2):
+                for j in range(2):
+                    schedule.append([(i + offset, j + offset)])
+        else:
+            # in combine mirror we only take the upper right block which will be
+            #  mirrored later on
+            #  only take the lower right diagonal, which will be combined with
+            #  diagonal - 1
+            schedule.append([(0 + offset, 1 + offset)])
+            schedule.append([(1 + offset, 1 + offset)])
         random.shuffle(schedule)
         return schedule
 

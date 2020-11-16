@@ -602,7 +602,13 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         repartition_epoch=True,
     ):
         self.partition_type = "2d_block_partition"
-        self.schedule_creator = TwoDBlockScheduleCreator(num_partitions=num_partitions, num_workers=num_clients, randomize_iterations=True)
+        self.combine_mirror_blocks = config.get("job.distributed.combine_mirror_blocks")
+        self.schedule_creator = TwoDBlockScheduleCreator(
+            num_partitions=num_partitions,
+            num_workers=num_clients,
+            randomize_iterations=True,
+            combine_mirror_blocks=self.combine_mirror_blocks
+        )
         #self.fixed_schedule = [item for sublist in self.schedule_creator.create_schedule() for item in sublist]
         self.fixed_schedule = self.schedule_creator.create_schedule()
         super(TwoDBlockWorkScheduler, self).__init__(
@@ -782,6 +788,18 @@ class TwoDBlockWorkScheduler(WorkScheduler):
                 self.current_iteration.remove(strata)
                 strata_data = self.partitions[strata]
                 entities_in_strata = self._entities_in_bucket.get(strata)
+                if self.combine_mirror_blocks:
+                    if strata[0] == strata[1]:
+                        mirror_strata = (strata[0]-1, strata[1]-1)
+                        entities_in_strata = torch.cat(
+                            (entities_in_strata,
+                             self._entities_in_bucket.get(mirror_strata))
+                        )
+                    else:
+                        mirror_strata = (strata[1], strata[0])
+                    strata_data = torch.cat(
+                        (strata_data, self.partitions[mirror_strata])
+                    )
                 self.running_blocks[rank] = strata
                 return strata_data, entities_in_strata, None, False
             # return wait here
