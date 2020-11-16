@@ -18,6 +18,10 @@ class EntityRankingJob(EvaluationJob):
             ["rounded_mean_rank", "best_rank", "worst_rank"],
         )
         self.tie_handling = self.config.get("entity_ranking.tie_handling")
+        if self.config.get("entity_ranking.labels_on_cpu"):
+            self.label_device = "cpu"
+        else:
+            self.label_device = self.device
 
         self.filter_with_test = config.get("entity_ranking.filter_with_test")
         self.filter_splits = self.config.get("entity_ranking.filter_splits")
@@ -159,7 +163,7 @@ class EntityRankingJob(EvaluationJob):
             # TODO add timing information
             batch = batch_coords[0].to(self.device)
             s, p, o = batch[:, 0], batch[:, 1], batch[:, 2]
-            label_coords = batch_coords[1].to(self.device)
+            label_coords = batch_coords[1].to(self.label_device)
             if filter_with_test:
                 test_label_coords = batch_coords[2].to(self.device)
                 # create sparse labels tensor
@@ -174,7 +178,7 @@ class EntityRankingJob(EvaluationJob):
 
             # create sparse labels tensor
             labels = kge.job.util.coord_to_sparse_tensor(
-                len(batch), 2 * num_entities, label_coords, self.device, float("Inf")
+                len(batch), 2 * num_entities, label_coords, self.label_device, float("Inf")
             )
             labels_for_ranking["_filt"] = labels
 
@@ -229,6 +233,10 @@ class EntityRankingJob(EvaluationJob):
                         labels_chunk = self._densify_chunk_of_labels(
                             labels_for_ranking[ranking], chunk_start, chunk_end
                         )
+                        # if the complete label tensor is on cpu, move the needed chunk
+                        #  to device
+                        if self.label_device != self.device:
+                            labels_chunk = labels_chunk.to(self.device)
 
                         # remove current example from labels
                         labels_chunk[o_in_chunk_mask, o_in_chunk] = 0
