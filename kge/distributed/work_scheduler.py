@@ -640,6 +640,7 @@ class TwoDBlockWorkScheduler(WorkScheduler):
     ):
         self.partition_type = "2d_block_partition"
         self.combine_mirror_blocks = config.get("job.distributed.combine_mirror_blocks")
+        self.combine_mirror_blocks = False
         self.schedule_creator = TwoDBlockScheduleCreator(
             num_partitions=num_partitions,
             num_workers=num_clients,
