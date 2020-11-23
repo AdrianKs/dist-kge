@@ -603,6 +603,7 @@ class TwoDBlockWorkScheduler(WorkScheduler):
     ):
         self.partition_type = "2d_block_partition"
         self.combine_mirror_blocks = config.get("job.distributed.combine_mirror_blocks")
+        self.combine_mirror_blocks = False
         self.schedule_creator = TwoDBlockScheduleCreator(
             num_partitions=num_partitions,
             num_workers=num_clients,
@@ -624,12 +625,12 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         # dictionary: key=worker_rank, value=block
         self.running_blocks: Dict[int, Tuple[int, int]] = {}
         # self.work_to_do = deepcopy(self.partitions)
+        self.dataset = dataset
         self._initialized_entity_blocks = set()
         entities_to_partition = self._load_entities_to_partitions_file(
             self.partition_type, dataset_folder, num_partitions
         )
-        self._entities_in_bucket = self._get_entities_in_bucket(entities_to_partition, self.partitions)
-        self.dataset = dataset
+        self._entities_in_bucket = self._get_entities_in_bucket(entities_to_partition, self.partitions, self.dataset.split("train"))
         self.scheduling_order = scheduling_order
         self.work_to_do: Dict[Tuple[int, int], torch.Tensor] = self._order_by_schedule(
             deepcopy(self.partitions)
@@ -741,27 +742,22 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         )
         triple_partition_assignment = np.stack([s_block, o_block], axis=1)
         partitions = TwoDBlockWorkScheduler._construct_partitions(triple_partition_assignment)
-        entities_in_bucket = TwoDBlockWorkScheduler._get_entities_in_bucket(entity_to_partition, partitions)
+        entities_in_bucket = TwoDBlockWorkScheduler._get_entities_in_bucket(entity_to_partition, partitions, data)
         print("repartitioning done")
         print("repartition_time", start+time.time())
         return partitions, entities_in_bucket
 
     @staticmethod
-    def _get_entities_in_bucket(entities_to_partition, partitions):
+    def _get_entities_in_bucket(entities_to_partition, partitions, data):
         entities_in_bucket = dict()
-        for partition in partitions:
-            entities_in_bucket[partition] = torch.from_numpy(
-                np.where(
-                    np.ma.mask_or(
-                        (entities_to_partition == partition[0]),
-                        (entities_to_partition == partition[1]),
-                    )
-                )[0]
-            )
+        for strata, strata_data in partitions.items():
+            entities_in_bucket[strata] = torch.unique(data[strata_data][:, [0, 2]]).long()
         return entities_in_bucket
 
     def _get_max_entities(self):
-        return max([len(i) for i in self._entities_in_bucket.values()])
+        num_entities_in_strata = [len(i) for i in self._entities_in_bucket.values()]
+        len_std = np.std(num_entities_in_strata)
+        return max(num_entities_in_strata) + round(len_std)
 
     def _next_work(
         self, rank
