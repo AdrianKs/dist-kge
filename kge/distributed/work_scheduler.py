@@ -603,7 +603,6 @@ class TwoDBlockWorkScheduler(WorkScheduler):
     ):
         self.partition_type = "2d_block_partition"
         self.combine_mirror_blocks = config.get("job.distributed.combine_mirror_blocks")
-        self.combine_mirror_blocks = False
         self.schedule_creator = TwoDBlockScheduleCreator(
             num_partitions=num_partitions,
             num_workers=num_clients,
@@ -757,6 +756,8 @@ class TwoDBlockWorkScheduler(WorkScheduler):
     def _get_max_entities(self):
         num_entities_in_strata = [len(i) for i in self._entities_in_bucket.values()]
         len_std = np.std(num_entities_in_strata)
+        if self.combine_mirror_blocks:
+            return max(num_entities_in_strata) * 2 + round(len_std)
         return max(num_entities_in_strata) + round(len_std)
 
     def _next_work(
@@ -793,6 +794,10 @@ class TwoDBlockWorkScheduler(WorkScheduler):
                         )
                     else:
                         mirror_strata = (strata[1], strata[0])
+                        entities_in_strata = torch.unique(torch.cat(
+                            (entities_in_strata,
+                             self._entities_in_bucket.get(mirror_strata))
+                        ))
                     strata_data = torch.cat(
                         (strata_data, self.partitions[mirror_strata])
                     )
