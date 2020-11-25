@@ -790,8 +790,8 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         num_entities_in_strata = [len(i) for i in self._entities_in_bucket.values()]
         len_std = np.std(num_entities_in_strata)
         if self.combine_mirror_blocks:
-            return max(num_entities_in_strata) * 2 + round(len_std)
-        return max(num_entities_in_strata) + round(len_std)
+            return max(num_entities_in_strata) * 2 + 5*round(len_std)
+        return max(num_entities_in_strata) + 5*round(len_std)
 
     def _next_work(
         self, rank
