@@ -948,19 +948,16 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         return partitions
 
     @staticmethod
-    #@numba.njit(parallel=True)
-    @numba.njit
+    @numba.njit(parallel=True)
     def _numba_construct_partitions(partition_assignment, num_partitions):
-        # todo: for parallel in numba we can not simply extend an array to store the result...
         partition_indexes = np.array([(i, j) for i in range(num_partitions) for j in range(num_partitions)])
-        partition_data = []
+        # create an array of the needed length to avoid race conditions
+        partition_data = [np.array([1])]*len(partition_indexes)
         for i in numba.prange(len(partition_indexes)):
-            partition_data.append(
-                np.where(np.logical_and(
+            partition_data[i] = np.where(np.logical_and(
                     partition_assignment[:, 0] == partition_indexes[i][0],
                     partition_assignment[:, 1] == partition_indexes[i][1]
                 ))[0]
-            )
         return partition_indexes, partition_data
 
 
