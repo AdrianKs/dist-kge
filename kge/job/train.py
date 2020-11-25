@@ -201,8 +201,8 @@ class TrainingJob(TrainingOrEvaluationJob):
                 )
                 self.model.get_s_embedder()._normalize_embeddings()
                 push_tensor = torch.cat(
-                    (self.model.get_s_embedder()._embeddings.weight.data[:len(init_entities)],
-                     self.model.get_s_embedder().optimizer_values[:len(init_entities)]),
+                    (self.model.get_s_embedder()._embeddings.weight.data[:len(init_entities)].cpu(),
+                     self.model.get_s_embedder().optimizer_values[:len(init_entities)].cpu()),
                     dim=1
                 )
                 self.parameter_client.push(
