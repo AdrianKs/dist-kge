@@ -4,6 +4,7 @@ import datetime
 import time
 import concurrent.futures
 import numpy as np
+import pandas as pd
 import torch
 from collections import deque, OrderedDict
 from copy import deepcopy
@@ -313,15 +314,16 @@ class WorkScheduler(mp.get_context("spawn").Process):
                 )
             )
         else:
-            partition_assignment = np.loadtxt(
+            partition_assignment = pd.read_csv(
                 os.path.join(
                     dataset_folder,
                     partition_type,
                     f"num_{num_partitions}",
-                    "train_assign_partitions.del",
+                    "train_assign_partitions.del"
                 ),
+                sep="\t",
                 dtype=np.long,
-            )
+            ).to_numpy()
             np.save(
                 os.path.join(
                     dataset_folder,
@@ -368,12 +370,13 @@ class WorkScheduler(mp.get_context("spawn").Process):
                 )
             )
         else:
-            partition_assignment = np.loadtxt(
+            partition_assignment = pd.read_csv(
                 os.path.join(
                     dataset_folder, partition_type, f"num_{num_partitions}", file_name,
                 ),
+                sep="\t",
                 dtype=np.long,
-            )
+            ).to_numpy()
             np.save(
                 os.path.join(
                     dataset_folder, partition_type, f"num_{num_partitions}", file_name,
