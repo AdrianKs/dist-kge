@@ -321,6 +321,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
                     f"num_{num_partitions}",
                     "train_assign_partitions.del"
                 ),
+                header=None,
                 sep="\t",
                 dtype=np.long,
             ).to_numpy()
@@ -374,6 +375,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
                 os.path.join(
                     dataset_folder, partition_type, f"num_{num_partitions}", file_name,
                 ),
+                header=None,
                 sep="\t",
                 dtype=np.long,
             ).to_numpy()
