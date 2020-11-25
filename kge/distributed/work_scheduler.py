@@ -930,29 +930,35 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         self.work_to_do = self._order_by_schedule(deepcopy(self.partitions))
 
     def _load_partitions(self, dataset_folder, num_partitions):
+        start = time.time()
         partition_assignment = self._load_partition_file(
             self.partition_type, dataset_folder, num_partitions
         )
-        return self._construct_partitions(partition_assignment, num_partitions)
+        partitions = self._construct_partitions(partition_assignment, num_partitions)
+        print("partition load time", time.time()-start)
+        return partitions
 
 
     @staticmethod
     def _construct_partitions(partition_assignment, num_partitions):
         partition_indexes, partition_data = TwoDBlockWorkScheduler._numba_construct_partitions(partition_assignment, num_partitions)
+        partition_indexes = [(i, j) for i in range(num_partitions) for j in range(num_partitions)]
         partition_data = [torch.from_numpy(data).contiguous() for data in partition_data]
         partitions = dict(zip(partition_indexes, partition_data))
         return partitions
 
     @staticmethod
-    @numba.njit
+    @numba.njit(parallel=True)
     def _numba_construct_partitions(partition_assignment, num_partitions):
-        partition_indexes = [(i, j) for i in range(num_partitions) for j in range(num_partitions)]
-        partition_data = [
-            np.where(np.logical_and(
-                partition_assignment[:, 0] == i[0],
-                partition_assignment[:, 1] == i[1]))[0]
-            for i in partition_indexes
-        ]
+        partition_indexes = np.array([(i, j) for i in range(num_partitions) for j in range(num_partitions)])
+        partition_data = []
+        for i in numba.prange(len(partition_indexes)):
+            partition_data.append(
+                np.where(np.logical_and(
+                    partition_assignment[:, 0] == partition_indexes[i][0],
+                    partition_assignment[:, 1] == partition_indexes[i][1]
+                ))[0]
+            )
         return partition_indexes, partition_data
 
 
