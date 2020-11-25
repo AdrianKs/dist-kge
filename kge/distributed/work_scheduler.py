@@ -778,7 +778,7 @@ class TwoDBlockWorkScheduler(WorkScheduler):
             num_partitions=num_partitions,
         )
         triple_partition_assignment = np.stack([s_block, o_block], axis=1)
-        partitions = TwoDBlockWorkScheduler._construct_partitions(triple_partition_assignment)
+        partitions = TwoDBlockWorkScheduler._construct_partitions(triple_partition_assignment, num_partitions)
         entities_in_bucket = TwoDBlockWorkScheduler._get_entities_in_bucket(entity_to_partition, partitions, data)
         print("repartitioning done")
         print("repartition_time", start+time.time())
@@ -933,18 +933,17 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         partition_assignment = self._load_partition_file(
             self.partition_type, dataset_folder, num_partitions
         )
-        return self._construct_partitions(partition_assignment)
+        return self._construct_partitions(partition_assignment, num_partitions)
 
     @staticmethod
-    def _construct_partitions(partition_assignment):
-        partition_indexes = np.unique(partition_assignment, axis=0)
+    def _construct_partitions(partition_assignment, num_partitions):
+        partition_indexes = [(i, j) for i in range(num_partitions) for j in range(num_partitions)]
         partitions_data = [
             torch.from_numpy(
                 np.where(np.all(partition_assignment == i, axis=1))[0]
             ).contiguous()
             for i in partition_indexes
         ]
-        partition_indexes = [(i[0], i[1]) for i in partition_indexes]
         partitions = dict(zip(partition_indexes, partitions_data))
         return partitions
 
