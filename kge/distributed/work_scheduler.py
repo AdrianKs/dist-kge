@@ -5,6 +5,7 @@ import time
 import concurrent.futures
 import numpy as np
 import pandas as pd
+import numba
 import torch
 from collections import deque, OrderedDict
 from copy import deepcopy
@@ -934,17 +935,25 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         )
         return self._construct_partitions(partition_assignment, num_partitions)
 
+
     @staticmethod
     def _construct_partitions(partition_assignment, num_partitions):
+        partition_indexes, partition_data = TwoDBlockWorkScheduler._numba_construct_partitions(partition_assignment, num_partitions)
+        partition_data = [torch.from_numpy(data).contiguous() for data in partition_data]
+        partitions = dict(zip(partition_indexes, partition_data))
+        return partitions
+
+    @staticmethod
+    @numba.njit
+    def _numba_construct_partitions(partition_assignment, num_partitions):
         partition_indexes = [(i, j) for i in range(num_partitions) for j in range(num_partitions)]
-        partitions_data = [
-            torch.from_numpy(
-                np.where(np.all(partition_assignment == i, axis=1))[0]
-            ).contiguous()
+        partition_data = [
+            np.where(np.logical_and(
+                partition_assignment[:, 0] == i[0],
+                partition_assignment[:, 1] == i[1]))[0]
             for i in partition_indexes
         ]
-        partitions = dict(zip(partition_indexes, partitions_data))
-        return partitions
+        return partition_indexes, partition_data
 
 
 class SchedulerClient:
