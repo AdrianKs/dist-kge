@@ -24,6 +24,7 @@ class SCHEDULER_CMDS(IntEnum):
     BARRIER = 5
     SHUTDOWN = 6
     INIT_INFO = 7
+    GET_INIT_WORK = 8
 
 
 class WorkScheduler(mp.get_context("spawn").Process):
@@ -35,6 +36,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
         master_port,
         num_partitions,
         num_clients,
+        dataset,
         dataset_folder,
         rank=1,
         repartition_epoch=True,
@@ -42,6 +44,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
         self._config_check(config)
         super(WorkScheduler, self).__init__(daemon=False, name="work-scheduler")
         self.config = config
+        self.dataset = dataset
         self.rank = rank
         self.num_clients = num_clients
         self.world_size = world_size
@@ -54,6 +57,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
         self.work_to_do = deque(list(range(num_partitions)))
         self.wait_time = 0.4
         self.repartition_epoch = repartition_epoch
+        self.init_up_to_entity = -1
         if self.repartition_epoch:
             self.repartition_future = None
             self.repartition_worker_pool = None
@@ -107,6 +111,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
                 num_partitions=num_partitions,
                 num_clients=num_clients,
                 dataset_folder=dataset_folder,
+                dataset=dataset,
             )
         elif partition_type == "metis_partition":
             return MetisWorkScheduler(
@@ -117,6 +122,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
                 num_partitions=num_partitions,
                 num_clients=num_clients,
                 dataset_folder=dataset_folder,
+                dataset=dataset
             )
         elif partition_type == "2d_block_partition":
             return TwoDBlockWorkScheduler(
@@ -205,6 +211,8 @@ class WorkScheduler(mp.get_context("spawn").Process):
                     break
             if cmd == SCHEDULER_CMDS.INIT_INFO:
                 self._handle_init_info(rank)
+            if cmd == SCHEDULER_CMDS.GET_INIT_WORK:
+                self._handle_get_init_work(rank=rank, embedding_layer_size=cmd_buffer[1].item())
 
     def _next_work(
         self, rank
@@ -258,6 +266,25 @@ class WorkScheduler(mp.get_context("spawn").Process):
         max_relations = self._get_max_relations()
         init_data = torch.LongTensor([max_entities, max_relations])
         dist.send(init_data, dst=rank)
+
+    def _handle_get_init_work(self, rank, embedding_layer_size):
+        if self.init_up_to_entity == -1:
+            print("initialize parameter server")
+        self.init_up_to_entity += 1
+        if self.init_up_to_entity >= self.dataset.num_entities():
+            return_buffer = torch.LongTensor([-1, -1])
+        else:
+            entity_range_end = min(self.dataset.num_entities(),
+                                   self.init_up_to_entity + embedding_layer_size)
+            if entity_range_end == self.dataset.num_entities():
+                print("parameter server initialized")
+            return_buffer = torch.LongTensor(
+                [self.init_up_to_entity,
+                 entity_range_end
+                 ]
+            )
+        self.init_up_to_entity += embedding_layer_size
+        dist.isend(return_buffer, dst=rank)
 
     def _get_max_entities(self):
         return 0
@@ -418,13 +445,14 @@ class RandomWorkScheduler(WorkScheduler):
         self.partition_type = "random_partition"
         self.dataset = dataset
         super(RandomWorkScheduler, self).__init__(
-            config,
-            world_size,
-            master_ip,
-            master_port,
-            num_partitions,
-            num_clients,
-            dataset_folder,
+            config=config,
+            world_size=world_size,
+            master_ip=master_ip,
+            master_port=master_port,
+            num_partitions=num_partitions,
+            num_clients=num_clients,
+            dataset_folder=dataset_folder,
+            dataset=dataset,
             repartition_epoch=repartition_epoch,
         )
 
@@ -462,6 +490,7 @@ class RelationWorkScheduler(WorkScheduler):
         num_partitions,
         num_clients,
         dataset_folder,
+        dataset,
     ):
         self.partition_type = "relation_partition"
         super(RelationWorkScheduler, self).__init__(
@@ -472,6 +501,7 @@ class RelationWorkScheduler(WorkScheduler):
             num_partitions,
             num_clients,
             dataset_folder,
+            dataset=dataset,
         )
         self.relations_to_partition = self._load_relations_to_partitions_file(
             self.partition_type, dataset_folder, num_partitions
@@ -523,6 +553,7 @@ class MetisWorkScheduler(WorkScheduler):
         num_partitions,
         num_clients,
         dataset_folder,
+        dataset,
     ):
         self.partition_type = "metis_partition"
         super(MetisWorkScheduler, self).__init__(
@@ -533,6 +564,7 @@ class MetisWorkScheduler(WorkScheduler):
             num_partitions,
             num_clients,
             dataset_folder,
+            dataset=dataset,
         )
         self.entities_to_partition = self._load_entities_to_partitions_file(
             self.partition_type, dataset_folder, num_partitions
@@ -619,6 +651,7 @@ class TwoDBlockWorkScheduler(WorkScheduler):
             num_partitions=num_partitions,
             num_clients=num_clients,
             dataset_folder=dataset_folder,
+            dataset=dataset,
             repartition_epoch=repartition_epoch,
         )
         # dictionary: key=worker_rank, value=block
@@ -954,6 +987,24 @@ class SchedulerClient:
                 time.sleep(cmd[1].item())
             else:
                 return None, None, None
+
+    def get_init_work(self, entity_embedder_size):
+        """
+        Get the entity ids that should be initialized by the worker.
+        Receives start and end id from the scheduler
+        Args:
+            entity_embedder_size: size of the local entity embedding layer
+
+        Returns:
+            tensor containing range from start and end entity id
+
+        """
+        cmd = torch.LongTensor([SCHEDULER_CMDS.GET_INIT_WORK, entity_embedder_size])
+        dist.send(cmd, dst=self.scheduler_rank)
+        dist.recv(cmd, src=self.scheduler_rank)
+        if cmd[0] > -1:
+            return torch.arange(cmd[0], cmd[1], dtype=torch.long)
+        return None
 
     def work_done(self):
         cmd = torch.LongTensor([SCHEDULER_CMDS.WORK_DONE, 0])
