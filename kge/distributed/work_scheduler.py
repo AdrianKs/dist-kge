@@ -284,7 +284,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
                  ]
             )
         self.init_up_to_entity += embedding_layer_size
-        dist.isend(return_buffer, dst=rank)
+        dist.send(return_buffer, dst=rank)
 
     def _get_max_entities(self):
         return 0
