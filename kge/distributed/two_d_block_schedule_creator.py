@@ -14,6 +14,8 @@ class TwoDBlockScheduleCreator:
         self.num_workers = num_workers
         self.randomize_iterations = randomize_iterations
         self.combine_mirror_blocks = combine_mirror_blocks
+        if self.num_workers*2 > self.num_partitions:
+            raise ValueError("Can not create strafied schedule for num_workers > num_partitions/2")
 
     def create_schedule(self) -> List[List[Tuple[int, int]]]:
         """
@@ -23,14 +25,14 @@ class TwoDBlockScheduleCreator:
             each iteration is a list of blocks (i,j) of size num_workers
         """
         schedule = []
-        schedule.extend(self._create_schedule(self.num_partitions, self.num_workers))
+        schedule.extend(self._create_schedule(self.num_partitions))
         if self.randomize_iterations:
             random.shuffle(schedule)
         return schedule
 
-    def _create_schedule(self, n_p, n_w, offset=0) -> List[List[Tuple[int, int]]]:
+    def _create_schedule(self, n_p, offset=0) -> List[List[Tuple[int, int]]]:
         schedule = []
-        if n_p == 2 and n_w == 1:
+        if n_p == 2:
             schedule.extend(self._handle_2x2_diagonal(offset=offset))
             return schedule
         else:
@@ -50,9 +52,9 @@ class TwoDBlockScheduleCreator:
             # both diagonal blocks
             schedule.extend(
                 self._concat_schedules(
-                    self._create_schedule(int(n_p / 2), int(n_w / 2), offset=offset),
+                    self._create_schedule(int(n_p / 2), offset=offset),
                     self._create_schedule(
-                        int(n_p / 2), int(n_w / 2), offset=offset + int(n_p / 2)
+                        int(n_p / 2), offset=offset + int(n_p / 2)
                     ),
                 )
             )
