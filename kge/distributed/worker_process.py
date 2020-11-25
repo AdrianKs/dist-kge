@@ -160,8 +160,6 @@ class WorkerProcess(mp.get_context("spawn").Process):
         # load data from checkpoint and create job
         if parameter_client.rank == MIN_RANK and self.checkpoint is not None:
             # Todo: we still create a complete new job after creating the resume job
-            #  therefore epoch numbers will not be handled correctly, for example
-
             self.config.set(self.config.get("model") + ".create_complete", True)
             tmp_device = self.config.get("job.device")
             self.config.set("job.device", "cpu")
@@ -170,6 +168,8 @@ class WorkerProcess(mp.get_context("spawn").Process):
             job.model.get_p_embedder().push_all()
             self.config.set("job.device", tmp_device)
             self.config.set(self.config.get("model") + ".create_complete", False)
+
+            # don't re-initialize the model afterwards
             init_for_load_only = True
 
         job = Job.create(

@@ -123,23 +123,6 @@ class TrainingJob(TrainingOrEvaluationJob):
         self.relation_sync_level = self.config.get(
             "job.distributed.relation_sync_level"
         )
-        # here we create one large model to init lapse and remove it afterwards
-        if not init_for_load_only:
-            self.parameter_client.barrier()
-            if self.parameter_client.rank == MIN_RANK:
-                self.config.set(self.config.get("model") + ".create_complete", True)
-                device = self.config.get("job.device")
-                self.config.set("job.device", "cpu")
-                init_model = KgeModel.create(
-                    self.config, self.dataset, parameter_client=self.parameter_client
-                )
-                init_model.get_s_embedder().push_all()
-                init_model.get_p_embedder().push_all()
-                del init_model
-                gc.collect()
-                self.config.set("job.device", device)
-                self.config.set(self.config.get("model") + ".create_complete", False)
-            self.parameter_client.barrier()
 
         self.work_scheduler_client = SchedulerClient()
         (
@@ -199,6 +182,35 @@ class TrainingJob(TrainingOrEvaluationJob):
             self.valid_job = EvaluationJob.create(
                 valid_conf, dataset, parent_job=self, model=self.model
             )
+
+        # initialize the parameter server
+        #  each worker takes as many entities as it can fit, inits and pushes
+        #  init work is distributed by the work scheduler
+        if not init_for_load_only:
+            # only the first worker initializes the relations
+            if self.parameter_client.rank == MIN_RANK:
+                self.model.get_p_embedder().push_all()
+            while True:
+                init_entities = self.work_scheduler_client.get_init_work(
+                    self.model.get_s_embedder().vocab_size
+                )
+                if init_entities is None:
+                    break
+                self.model.get_s_embedder().initialize(
+                    self.model.get_s_embedder()._embeddings.weight.data
+                )
+                self.model.get_s_embedder()._normalize_embeddings()
+                push_tensor = torch.cat(
+                    (self.model.get_s_embedder()._embeddings.weight.data[:len(init_entities)],
+                     self.model.get_s_embedder().optimizer_values[:len(init_entities)]),
+                    dim=1
+                )
+                self.parameter_client.push(
+                    init_entities + self.model.get_s_embedder().lapse_offset,
+                    push_tensor.cpu()
+                )
+        self.parameter_client.barrier()
+
         self.entity_pre_pull = self.config.get("job.distributed.entity_pre_pull")
         self.relation_pre_pull = self.config.get("job.distributed.relation_pre_pull")
 
