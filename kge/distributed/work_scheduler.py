@@ -796,7 +796,7 @@ class TwoDBlockWorkScheduler(WorkScheduler):
                         (entities_to_partition == partition[1]),
                     )
                 )[0]
-            )
+            ).contiguous()
         return entities_in_bucket
 
     def _get_max_entities(self):
@@ -941,15 +941,17 @@ class TwoDBlockWorkScheduler(WorkScheduler):
 
     @staticmethod
     def _construct_partitions(partition_assignment, num_partitions):
-        partition_indexes, partition_data = TwoDBlockWorkScheduler._numba_construct_partitions(partition_assignment, num_partitions)
+        partition_indexes, partition_data = TwoDBlockWorkScheduler._numba_construct_partitions(np.ascontiguousarray(partition_assignment), num_partitions)
         partition_indexes = [(i, j) for i in range(num_partitions) for j in range(num_partitions)]
         partition_data = [torch.from_numpy(data).contiguous() for data in partition_data]
         partitions = dict(zip(partition_indexes, partition_data))
         return partitions
 
     @staticmethod
-    @numba.njit(parallel=True)
+    #@numba.njit(parallel=True)
+    @numba.njit
     def _numba_construct_partitions(partition_assignment, num_partitions):
+        # todo: for parallel in numba we can not simply extend an array to store the result...
         partition_indexes = np.array([(i, j) for i in range(num_partitions) for j in range(num_partitions)])
         partition_data = []
         for i in numba.prange(len(partition_indexes)):
