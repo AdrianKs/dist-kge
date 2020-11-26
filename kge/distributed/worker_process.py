@@ -31,6 +31,7 @@ class WorkerProcessPool:
         dataset,
         checkpoint: Optional[Dict] = None,
     ):
+        config.log(f"creating worker process pool with {num_total_workers} worker")
         self.workers = []
         configs = {}
         parameters=None

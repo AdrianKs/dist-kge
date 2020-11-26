@@ -1,4 +1,5 @@
 import os
+import time
 from typing import Dict, Optional
 from kge import Config, Dataset
 from kge.distributed.parameter_server import init_torch_server, init_lapse_scheduler
@@ -62,6 +63,8 @@ def create_and_run_distributed(config: Config, dataset: Optional[Dataset] = None
 
         # create a work scheduler
         partition_type = config.get("job.distributed.partition_type")
+        print("init scheduler")
+        scheduler_init_time = time.time()
         scheduler = WorkScheduler.create(
             config=config,
             partition_type=partition_type,
@@ -75,8 +78,12 @@ def create_and_run_distributed(config: Config, dataset: Optional[Dataset] = None
             scheduling_order=config.get("job.distributed.scheduling_order"),
             repartition_epoch=config.get("job.distributed.repartition_epoch"),
         )
+        config.log(f"scheduler initialized after: {time.time()-scheduler_init_time}")
+        print("start scheduler")
+        scheduler_start_time = time.time()
         scheduler.start()
         processes.append(scheduler)
+        config.log(f"scheduler start took: {time.time()-scheduler_start_time}")
 
     # create all train-workers in a worker pool
     num_workers = config.get("job.distributed.num_workers")

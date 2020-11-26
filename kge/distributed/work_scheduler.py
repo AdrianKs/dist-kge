@@ -183,7 +183,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
                 continue
 
             # fixme: this will time out if the epoch takes too long
-            #  we set the timeout to 2h for now
+            #  we set the timeout to 6h for now
             rank = dist.recv(cmd_buffer)
             cmd = cmd_buffer[0].item()
             key_len = cmd_buffer[1].item()
@@ -802,7 +802,10 @@ class TwoDBlockWorkScheduler(WorkScheduler):
     def _get_entities_in_bucket(entities_to_partition, partitions, data):
         entities_in_bucket = dict()
         for strata, strata_data in partitions.items():
-            entities_in_bucket[strata] = torch.unique(data[strata_data][:, [0, 2]]).long()
+            # np.unique is slightly faster than torch.unique
+            entities_in_bucket[strata] = torch.from_numpy(
+                np.unique(data[strata_data][:, [0, 2]])
+            ).long().contiguous()
         return entities_in_bucket
 
     def _get_max_entities(self):
