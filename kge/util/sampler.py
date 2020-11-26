@@ -867,10 +867,10 @@ class KgePooledSampler(KgeSampler):
         # unique_samples = np.random.choice(
         #     self.vocabulary_size[slot], num_unique, replace=False
         # )
-        unique_samples = random.sample(
-            self.sample_pools[slot].tolist(),
+        unique_samples = self.sample_pools[slot][torch.tensor(random.sample(
+            range(len(self.sample_pools[slot])),
             num_unique if self.shared_type == "naive" else num_unique + 1,
-        )
+        ), dtype=torch.long)]
 
         # For WR, we need to upsample. To do so, we compute the set of additional
         # (repeated) sample indexes.
@@ -888,7 +888,8 @@ class KgePooledSampler(KgeSampler):
                 positive_triples,
                 slot,
                 num_samples,
-                torch.tensor(unique_samples, dtype=torch.long),
+                unique_samples,
+                # torch.tensor(unique_samples, dtype=torch.long),
                 repeat_indexes,
             )
 
@@ -915,7 +916,8 @@ class KgePooledSampler(KgeSampler):
             positive_triples,
             slot,
             num_samples,
-            torch.tensor(unique_samples, dtype=torch.long),
+            unique_samples,
+            # torch.tensor(unique_samples, dtype=torch.long),
             torch.tensor(drop_index),
             repeat_indexes,
         )
