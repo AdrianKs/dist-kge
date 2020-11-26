@@ -500,13 +500,13 @@ class RelationWorkScheduler(WorkScheduler):
     ):
         self.partition_type = "relation_partition"
         super(RelationWorkScheduler, self).__init__(
-            config,
-            world_size,
-            master_ip,
-            master_port,
-            num_partitions,
-            num_clients,
-            dataset_folder,
+            config=config,
+            world_size=world_size,
+            master_ip=master_ip,
+            master_port=master_port,
+            num_partitions=num_partitions,
+            num_clients=num_clients,
+            dataset_folder=dataset_folder,
             dataset=dataset,
         )
         self.relations_to_partition = self._load_relations_to_partitions_file(
