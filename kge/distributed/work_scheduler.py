@@ -725,6 +725,27 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         return sorted_partitions
 
     @staticmethod
+    @numba.guvectorize([(numba.int64[:], numba.int64, numba.int64, numba.int64[:])], '(n),(),()->(n)')
+    def _get_partition(entity_ids, num_entities, num_partitions, res):
+        """
+        This method maps a (already mapped) entity id to it's entity_partition.
+        NOTE: you can not provide named parameters (kwargs) to this function
+        Args:
+            entity_ids: (mapped) entity ids np.array()
+            num_entities: dataset.num_entities()
+            num_partitions: int
+            res: DON'T PROVIDE THIS. This is the resulting np.array of this vectorized
+                function.
+
+        Returns: np.array of entity ids mapped to partition
+
+        """
+        for i in range(len(entity_ids)):
+            res[i] = math.floor(
+                entity_ids[i] * 1.0 / num_entities * 1.0 * num_partitions
+            )
+
+    @staticmethod
     def _repartition(data, num_entities, num_partitions):
         """
         This needs to be a static method so that we can pickle and run in background
@@ -742,7 +763,7 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         start = -time.time()
 
         def random_map_entities():
-            mapper = torch.randperm(num_entities).type(torch.int32)
+            mapper = torch.randperm(num_entities).type(torch.int64)
             mapped_data = deepcopy(
                 data
             )  # drop reference to dataset
@@ -750,33 +771,24 @@ class TwoDBlockWorkScheduler(WorkScheduler):
             mapped_data[:, 2] = mapper[mapped_data[:, 2].long()]
             return mapped_data, mapper
 
-        def get_partition(entity_id, num_entities, num_partitions):
-            partition = math.floor(
-                entity_id * 1.0 / num_entities * 1.0 * num_partitions
-            )
-            return partition
-
-        v_get_partition = np.vectorize(
-            get_partition, excluded=["num_entities", "num_partitions"]
-        )
         mapped_data, mapped_entities = random_map_entities()
         print("repartition s")
-        s_block = v_get_partition(
-            mapped_data[:, 0],
-            num_entities=num_entities,
-            num_partitions=num_partitions,
+        s_block = TwoDBlockWorkScheduler._get_partition(
+            mapped_data[:, 0].numpy(),
+            num_entities,
+            num_partitions,
         )
         print("repartition o")
-        o_block = v_get_partition(
-            mapped_data[:, 2],
-            num_entities=num_entities,
-            num_partitions=num_partitions,
+        o_block = TwoDBlockWorkScheduler._get_partition(
+            mapped_data[:, 2].numpy(),
+            num_entities,
+            num_partitions,
         )
         print("map entity ids to partition")
-        entity_to_partition = v_get_partition(
-            mapped_entities,
-            num_entities=num_entities,
-            num_partitions=num_partitions,
+        entity_to_partition = TwoDBlockWorkScheduler._get_partition(
+            mapped_entities.numpy(),
+            num_entities,
+            num_partitions,
         )
         triple_partition_assignment = np.stack([s_block, o_block], axis=1)
         partitions = TwoDBlockWorkScheduler._construct_partitions(triple_partition_assignment, num_partitions)
