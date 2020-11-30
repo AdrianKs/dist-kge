@@ -115,7 +115,7 @@ class LapseParameterClient(lapse.Worker, KgeParameterClient):
         # if type(keys) is torch.Tensor:
         #     keys = keys.numpy.astype(np.unint64)
         if pull_tensor is None:
-            pull_tensor = torch.zeros([len(keys), self.key_size], dtype=torch.float32)
+            pull_tensor = torch.empty([len(keys), self.key_size], dtype=torch.float32)
         return super(LapseParameterClient, self).pull(keys, pull_tensor, asynchronous)
 
     def push(self, keys, push_tensor: torch.Tensor, asynchronous=False):
