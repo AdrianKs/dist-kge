@@ -101,6 +101,29 @@ class DistributedLookupEmbedder(LookupEmbedder):
                 self._embeddings.weight.device
             )
 
+    @torch.no_grad()
+    def init_pretrained(self, pretrained_embedder: KgeEmbedder) -> None:
+        (
+            self_intersect_ind,
+            pretrained_intersect_ind,
+        ) = self._intersect_ids_with_pretrained_embedder(pretrained_embedder)
+        pretrained_embeddings = pretrained_embedder.embed(
+            torch.from_numpy(pretrained_intersect_ind)
+        )
+        self.parameter_client.push(
+            torch.from_numpy(self_intersect_ind) + self.lapse_offset,
+            torch.cat(
+                (
+                    pretrained_embeddings,
+                    torch.zeros(
+                        (len(pretrained_embeddings), self.optimizer_dim),
+                        dtype=pretrained_embeddings.dtype,
+                    ),
+                ),
+                dim=1,
+            ),
+        )
+
     def push_all(self):
         self.parameter_client.push(
             torch.arange(self.vocab_size) + self.lapse_offset,

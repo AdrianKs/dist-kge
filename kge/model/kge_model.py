@@ -11,6 +11,7 @@ import kge
 from kge import Config, Configurable, Dataset
 from kge.misc import filename_in_module
 from kge.util import load_checkpoint
+from kge.distributed.misc import MIN_RANK
 from typing import Any, Dict, List, Optional, Union, Tuple
 
 from typing import TYPE_CHECKING
@@ -439,7 +440,7 @@ class KgeModel(KgeBase):
                 complete_vocab_size=dataset.num_relations(),
             )
 
-            if not init_for_load_only and self.get_option("create_complete"):
+            if not init_for_load_only and parameter_client.rank == MIN_RANK:
                 # load pretrained embeddings
                 pretrained_entities_filename = ""
                 pretrained_relations_filename = ""
