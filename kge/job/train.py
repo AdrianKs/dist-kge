@@ -138,6 +138,8 @@ class TrainingJob(TrainingOrEvaluationJob):
             )
         else:
             self.model: KgeModel = model
+        # barrier to wait for loading of pretrained embeddings
+        self.parameter_client.barrier()
         self.loss = KgeLoss.create(config)
         self.abort_on_nan: bool = config.get("train.abort_on_nan")
         self.batch_size: int = config.get("train.batch_size")
@@ -186,7 +188,7 @@ class TrainingJob(TrainingOrEvaluationJob):
         # initialize the parameter server
         #  each worker takes as many entities as it can fit, inits and pushes
         #  init work is distributed by the work scheduler
-        if not init_for_load_only:
+        if not init_for_load_only and not self.config.get("lookup_embedder.pretrain.model_filename"):
             # only the first worker initializes the relations
             if self.parameter_client.rank == MIN_RANK:
                 self.model.get_p_embedder().push_all()
