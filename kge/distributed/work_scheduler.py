@@ -809,10 +809,51 @@ class TwoDBlockWorkScheduler(WorkScheduler):
 
     def _get_max_entities(self):
         num_entities_in_strata = [len(i) for i in self._entities_in_bucket.values()]
-        len_std = np.std(num_entities_in_strata)
+        len_std = np.std(num_entities_in_strata).item()
         if self.combine_mirror_blocks:
-            return max(num_entities_in_strata) * 2 + 5*round(len_std)
+            return self._get_mirrored_max_entities(
+                self.num_partitions,
+                list(self._entities_in_bucket.values())
+            ) + 5*(round(len_std))
         return max(num_entities_in_strata) + 5*round(len_std)
+
+    @staticmethod
+    def _get_mirrored_max_entities(num_partitions, strata_entities):
+        """
+        Calculate how many entities occur at most if we combine mirrored blocks
+        Combining blocks (0,1) and (1,0)
+        For diagonals combine (0,0),(1,1), then (2,2),(3,3)...
+        Count unique entities per combined block and return max
+        Args:
+            num_partitions: number of partitions
+            strata_entities: list of unique entities occurring per strata
+                assumes list is ordered
+
+        Returns: max number of entities occurring in a combined mirror block
+
+        """
+        max_value = 0
+        for i in range(num_partitions):
+            for j in range(i, num_partitions):
+                num_entities = 0
+                # combine mirrored blocks
+                if i % 2 == 0 and i == j:
+                    # diagonal blocks: combine with following diagonal
+                    concat_entities = np.concatenate(
+                        (strata_entities[i], strata_entities[i+num_partitions])
+                    )
+                    num_entities = len(np.unique(concat_entities))
+                elif i != j:
+                    # combine (0,1) with (1,0) and so on
+                    num_entities = len(np.unique(np.concatenate(
+                        (strata_entities[i*num_partitions+j],
+                         strata_entities[j*num_partitions+i]))
+                    ))
+                if num_entities > max_value:
+                    # this will lead to a race condition if we do this in parallel
+                    max_value = num_entities
+        print("max entities", max_value)
+        return max_value
 
     def _next_work(
         self, rank
