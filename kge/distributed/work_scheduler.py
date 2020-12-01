@@ -814,7 +814,7 @@ class TwoDBlockWorkScheduler(WorkScheduler):
             return self._get_mirrored_max_entities(
                 self.num_partitions,
                 list(self._entities_in_bucket.values())
-            ) + 5*(round(len_std))
+            ) + 2*(round(len_std))
         return max(num_entities_in_strata) + 5*round(len_std)
 
     @staticmethod
