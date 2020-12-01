@@ -142,13 +142,14 @@ class DistributedLookupEmbedder(LookupEmbedder):
         # todo: make sure previous set is finished by looking at the future
         self.set_indexes = self.pulled_ids + self.lapse_offset
         num_pulled = len(self.set_indexes)
+        # move tensors to cpu before cat to reduce gpu memory usage
         self.set_tensor = torch.cat(
             (
-                self._embeddings.weight[:num_pulled].detach(),
-                self.optimizer_values[:num_pulled],
+                self._embeddings.weight[:num_pulled].detach().cpu(),
+                self.optimizer_values[:num_pulled].cpu(),
             ),
             dim=1,
-        ).cpu()
+        )
         self.parameter_client.set(self.set_indexes, self.set_tensor, asynchronous=True)
 
     def _get_free_pull_tensor(self):
@@ -215,13 +216,13 @@ class DistributedLookupEmbedder(LookupEmbedder):
         self.parameter_client.pull(pull_indexes, pull_tensor)
         pull_time += time.time()
         cpu_gpu_time -= time.time()
-        pull_tensor = pull_tensor.to(device)
-        cpu_gpu_time += time.time()
+        # split tensor already before moving to gpu to reduce memory footprint on gpu
         pulled_embeddings, pulled_optim_values = torch.split(
             pull_tensor, [self.dim, self.optimizer_dim], dim=1
         )
-        self._embeddings.weight[:len_indexes] = pulled_embeddings
-        self.optimizer_values[:len_indexes] = pulled_optim_values
+        cpu_gpu_time += time.time()
+        self._embeddings.weight.data[:len_indexes].copy_(pulled_embeddings)
+        self.optimizer_values[:len_indexes].copy_(pulled_optim_values)
         return pull_time, cpu_gpu_time
 
     def localize(self, indexes: Tensor, make_unique=False):
