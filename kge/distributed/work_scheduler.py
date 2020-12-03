@@ -669,6 +669,9 @@ class TwoDBlockWorkScheduler(WorkScheduler):
             dataset=dataset,
             repartition_epoch=repartition_epoch,
         )
+        self.entities_needed_only = self.config.get(
+            "job.distributed.stratification.entities_needed_only"
+        )
         self.scheduling_order = scheduling_order
         self.num_max_entities = 0
         
@@ -684,7 +687,8 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         self._entities_in_bucket = self._get_entities_in_bucket(
             entities_to_partition,
             self.partitions,
-            self.dataset.split("train")
+            self.dataset.split("train"),
+            self.entities_needed_only
         )
         self.work_to_do: Dict[Tuple[int, int], torch.Tensor] = self._order_by_schedule(
             deepcopy(self.partitions)
@@ -762,7 +766,7 @@ class TwoDBlockWorkScheduler(WorkScheduler):
             )
 
     @staticmethod
-    def _repartition(data, num_entities, num_partitions):
+    def _repartition(data, num_entities, num_partitions, entities_needed_only=True):
         """
         This needs to be a static method so that we can pickle and run in background
         Args:
@@ -807,35 +811,59 @@ class TwoDBlockWorkScheduler(WorkScheduler):
             num_partitions,
         )
         triple_partition_assignment = np.stack([s_block, o_block], axis=1)
-        partitions = TwoDBlockWorkScheduler._construct_partitions(triple_partition_assignment, num_partitions)
-        entities_in_bucket = TwoDBlockWorkScheduler._get_entities_in_bucket(entity_to_partition, partitions, data)
+        partitions = TwoDBlockWorkScheduler._construct_partitions(
+            triple_partition_assignment,
+            num_partitions
+        )
+        entities_in_bucket = TwoDBlockWorkScheduler._get_entities_in_bucket(
+            entity_to_partition,
+            partitions,
+            data,
+            entities_needed_only
+        )
         print("repartitioning done")
         print("repartition_time", start+time.time())
         return partitions, entities_in_bucket
 
     @staticmethod
-    def _get_entities_in_bucket(entities_to_partition, partitions, data):
+    def _get_entities_in_bucket(entities_to_partition, partitions, data, entities_needed_only):
         entities_in_bucket = dict()
-        for strata, strata_data in partitions.items():
-            # np.unique is slightly faster than torch.unique
-            entities_in_bucket[strata] = torch.from_numpy(
-                np.unique(data[strata_data][:, [0, 2]])
-            ).long().contiguous()
+        if entities_needed_only:
+            for strata, strata_data in partitions.items():
+                # np.unique is slightly faster than torch.unique
+                entities_in_bucket[strata] = torch.from_numpy(
+                    np.unique(data[strata_data][:, [0, 2]])
+                ).long().contiguous()
+        else:
+            for partition in partitions:
+                entities_in_bucket[partition] = torch.from_numpy(
+                    np.where(
+                        np.ma.mask_or(
+                            (entities_to_partition == partition[0]),
+                            (entities_to_partition == partition[1]),
+                        )
+                    )[0]
+                ).contiguous()
         return entities_in_bucket
 
     def _get_max_entities(self):
         if self.num_max_entities > 0:
             # store the result so that we don't have to recompute for every trainer
             return self.num_max_entities
-        num_entities_in_strata = [len(i) for i in self._entities_in_bucket.values()]
-        len_std = np.std(num_entities_in_strata).item()
-        if self.combine_mirror_blocks:
-            self.num_max_entities = self._get_mirrored_max_entities(
-                self.num_partitions,
-                list(self._entities_in_bucket.values())
-            ) + 2*(round(len_std))
+        if self.entities_needed_only:
+            num_entities_in_strata = [len(i) for i in self._entities_in_bucket.values()]
+            len_std = np.std(num_entities_in_strata).item()
+            if self.combine_mirror_blocks:
+                self.num_max_entities = self._get_mirrored_max_entities(
+                    self.num_partitions,
+                    list(self._entities_in_bucket.values())
+                ) + 2*(round(len_std))
+            else:
+                self.num_max_entities = max(num_entities_in_strata) + 5*round(len_std)
         else:
-            self.num_max_entities = max(num_entities_in_strata) + 5*round(len_std)
+            self.num_max_entities = max(
+                [len(i) for i in self._entities_in_bucket.values()]
+            )
         return self.num_max_entities
 
     @staticmethod
@@ -910,10 +938,11 @@ class TwoDBlockWorkScheduler(WorkScheduler):
                         )
                     else:
                         mirror_strata = (strata[1], strata[0])
-                        entities_in_strata = torch.unique(torch.cat(
-                            (entities_in_strata,
-                             self._entities_in_bucket.get(mirror_strata))
-                        ))
+                        if self.entities_needed_only:
+                            entities_in_strata = torch.unique(torch.cat(
+                                (entities_in_strata,
+                                 self._entities_in_bucket.get(mirror_strata))
+                            ))
                     strata_data = torch.cat(
                         (strata_data, self.partitions[mirror_strata])
                     )
@@ -996,7 +1025,8 @@ class TwoDBlockWorkScheduler(WorkScheduler):
             self._repartition,
             self.dataset.split("train"),
             self.dataset.num_entities(),
-            self.num_partitions
+            self.num_partitions,
+            self.entities_needed_only
         )
 
     def _refill_work(self):

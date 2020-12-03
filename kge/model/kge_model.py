@@ -415,6 +415,7 @@ class KgeModel(KgeBase):
                 embedding_layer_size =max_partition_entities
             else:
                 embedding_layer_size = self._calc_embedding_layer_size(config, dataset)
+            config.log(f"creating entity_embedder with {embedding_layer_size} keys")
             self._entity_embedder = KgeEmbedder.create(
                 config,
                 dataset,

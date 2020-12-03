@@ -61,6 +61,11 @@ job:
     #  e.g.: (0,0) and (1,1)
     combine_mirror_blocks: True  # combine mirrored blocks in strati
     load_batch: True  # load all embeddings once at beginning of the batch
+    stratification:
+      # not all the entities in a strata are used for the positives
+      # this option allows to load only needed entities and only sample negatives
+      # from this needed subset
+      entities_needed_only: True
 
 # The seeds of the PRNGs can be set manually for (increased) reproducibility.
 # Use -1 to disable explicit seeding.
