@@ -53,7 +53,6 @@ class WorkScheduler(mp.get_context("spawn").Process):
         self.master_ip = master_ip
         self.master_port = master_port
         self.num_partitions = num_partitions
-        self.partitions = self._load_partitions(dataset_folder, num_partitions)
         self.done_workers = []
         self.asking_workers = []
         self.work_to_do = deque(list(range(num_partitions)))
@@ -63,6 +62,9 @@ class WorkScheduler(mp.get_context("spawn").Process):
         if self.repartition_epoch:
             self.repartition_future = None
             self.repartition_worker_pool = None
+            
+    def _init_in_started_process(self):
+        self.partitions = self._load_partitions(self.dataset.folder, self.num_partitions)
 
     def _config_check(self, config):
         if config.get("job.distributed.entity_sync_level") == "partition" and not config.get("negative_sampling.sampling_type") == "pooled":
@@ -143,6 +145,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
             raise NotImplementedError()
 
     def run(self):
+        self._init_in_started_process()
         set_seeds(config=self.config)
         os.environ["MASTER_ADDR"] = self.master_ip
         os.environ["MASTER_PORT"] = self.master_port
@@ -509,8 +512,11 @@ class RelationWorkScheduler(WorkScheduler):
             dataset_folder=dataset_folder,
             dataset=dataset,
         )
+
+    def _init_in_started_process(self):
+        super(RelationWorkScheduler, self)._init_in_started_process()
         self.relations_to_partition = self._load_relations_to_partitions_file(
-            self.partition_type, dataset_folder, num_partitions
+            self.partition_type, self.dataset.folder, self.num_partitions
         )
         self.relations_to_partition = self._get_relations_in_partition()
 
@@ -563,17 +569,20 @@ class MetisWorkScheduler(WorkScheduler):
     ):
         self.partition_type = "metis_partition"
         super(MetisWorkScheduler, self).__init__(
-            config,
-            world_size,
-            master_ip,
-            master_port,
-            num_partitions,
-            num_clients,
-            dataset_folder,
+            config=config,
+            world_size=world_size,
+            master_ip=master_ip,
+            master_port=master_port,
+            num_partitions=num_partitions,
+            num_clients=num_clients,
+            dataset_folder=dataset_folder,
             dataset=dataset,
         )
+
+    def _init_in_started_process(self):
+        super(MetisWorkScheduler, self)._init_in_started_process()
         self.entities_to_partition = self._load_entities_to_partitions_file(
-            self.partition_type, dataset_folder, num_partitions
+            self.partition_type, self.dataset.folder, self.num_partitions
         )
         self.entities_to_partition = self._get_entities_in_partition()
 
@@ -660,16 +669,23 @@ class TwoDBlockWorkScheduler(WorkScheduler):
             dataset=dataset,
             repartition_epoch=repartition_epoch,
         )
+        self.scheduling_order = scheduling_order
+        self.num_max_entities = 0
+        
+    def _init_in_started_process(self):
+        super(TwoDBlockWorkScheduler, self)._init_in_started_process()
         # dictionary: key=worker_rank, value=block
         self.running_blocks: Dict[int, Tuple[int, int]] = {}
         # self.work_to_do = deepcopy(self.partitions)
-        self.dataset = dataset
         self._initialized_entity_blocks = set()
         entities_to_partition = self._load_entities_to_partitions_file(
-            self.partition_type, dataset_folder, num_partitions
+            self.partition_type, self.dataset.folder, self.num_partitions
         )
-        self._entities_in_bucket = self._get_entities_in_bucket(entities_to_partition, self.partitions, self.dataset.split("train"))
-        self.scheduling_order = scheduling_order
+        self._entities_in_bucket = self._get_entities_in_bucket(
+            entities_to_partition,
+            self.partitions,
+            self.dataset.split("train")
+        )
         self.work_to_do: Dict[Tuple[int, int], torch.Tensor] = self._order_by_schedule(
             deepcopy(self.partitions)
         )
@@ -808,14 +824,19 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         return entities_in_bucket
 
     def _get_max_entities(self):
+        if self.num_max_entities > 0:
+            # store the result so that we don't have to recompute for every trainer
+            return self.num_max_entities
         num_entities_in_strata = [len(i) for i in self._entities_in_bucket.values()]
         len_std = np.std(num_entities_in_strata).item()
         if self.combine_mirror_blocks:
-            return self._get_mirrored_max_entities(
+            self.num_max_entities = self._get_mirrored_max_entities(
                 self.num_partitions,
                 list(self._entities_in_bucket.values())
             ) + 2*(round(len_std))
-        return max(num_entities_in_strata) + 5*round(len_std)
+        else:
+            self.num_max_entities = max(num_entities_in_strata) + 5*round(len_std)
+        return self.num_max_entities
 
     @staticmethod
     def _get_mirrored_max_entities(num_partitions, strata_entities):
