@@ -457,21 +457,10 @@ entity_ranking:
   filter_with_test: True
 
   # number of entities to rank against
+  # entities will be drawn uniform for every eval-batch and used for both
+  # directions, s and o.
+  # default (-1): rank against all entities
   rank_against: -1
-  sampler:
-    shared: True
-    shared_type: naive
-    with_replacement: False
-    sampling_type: uniform
-    num_samples:
-      s: -1
-      p: 0
-      o: -1
-    filtering:
-      s: False
-      p: False
-      o: False
-    implementation: batch
 
   # How to handle cases with ties between the correct answer and other answers, e.g.,
   #  Query: (s, p, ?).
