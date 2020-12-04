@@ -300,6 +300,8 @@ negative_sampling:
   #              of entities/relations
   # - frequency: samples entities/relations for corruption based on their relative
   #              frequency in the corresponding slot in the training data
+  # - batch    : samples entities/relations for corruption from the corresponding slot
+  #              inside the batch
   sampling_type: uniform
 
   # Options for sampling type frequency (negative_sampling.sampling_type=="frequency")
@@ -307,6 +309,12 @@ negative_sampling:
     # Smoothing constant to add to frequencies in training data (disable with
     # 0). Corresponds to a symmetric Dirichlet prior.
     smoothing: 1
+
+  # Options for sampling type batch (negative_sampling.sampling_type=="batch")
+  batch:
+    # percentage of triples to sample uniformly from the entire set instead from the
+    # batch
+    uniform_percentage: 0.0
 
   # Number of times each slot of each positive triple is corrupted by the
   # sampler to obtain negative triples.

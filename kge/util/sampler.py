@@ -73,6 +73,8 @@ class KgeSampler(Configurable):
             return KgeUniformSampler(config, configuration_key, dataset)
         elif sampling_type == "frequency":
             return KgeFrequencySampler(config, configuration_key, dataset)
+        elif sampling_type == "batch":
+            return KgeBatchSampler(config, configuration_key, dataset)
         else:
             # perhaps TODO: try class with specified name -> extensibility
             raise ValueError(configuration_key + ".sampling_type")
@@ -791,3 +793,81 @@ class KgeFrequencySampler(KgeSampler):
             ).view(positive_triples.size(0), num_samples)
 
         return result
+
+
+class KgeBatchSampler(KgeUniformSampler):
+    def __init__(self, config, configuration_key, dataset):
+        super().__init__(config, configuration_key, dataset)
+        self.uniform_percentage = self.get_option("batch.uniform_percentage")
+        if self.get_option("shared"):
+            if not self.get_option("shared_type") == "naive":
+                raise ValueError("only shared_type naive supported with batch sampling")
+            if not self.get_option("with_replacement"):
+                raise ValueError(
+                    "without replacement sampling not supported with " "batch sampling"
+                )
+
+    def _sample(self, positive_triples: torch.Tensor, slot: int, num_samples: int):
+        num_uniform_samples = int(num_samples * self.uniform_percentage)
+        num_batch_samples = num_samples - num_uniform_samples
+        uniform_samples = super(KgeBatchSampler, self)._sample(
+            positive_triples, slot, num_uniform_samples
+        )
+        batch_samples = positive_triples[:, slot][
+            torch.randint(
+                len(positive_triples),
+                [positive_triples, num_batch_samples],
+                dtype=torch.long,
+            )
+        ]
+        return torch.cat((uniform_samples, batch_samples), dim=1)
+
+    @torch.no_grad()
+    def _sample_shared(
+        self, positive_triples: torch.Tensor, slot: int, num_samples: int
+    ):
+        num_uniform_samples = int(num_samples * self.uniform_percentage)
+        num_batch_samples = num_samples - num_uniform_samples
+
+        uniform_samples = torch.randint(
+            self.vocabulary_size[slot], (num_uniform_samples,), dtype=torch.long
+        )
+        batch_samples = positive_triples[:, slot][
+            torch.randint(len(positive_triples), (num_batch_samples,), dtype=torch.long)
+        ]
+
+        unique_samples, counts = torch.unique(
+            torch.cat((uniform_samples, batch_samples)), return_counts=True
+        )
+        repeat_indexes = torch.from_numpy(
+            self._create_repeat_index_from_counts(
+                unique_samples.numpy(), counts.numpy()
+            )
+        ).long()
+
+        # it seems to be faster to recompute the scores than to calculate
+        # repeat indexes an repeat the scores...
+        # unique_samples = torch.cat((uniform_samples, batch_samples))
+        # repeat_indexes = torch.empty(0)
+
+        return NaiveSharedNegativeSample(
+            self.config,
+            self.configuration_key,
+            positive_triples,
+            slot,
+            num_samples,
+            unique_samples,
+            repeat_indexes,
+        )
+
+    @staticmethod
+    @numba.njit
+    def _create_repeat_index_from_counts(unique_samples, counts):
+        len_repeat_index = np.sum(counts-1)
+        repeat_index = np.zeros((len_repeat_index,))
+        repeat_position = 0
+        for i in range(len(unique_samples)):
+            for j in range(counts[i]-1):
+                repeat_index[repeat_position] = i
+                repeat_position += 1
+        return repeat_index
