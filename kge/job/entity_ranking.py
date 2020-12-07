@@ -8,6 +8,7 @@ from kge.job import EvaluationJob, Job
 from kge import Config, Dataset
 from kge.util import KgeSampler
 from collections import defaultdict
+from typing import Union
 
 
 class EntityRankingJob(EvaluationJob):
@@ -45,20 +46,24 @@ class EntityRankingJob(EvaluationJob):
         if config.get("entity_ranking.metrics_per.argument_frequency"):
             self.hist_hooks.append(hist_per_frequency_percentile)
         self.rank_against = self.config.get("entity_ranking.rank_against")
-        self.rank_against_suffix = ""
+        self.metric_name_suffix = ""
         if self.rank_against > 0:
-            self.rank_against_suffix = f"_rank_against_{str(self.rank_against)}"
+            self.metric_name_suffix += f"_against_{str(self.rank_against)}"
+            self.config.set(
+                "valid.metric",
+                self.config.get("valid.metric") + self.metric_name_suffix,
+            )
+            self.parent_job.config.set(
+                "valid.metric",
+                parent_job.config.get("valid.metric") + self.metric_name_suffix
+            )
+            self.sampler = self._create_rank_against_k_sampler()
             if self.config.get("entity_ranking.chunk_size") > 0:
+                self.config.set("entity_ranking.chunk_size", -1)
                 self.config.log(
                     "Chunking is not supported in combination with rank "
                     "against. Setting chunk_size to -1"
                 )
-                self.config.set("entity_ranking.chunk_size", -1)
-                self.config.set(
-                    "valid.metric",
-                    self.config.get("valid.metric") + self.rank_against_suffix,
-                )
-            self.sampler = self._create_rank_against_k_sampler()
 
         if self.__class__ == EntityRankingJob:
             for f in Job.job_created_hooks:
@@ -303,13 +308,12 @@ class EntityRankingJob(EvaluationJob):
                     else:
                         # densify the needed part of the sparse labels tensor
                         if self.rank_against > 0:
-                            labels_chunk = self._densify_labels_of_k(
-                                labels_for_ranking[ranking], negatives
-                            )
+                            targets = negatives
                         else:
-                            labels_chunk = self._densify_chunk_of_labels(
-                                labels_for_ranking[ranking], chunk_start, chunk_end
-                            )
+                            targets = slice(chunk_start, chunk_end)
+                        labels_chunk = self._densify_labels_of_targets(
+                            labels_for_ranking[ranking], targets
+                        )
 
                         # remove current example from labels
                         labels_chunk[o_in_chunk_mask, o_in_chunk] = 0
@@ -463,31 +467,31 @@ class EntityRankingJob(EvaluationJob):
                     + "{}  batch:{: "
                     + str(1 + int(math.ceil(math.log10(len(self.loader)))))
                     + "d}/{}, mrr"
-                    + self.rank_against_suffix
+                    + self.metric_name_suffix
                     + " (filt.): {:4.3f} ({:4.3f}), "
                     + "hits@1"
-                    + self.rank_against_suffix
+                    + self.metric_name_suffix
                     + ": {:4.3f} ({:4.3f}), "
                     + "hits@{}"
-                    + self.rank_against_suffix
+                    + self.metric_name_suffix
                     + ": {:4.3f} ({:4.3f})"
                     + "\033[K"  # clear to right
                 ).format(
                     self.config.log_prefix,
                     batch_number,
                     len(self.loader) - 1,
-                    metrics["mean_reciprocal_rank" + self.rank_against_suffix],
-                    metrics["mean_reciprocal_rank_filtered" + self.rank_against_suffix],
-                    metrics["hits_at_1" + self.rank_against_suffix],
-                    metrics["hits_at_1_filtered" + self.rank_against_suffix],
+                    metrics["mean_reciprocal_rank" + self.metric_name_suffix],
+                    metrics["mean_reciprocal_rank_filtered" + self.metric_name_suffix],
+                    metrics["hits_at_1" + self.metric_name_suffix],
+                    metrics["hits_at_1_filtered" + self.metric_name_suffix],
                     self.hits_at_k_s[-1],
                     metrics[
                         "hits_at_{}".format(self.hits_at_k_s[-1])
-                        + self.rank_against_suffix
+                        + self.metric_name_suffix
                     ],
                     metrics[
                         "hits_at_{}_filtered".format(self.hits_at_k_s[-1])
-                        + self.rank_against_suffix
+                        + self.metric_name_suffix
                     ],
                 ),
                 end="",
@@ -528,83 +532,50 @@ class EntityRankingJob(EvaluationJob):
             dict(epoch_time=epoch_time, event="eval_completed", **metrics,)
         )
 
-    def _densify_chunk_of_labels(
-        self, labels: torch.Tensor, chunk_start: int, chunk_end: int
+    def _densify_labels_of_targets(
+        self, labels: torch.Tensor, targets: Union[torch.Tensor, slice]
     ) -> torch.Tensor:
-        """Creates a dense chunk of a sparse label tensor.
-
-        A chunk here is a range of entity values with 'chunk_start' being the lower
-        bound and 'chunk_end' the upper bound.
-
-        The resulting tensor contains the labels for the sp chunk and the po chunk.
-
-        :param labels: sparse tensor containing the labels corresponding to the batch
-        for sp and po
-
-        :param chunk_start: int start index of the chunk
-
-        :param chunk_end: int end index of the chunk
-
-        :return: batch_size x chunk_size*2 dense tensor with labels for the sp chunk and
-        the po chunk.
-
-        """
-        num_entities = self.dataset.num_entities()
-        indices = labels._indices()
-        mask_sp = (chunk_start <= indices[1, :]) & (indices[1, :] < chunk_end)
-        mask_po = ((chunk_start + num_entities) <= indices[1, :]) & (
-            indices[1, :] < (chunk_end + num_entities)
-        )
-        indices_sp_chunk = indices[:, mask_sp]
-        indices_sp_chunk[1, :] = indices_sp_chunk[1, :] - chunk_start
-        indices_po_chunk = indices[:, mask_po]
-        indices_po_chunk[1, :] = (
-            indices_po_chunk[1, :] - num_entities - chunk_start * 2 + chunk_end
-        )
-        indices_chunk = torch.cat((indices_sp_chunk, indices_po_chunk), dim=1)
-        dense_labels = torch.sparse.LongTensor(
-            indices_chunk,
-            labels._values()[mask_sp | mask_po],
-            torch.Size([labels.size()[0], (chunk_end - chunk_start) * 2]),
-        ).to_dense()
-        return dense_labels
-
-    def _densify_labels_of_k(
-        self, labels: torch.Tensor, negatives: torch.Tensor
-    ) -> torch.Tensor:
-        """Creates a dense label tensor needed for rank against k from a sparse label
+        """Creates a dense label tensor needed for target entities from a sparse label
         tensor.
 
         The resulting tensor contains the labels for the sp and po scores for the
-        negatives.
+        target entities.
 
         :param labels: sparse tensor containing the labels corresponding to the batch
         for sp and po
 
-        :param negatives: entities to score against
+        :param targets: entities to score against
 
-        :return: batch_size x len(negatives)*2 dense tensor with labels for the sp and
+        :return: batch_size x len(targets)*2 dense tensor with labels for the sp and
         po.
 
         """
         num_entities = self.dataset.num_entities()
         indices = labels._indices()
-        # simulate np.isin in torch
-        mask_sp = (indices[1].view(len(indices[1]), 1) == negatives).any(-1)
-        mask_po = (indices[1].view(len(indices[1]), 1) == negatives + num_entities).any(
-            -1
-        )
-        indices_mapper = torch.arange(num_entities, dtype=torch.long)
-        indices_mapper[negatives] = torch.arange(len(negatives), dtype=torch.long)
+        if type(targets) == slice:
+            num_targets = targets.stop - targets.start
+            mask_sp = (targets.start <= indices[1, :]) & (indices[1, :] < targets.stop)
+            mask_po = ((targets.start + num_entities) <= indices[1, :]) & (
+                indices[1, :] < (targets.stop + num_entities)
+            )
+        else:
+            num_targets = len(targets)
+            # simulate np.isin in torch
+            mask_sp = (indices[1].view(len(indices[1]), 1) == targets).any(-1)
+            mask_po = (
+                indices[1].view(len(indices[1]), 1) == targets + num_entities
+            ).any(-1)
+        indices_mapper = torch.empty(num_entities, dtype=torch.long)
+        indices_mapper[targets] = torch.arange(num_targets, dtype=torch.long)
         indices_sp_chunk = indices[:, mask_sp]
         indices_sp_chunk[1, :] = indices_mapper[indices_sp_chunk[1, :]]
         indices_po_chunk = indices[:, mask_po]
         indices_po_chunk[1, :] = indices_mapper[indices_po_chunk[1, :] - num_entities]
-        indices_chunk = torch.cat((indices_sp_chunk, indices_po_chunk), dim=1)
+        indices_sp_po = torch.cat((indices_sp_chunk, indices_po_chunk), dim=1)
         dense_labels = torch.sparse.LongTensor(
-            indices_chunk,
+            indices_sp_po,
             labels._values()[mask_sp | mask_po],
-            torch.Size([labels.size()[0], len(negatives) * 2]),
+            torch.Size([labels.size()[0], num_targets * 2]),
         ).to_dense()
         return dense_labels
 
@@ -637,8 +608,6 @@ num_ties for each true score.
         """
         chunk_size = scores_sp.shape[1]
         if labels is not None:
-            if self.rank_against > 0:
-                chunk_size = int(labels.shape[1] / 2)
             # remove current example from labels
             labels_sp = labels[:, :chunk_size]
             labels_po = labels[:, chunk_size:]
@@ -697,7 +666,7 @@ num_ties for each true score.
     def _compute_metrics(self, rank_hist, suffix=""):
         """Computes desired matrix from rank histogram"""
         if self.rank_against > 0:
-            suffix += self.rank_against_suffix
+            suffix += self.metric_name_suffix
         metrics = {}
         n = torch.sum(rank_hist).item()
 

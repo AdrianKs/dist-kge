@@ -457,9 +457,10 @@ entity_ranking:
   filter_with_test: True
 
   # number of entities to rank against
-  # entities will be drawn uniform for every eval-batch and used for both
-  # directions, s and o.
+  # entities will be drawn uniformly without replacement for every eval-batch and used
+  # for both directions, s and o.
   # default (-1): rank against all entities
+  # if >-1 metric names will change to {metric_name}_against_{rank_against}
   rank_against: -1
 
   # How to handle cases with ties between the correct answer and other answers, e.g.,
