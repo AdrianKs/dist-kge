@@ -456,12 +456,11 @@ entity_ranking:
   # mean_reciprocal_rank_filtered_with_test.
   filter_with_test: True
 
-  # number of entities to rank against
-  # entities will be drawn uniformly without replacement for every eval-batch and used
-  # for both directions, s and o.
-  # default (-1): rank against all entities
-  # if >-1 metric names will change to {metric_name}_against_{rank_against}
-  rank_against: -1
+  # If set, use a sample of entities instead of ranking against all entities.
+  # In more detail, for each batch, this many ranking targets will be sampled uniformly
+  # and without replacement from the set of entities. Since this changes all metrics,
+  # their name is changed to {metric_name}_against_{rank_against}.
+  rank_against: -1  # default: off (=rank against all entities)
 
   # How to handle cases with ties between the correct answer and other answers, e.g.,
   #  Query: (s, p, ?).
