@@ -848,13 +848,14 @@ class TrainingJob(TrainingOrEvaluationJob):
                 ps_set_time -= time.time()
                 self.model.get_s_embedder().set_embeddings()
                 ps_set_time += time.time()
-                self.model.get_s_embedder().global_to_local_mapper[:] = -1
+                # this is expensive and unnecessary
+                # self.model.get_s_embedder().global_to_local_mapper[:] = -1
                 self.model.get_s_embedder().push_back()
             if self.relation_sync_level == "partition":
                 ps_set_time -= time.time()
                 self.model.get_p_embedder().set_embeddings()
                 ps_set_time += time.time()
-                self.model.get_p_embedder().global_to_local_mapper[:] = -1
+                # self.model.get_p_embedder().global_to_local_mapper[:] = -1
                 self.model.get_p_embedder().push_back()
             self.work_scheduler_client.work_done()
 
