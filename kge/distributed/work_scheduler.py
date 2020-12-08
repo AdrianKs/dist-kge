@@ -1050,21 +1050,43 @@ class TwoDBlockWorkScheduler(WorkScheduler):
     def _construct_partitions(partition_assignment, num_partitions):
         partition_indexes, partition_data = TwoDBlockWorkScheduler._numba_construct_partitions(np.ascontiguousarray(partition_assignment), num_partitions)
         partition_indexes = [(i, j) for i in range(num_partitions) for j in range(num_partitions)]
-        partition_data = [torch.from_numpy(data).contiguous() for data in partition_data]
+        partition_data = [torch.from_numpy(data).long().contiguous() for data in partition_data]
         partitions = dict(zip(partition_indexes, partition_data))
         return partitions
 
     @staticmethod
-    @numba.njit(parallel=True)
+    @numba.njit
     def _numba_construct_partitions(partition_assignment, num_partitions):
-        partition_indexes = np.array([(i, j) for i in range(num_partitions) for j in range(num_partitions)])
-        # create an array of the needed length to avoid race conditions
-        partition_data = [np.array([1])]*len(partition_indexes)
-        for i in numba.prange(len(partition_indexes)):
-            partition_data[i] = np.where(np.logical_and(
-                    partition_assignment[:, 0] == partition_indexes[i][0],
-                    partition_assignment[:, 1] == partition_indexes[i][1]
-                ))[0]
+        partition_indexes = [
+            (i, j) for i in range(num_partitions) for j in range(num_partitions)
+        ]
+        partition_id_lookup: Dict[Tuple[int, int], int] = dict()
+        partition_lengths: Dict[int, int] = dict()
+        partition_data = []
+        for i in range(len(partition_indexes)):
+            partition = partition_indexes[i]
+            partition_id_lookup[partition] = i
+            partition_lengths[i] = 0
+            partition_data.append(
+                # for some reason np.empty does not work but np.arange does
+                np.arange(int(
+                    len(partition_assignment)/((num_partitions*num_partitions)/2)
+                ))
+            )
+
+        # iterate over the partition assignments and assign each triple-id to its
+        #  corresponding partition
+        for i in range(len(partition_assignment)):
+            pa = partition_assignment[i]
+            pa_tuple = (pa[0], pa[1])
+            partition_id = partition_id_lookup[pa_tuple]
+            current_partition_size = partition_lengths[partition_id]
+            partition_data[partition_id][current_partition_size] = i
+            partition_lengths[partition_id] += 1
+
+        # now get correct sizes of partitions
+        for i in range(len(partition_data)):
+            partition_data[i] = partition_data[i][:partition_lengths[i]]
         return partition_indexes, partition_data
 
 
