@@ -1068,10 +1068,10 @@ class TwoDBlockWorkScheduler(WorkScheduler):
             partition_id_lookup[partition] = i
             partition_lengths[i] = 0
             partition_data.append(
-                # for some reason np.empty does not work but np.arange does
-                np.arange(int(
-                    len(partition_assignment)/((num_partitions*num_partitions)/2)
-                ))
+                np.empty(
+                    int(len(partition_assignment)/((num_partitions*num_partitions)/2)),
+                    dtype=np.int64
+                )
             )
 
         # iterate over the partition assignments and assign each triple-id to its
