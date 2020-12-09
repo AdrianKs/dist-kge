@@ -3,6 +3,7 @@ import time
 
 import torch
 import numpy as np
+import numba
 import kge.job
 from kge.job import EvaluationJob, Job
 from kge import Config, Dataset
@@ -554,8 +555,7 @@ class EntityRankingJob(EvaluationJob):
             )
         else:
             num_targets = len(targets)
-            # simulate np.isin in torch
-            # this is a very expensive and memory heavy operation
+            cpu_targets = targets.cpu()
             mask_sp = torch.zeros(len(indices[1]), dtype=torch.bool, device=self.device)
             mask_po = torch.zeros(len(indices[1]), dtype=torch.bool, device=self.device)
             sp_indices_mask = indices[1] < num_entities
@@ -565,13 +565,17 @@ class EntityRankingJob(EvaluationJob):
             unique_sp_indices, unique_sp_inverse = torch.unique(
                 indices[1][sp_indices_mask], return_inverse=True
             )
-            unique_sp_indices_in_mask = self._chunked_isin(unique_sp_indices, targets)
             unique_po_indices, unique_po_inverse = torch.unique(
                 indices[1][po_indices_mask], return_inverse=True
             )
-            unique_po_indices_in_mask = self._chunked_isin(
-                unique_po_indices, targets + num_entities
-            )
+            cpu_unique_sp_indices = unique_sp_indices.cpu()
+            cpu_unique_po_indices = unique_po_indices.cpu()
+            unique_sp_indices_in_mask = torch.from_numpy(
+                np.isin(unique_sp_indices.cpu(), targets.cpu())
+            ).to(self.device)
+            unique_po_indices_in_mask = torch.from_numpy(
+                np.isin(unique_po_indices.cpu(), targets.cpu())
+            ).to(self.device)
             # mark all unique indices that are irrelevant to filter them out
             unique_sp_indices[~unique_sp_indices_in_mask] = -1
             unique_po_indices[~unique_po_indices_in_mask] = -1
@@ -594,26 +598,6 @@ class EntityRankingJob(EvaluationJob):
             torch.Size([labels.size()[0], num_targets * 2]),
         ).to_dense()
         return dense_labels
-
-    def _chunked_isin(self, tensor_a, tensor_b, chunk_size=None):
-        """
-        This method performs a computation similar to numpy isin.
-        This can be run on GPU. To reduce the memory footprint, the computation
-        is chunked.
-
-        :param tensor_a: tensor, which will be chunked
-        :param tensor_b: tensor to compare against
-        :param chunk_size: size of chunks for tensor a; default chunk_size is
-                           self.batch_size
-        :return: mask of size (len(tensor_a)
-        """
-        if chunk_size is None:
-            chunk_size = self.batch_size
-        mask = []
-        for chunk_a in torch.split(tensor_a, chunk_size):
-            mask.append((chunk_a.view(-1, 1) == tensor_b).any(-1))
-        mask = torch.cat(mask)
-        return mask
 
     def _filter_and_rank(
         self,
