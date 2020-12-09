@@ -207,8 +207,6 @@ class EntityRankingJob(EvaluationJob):
             # TODO add timing information
             batch = batch_coords[0].to(self.device)
             if self.rank_against > 0:
-                # keeping a cpu copy since we are using numpy later on
-                negatives_cpu = batch_coords[3]
                 negatives = batch_coords[3].to(self.device)
             s, p, o = batch[:, 0], batch[:, 1], batch[:, 2]
             label_coords = batch_coords[1].to(self.device)
@@ -555,13 +553,11 @@ class EntityRankingJob(EvaluationJob):
             unique_po_indices, unique_po_inverse = torch.unique(
                 indices[1][po_indices_mask], return_inverse=True
             )
-            cpu_unique_sp_indices = unique_sp_indices.cpu()
-            cpu_unique_po_indices = unique_po_indices.cpu()
             unique_sp_indices_in_mask = torch.from_numpy(
-                np.isin(unique_sp_indices.cpu(), targets.cpu())
+                np.isin(unique_sp_indices.cpu(), cpu_targets)
             ).to(self.device)
             unique_po_indices_in_mask = torch.from_numpy(
-                np.isin(unique_po_indices.cpu(), targets.cpu())
+                np.isin(unique_po_indices.cpu(), cpu_targets)
             ).to(self.device)
             # mark all unique indices that are irrelevant to filter them out
             unique_sp_indices[~unique_sp_indices_in_mask] = -1
