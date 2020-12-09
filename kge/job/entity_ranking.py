@@ -284,8 +284,8 @@ class EntityRankingJob(EvaluationJob):
 
                 # compute scores against targets
                 scores = self.model.score_sp_po(s, p, o, targets)
-                scores_sp = scores[:, : len_targets]
-                scores_po = scores[:, len_targets :]
+                scores_sp = scores[:, :len_targets]
+                scores_po = scores[:, len_targets:]
 
                 # replace the precomputed true_scores with the ones occurring in the
                 # scores matrix to avoid floating point issues
@@ -560,8 +560,10 @@ class EntityRankingJob(EvaluationJob):
             #  keep labels on cpu instead and use np.isin
             mask_sp = (indices[1].view(-1, 1) == targets).any(-1)
             mask_po = (indices[1].view(-1, 1) == targets + num_entities).any(-1)
-        indices_mapper = torch.empty(num_entities, dtype=torch.long)
-        indices_mapper[targets] = torch.arange(num_targets, dtype=torch.long)
+        indices_mapper = torch.empty(num_entities, dtype=torch.long, device=self.device)
+        indices_mapper[targets] = torch.arange(
+            num_targets, dtype=torch.long, device=self.device
+        )
         indices_sp_target = indices[:, mask_sp]
         indices_sp_target[1, :] = indices_mapper[indices_sp_target[1, :]]
         indices_po_target = indices[:, mask_po]
