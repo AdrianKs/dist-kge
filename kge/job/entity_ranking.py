@@ -50,14 +50,6 @@ class EntityRankingJob(EvaluationJob):
         self.metric_name_suffix = ""
         if self.rank_against > 0:
             self.metric_name_suffix += f"_against_{str(self.rank_against)}"
-            self.config.set(
-                "valid.metric",
-                self.config.get("valid.metric") + self.metric_name_suffix,
-            )
-            self.parent_job.config.set(
-                "valid.metric",
-                parent_job.config.get("valid.metric") + self.metric_name_suffix,
-            )
             self.sampler = self._create_rank_against_k_sampler()
             if self.config.get("entity_ranking.chunk_size") > 0:
                 self.config.set("entity_ranking.chunk_size", -1)
