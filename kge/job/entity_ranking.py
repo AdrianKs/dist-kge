@@ -461,20 +461,15 @@ class EntityRankingJob(EvaluationJob):
                     "\r"  # go back
                     + "{}  batch:{: "
                     + str(1 + int(math.ceil(math.log10(len(self.loader)))))
-                    + "d}/{}, mrr"
-                    + self.metric_name_suffix
-                    + " (filt.): {:4.3f} ({:4.3f}), "
-                    + "hits@1"
-                    + self.metric_name_suffix
-                    + ": {:4.3f} ({:4.3f}), "
-                    + "hits@{}"
-                    + self.metric_name_suffix
-                    + ": {:4.3f} ({:4.3f})"
+                    + "d}/{}, ({}) mrr (filt.): {:4.3f} ({:4.3f}), "
+                    + "hits@1: {:4.3f} ({:4.3f}), "
+                    + "hits@{}: {:4.3f} ({:4.3f})"
                     + "\033[K"  # clear to right
                 ).format(
                     self.config.log_prefix,
                     batch_number,
                     len(self.loader) - 1,
+                    self.metric_name_suffix,
                     metrics["mean_reciprocal_rank" + self.metric_name_suffix],
                     metrics["mean_reciprocal_rank_filtered" + self.metric_name_suffix],
                     metrics["hits_at_1" + self.metric_name_suffix],
