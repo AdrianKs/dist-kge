@@ -2,10 +2,14 @@ import math
 import time
 
 import torch
+import numpy as np
+import numba
 import kge.job
 from kge.job import EvaluationJob, Job
 from kge import Config, Dataset
+from kge.util import KgeSampler
 from collections import defaultdict
+from typing import Union
 
 
 class EntityRankingJob(EvaluationJob):
@@ -46,11 +50,47 @@ class EntityRankingJob(EvaluationJob):
             self.hist_hooks.append(hist_per_relation_type)
         if config.get("entity_ranking.metrics_per.argument_frequency"):
             self.hist_hooks.append(hist_per_frequency_percentile)
+        self.rank_against = self.config.get("entity_ranking.rank_against")
+        self.metric_name_suffix = ""
+        if self.rank_against > 0:
+            self.metric_name_suffix += f"_against_{str(self.rank_against)}"
+            self.sampler = self._create_rank_against_k_sampler()
+            if self.config.get("entity_ranking.chunk_size") > 0:
+                self.config.set("entity_ranking.chunk_size", -1)
+                self.config.log(
+                    "Chunking is not supported in combination with rank "
+                    "against. Setting chunk_size to -1",
+                    echo=True,
+                )
 
         if self.__class__ == EntityRankingJob:
             for f in Job.job_created_hooks:
                 f(self)
 
+    def _create_rank_against_k_sampler(self):
+        """
+        Creates a shared (naive) uniform sampler to sample the k negatives to rank
+        against.
+        :return: KgeSampler
+        """
+        sampler_options = {
+            "sampler": {
+                "num_samples": {
+                    "s": self.rank_against,
+                    "p": 0,
+                    "o": self.rank_against,
+                },
+                "filtering": {"s": False, "p": False, "o": False,},
+                "shared": True,
+                "shared_type": "naive",
+                "with_replacement": False,
+                "sampling_type": "uniform",
+                "implementation": "batch",
+            }
+        }
+        sampler_config = Config()
+        sampler_config.set_all(sampler_options, create=True)
+        return KgeSampler.create(sampler_config, "sampler", self.dataset)
 
     def _prepare(self):
         super()._prepare()
@@ -98,8 +138,16 @@ class EntityRankingJob(EvaluationJob):
         else:
             test_label_coords = torch.zeros([0, 2], dtype=torch.long)
 
+        negatives = None
+        if self.rank_against > 0:
+            negatives = self.sampler.sample(
+                torch.empty((self.batch_size, 3), dtype=torch.long),
+                slot=0,
+                num_samples=self.rank_against,
+            ).unique_samples()
+
         batch = torch.cat(batch).reshape((-1, 3))
-        return batch, label_coords, test_label_coords
+        return batch, label_coords, test_label_coords, negatives
 
     @torch.no_grad()
     def _evaluate(self):
@@ -162,6 +210,8 @@ class EntityRankingJob(EvaluationJob):
             # entries are either 0 (false) or infinity (true)
             # TODO add timing information
             batch = batch_coords[0].to(self.device)
+            if self.rank_against > 0:
+                negatives = batch_coords[3].to(self.device)
             s, p, o = batch[:, 0], batch[:, 1], batch[:, 2]
             label_coords = batch_coords[1].to(self.label_device)
             if filter_with_test:
@@ -222,42 +272,62 @@ class EntityRankingJob(EvaluationJob):
                 chunk_start = chunk_size * chunk_number
                 chunk_end = min(chunk_size * (chunk_number + 1), num_entities)
 
+                if self.rank_against > 0:
+                    targets = negatives
+                else:
+                    targets = torch.arange(
+                        chunk_start, chunk_end, device=self.device, dtype=torch.long
+                    )
+                len_targets = len(targets)
+
                 # now we need to load and map again for the complete chunk
-                chunk_entities = torch.arange(chunk_start, chunk_end, device=self.device)
-                unique_entities = torch.unique(torch.cat((s, o, chunk_entities))).long()
+                unique_entities = torch.unique(torch.cat((s, o, targets))).long()
                 self.model.get_s_embedder()._pull_embeddings(unique_entities)
-                entity_mapper = torch.full((self.dataset.num_entities(),), -1,
+                entity_mapper = torch.empty((self.dataset.num_entities(),),
                                            dtype=torch.long, device=self.device)
                 entity_mapper[unique_entities] = torch.arange(len(unique_entities),
                                                               dtype=torch.long, device=self.device)
                 s_mapped = entity_mapper[s.long()]
                 o_mapped = entity_mapper[o.long()]
-                chunk_mapped = entity_mapper[chunk_entities.long()]
+                targets_mapped = entity_mapper[targets.long()]
 
-                # compute scores of chunk
-                scores = self.model.score_sp_po(
-                    s_mapped, p, o_mapped, chunk_mapped  # torch.arange(chunk_start, chunk_end).to(self.device)
+                # computing intersection before the scores to reduce memory footprint
+                index_mapper = torch.empty(
+                    num_entities, dtype=torch.long, device=self.device
                 )
-                scores_sp = scores[:, : chunk_end - chunk_start]
-                scores_po = scores[:, chunk_end - chunk_start :]
+                index_mapper[targets] = torch.arange(
+                    len_targets, dtype=torch.long, device=self.device
+                )
+                s_in_target_mask = (s.view(-1, 1) == targets).any(-1)
+                o_in_target_mask = (o.view(-1, 1) == targets).any(-1)
+                s_in_target = index_mapper[s[s_in_target_mask].long()]
+                o_in_target = index_mapper[o[o_in_target_mask].long()]
+
+                # compute scores against targets
+                scores = self.model.score_sp_po(s_mapped, p, o_mapped, targets_mapped)
+                scores_sp = scores[:, :len_targets]
+                scores_po = scores[:, len_targets:]
 
                 # replace the precomputed true_scores with the ones occurring in the
                 # scores matrix to avoid floating point issues
-                s_in_chunk_mask = (chunk_start <= s) & (s < chunk_end)
-                o_in_chunk_mask = (chunk_start <= o) & (o < chunk_end)
-                o_in_chunk = (o[o_in_chunk_mask] - chunk_start).long()
-                s_in_chunk = (s[s_in_chunk_mask] - chunk_start).long()
-                scores_sp[o_in_chunk_mask, o_in_chunk] = o_true_scores[o_in_chunk_mask]
-                scores_po[s_in_chunk_mask, s_in_chunk] = s_true_scores[s_in_chunk_mask]
+                scores_sp[o_in_target_mask, o_in_target] = o_true_scores[
+                    o_in_target_mask
+                ]
+                scores_po[s_in_target_mask, s_in_target] = s_true_scores[
+                    s_in_target_mask
+                ]
 
                 # now compute the rankings (assumes order: None, _filt, _filt_test)
                 for ranking in rankings:
                     if labels_for_ranking[ranking] is None:
-                        labels_chunk = None
+                        labels_targets = None
                     else:
+                        if self.rank_against <= 0:
+                            # it is cheaper to use the slice to densify the labels
+                            targets = slice(chunk_start, chunk_end)
                         # densify the needed part of the sparse labels tensor
-                        labels_chunk = self._densify_chunk_of_labels(
-                            labels_for_ranking[ranking], chunk_start, chunk_end
+                        labels_targets = self._densify_labels_of_targets(
+                            labels_for_ranking[ranking], targets
                         )
                         # if the complete label tensor is on cpu, move the needed chunk
                         #  to device
@@ -265,10 +335,8 @@ class EntityRankingJob(EvaluationJob):
                             labels_chunk = labels_chunk.to(self.device)
 
                         # remove current example from labels
-                        labels_chunk[o_in_chunk_mask, o_in_chunk] = 0
-                        labels_chunk[
-                            s_in_chunk_mask, s_in_chunk + (chunk_end - chunk_start)
-                        ] = 0
+                        labels_targets[o_in_target_mask, o_in_target] = 0
+                        labels_targets[s_in_target_mask, s_in_target + len_targets] = 0
 
                     # compute partial ranking and filter the scores (sets scores of true
                     # labels to infinity)
@@ -280,7 +348,11 @@ class EntityRankingJob(EvaluationJob):
                         scores_sp_filt,
                         scores_po_filt,
                     ) = self._filter_and_rank(
-                        scores_sp, scores_po, labels_chunk, o_true_scores, s_true_scores
+                        scores_sp,
+                        scores_po,
+                        labels_targets,
+                        o_true_scores,
+                        s_true_scores,
                     )
 
                     # from now on, use filtered scores
@@ -415,7 +487,7 @@ class EntityRankingJob(EvaluationJob):
                     "\r"  # go back
                     + "{}  batch:{: "
                     + str(1 + int(math.ceil(math.log10(len(self.loader)))))
-                    + "d}/{}, mrr (filt.): {:4.3f} ({:4.3f}), "
+                    + "d}/{}, ({}) mrr (filt.): {:4.3f} ({:4.3f}), "
                     + "hits@1: {:4.3f} ({:4.3f}), "
                     + "hits@{}: {:4.3f} ({:4.3f})"
                     + "\033[K"  # clear to right
@@ -423,13 +495,20 @@ class EntityRankingJob(EvaluationJob):
                     self.config.log_prefix,
                     batch_number,
                     len(self.loader) - 1,
-                    metrics["mean_reciprocal_rank"],
-                    metrics["mean_reciprocal_rank_filtered"],
-                    metrics["hits_at_1"],
-                    metrics["hits_at_1_filtered"],
+                    self.metric_name_suffix,
+                    metrics["mean_reciprocal_rank" + self.metric_name_suffix],
+                    metrics["mean_reciprocal_rank_filtered" + self.metric_name_suffix],
+                    metrics["hits_at_1" + self.metric_name_suffix],
+                    metrics["hits_at_1_filtered" + self.metric_name_suffix],
                     self.hits_at_k_s[-1],
-                    metrics["hits_at_{}".format(self.hits_at_k_s[-1])],
-                    metrics["hits_at_{}_filtered".format(self.hits_at_k_s[-1])],
+                    metrics[
+                        "hits_at_{}".format(self.hits_at_k_s[-1])
+                        + self.metric_name_suffix
+                    ],
+                    metrics[
+                        "hits_at_{}_filtered".format(self.hits_at_k_s[-1])
+                        + self.metric_name_suffix
+                    ],
                 ),
                 end="",
                 flush=True,
@@ -469,44 +548,73 @@ class EntityRankingJob(EvaluationJob):
             dict(epoch_time=epoch_time, event="eval_completed", **metrics,)
         )
 
-    def _densify_chunk_of_labels(
-        self, labels: torch.Tensor, chunk_start: int, chunk_end: int
+    def _densify_labels_of_targets(
+        self, labels: torch.Tensor, targets: Union[torch.Tensor, slice]
     ) -> torch.Tensor:
-        """Creates a dense chunk of a sparse label tensor.
+        """Creates a dense label tensor needed for target entities from a sparse label
+        tensor.
 
-        A chunk here is a range of entity values with 'chunk_start' being the lower
-        bound and 'chunk_end' the upper bound.
-
-        The resulting tensor contains the labels for the sp chunk and the po chunk.
+        The resulting tensor contains the labels for the sp and po scores for the
+        target entities.
 
         :param labels: sparse tensor containing the labels corresponding to the batch
         for sp and po
 
-        :param chunk_start: int start index of the chunk
+        :param targets: entities to score against
 
-        :param chunk_end: int end index of the chunk
-
-        :return: batch_size x chunk_size*2 dense tensor with labels for the sp chunk and
-        the po chunk.
+        :return: batch_size x len(targets)*2 dense tensor with labels for the sp and
+        po.
 
         """
         num_entities = self.dataset.num_entities()
         indices = labels._indices()
-        mask_sp = (chunk_start <= indices[1, :]) & (indices[1, :] < chunk_end)
-        mask_po = ((chunk_start + num_entities) <= indices[1, :]) & (
-            indices[1, :] < (chunk_end + num_entities)
+        if type(targets) == slice:
+            num_targets = targets.stop - targets.start
+            mask_sp = (targets.start <= indices[1, :]) & (indices[1, :] < targets.stop)
+            mask_po = ((targets.start + num_entities) <= indices[1, :]) & (
+                indices[1, :] < (targets.stop + num_entities)
+            )
+        else:
+            num_targets = len(targets)
+            cpu_targets = targets.cpu()
+            mask_sp = torch.zeros(len(indices[1]), dtype=torch.bool, device=self.device)
+            mask_po = torch.zeros(len(indices[1]), dtype=torch.bool, device=self.device)
+            sp_indices_mask = indices[1] < num_entities
+            po_indices_mask = ~sp_indices_mask
+            # the indices contain a lot of duplicates
+            # take unique to save isin computations
+            unique_sp_indices, unique_sp_inverse = torch.unique(
+                indices[1][sp_indices_mask], return_inverse=True
+            )
+            unique_po_indices, unique_po_inverse = torch.unique(
+                indices[1][po_indices_mask], return_inverse=True
+            )
+            unique_sp_indices_in_mask = torch.from_numpy(
+                np.isin(unique_sp_indices.cpu(), cpu_targets)
+            ).to(self.device)
+            unique_po_indices_in_mask = torch.from_numpy(
+                np.isin(unique_po_indices.cpu(), cpu_targets)
+            ).to(self.device)
+            # mark all unique indices that are irrelevant to filter them out
+            unique_sp_indices[~unique_sp_indices_in_mask] = -1
+            unique_po_indices[~unique_po_indices_in_mask] = -1
+            mask_sp[sp_indices_mask] = unique_sp_indices[unique_sp_inverse] != -1
+            mask_po[po_indices_mask] = unique_po_indices[unique_po_inverse] != -1
+        indices_mapper = torch.empty(num_entities, dtype=torch.long, device=self.device)
+        indices_mapper[targets] = torch.arange(
+            num_targets, dtype=torch.long, device=self.device
         )
-        indices_sp_chunk = indices[:, mask_sp]
-        indices_sp_chunk[1, :] = indices_sp_chunk[1, :] - chunk_start
-        indices_po_chunk = indices[:, mask_po]
-        indices_po_chunk[1, :] = (
-            indices_po_chunk[1, :] - num_entities - chunk_start * 2 + chunk_end
+        indices_sp_target = indices[:, mask_sp]
+        indices_sp_target[1, :] = indices_mapper[indices_sp_target[1, :]]
+        indices_po_target = indices[:, mask_po]
+        indices_po_target[1, :] = (
+            indices_mapper[indices_po_target[1, :] - num_entities] + num_targets
         )
-        indices_chunk = torch.cat((indices_sp_chunk, indices_po_chunk), dim=1)
+        indices_sp_po = torch.cat((indices_sp_target, indices_po_target), dim=1)
         dense_labels = torch.sparse.LongTensor(
-            indices_chunk,
+            indices_sp_po,
             labels._values()[mask_sp | mask_po],
-            torch.Size([labels.size()[0], (chunk_end - chunk_start) * 2]),
+            torch.Size([labels.size()[0], num_targets * 2]),
         ).to_dense()
         return dense_labels
 
@@ -596,6 +704,7 @@ num_ties for each true score.
 
     def _compute_metrics(self, rank_hist, suffix=""):
         """Computes desired matrix from rank histogram"""
+        suffix += self.metric_name_suffix
         metrics = {}
         n = torch.sum(rank_hist).item()
 
@@ -619,6 +728,7 @@ num_ties for each true score.
             metrics["hits_at_{}{}".format(k, suffix)] = hits_at_k[k - 1]
 
         return metrics
+
 
 # HISTOGRAM COMPUTATION ###############################################################
 
