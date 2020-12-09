@@ -302,8 +302,7 @@ class EntityRankingJob(EvaluationJob):
                         labels_targets = None
                     else:
                         if self.rank_against <= 0:
-                            # using slice here for now, since memory footprint too high
-                            #  otherwise
+                            # it is cheaper to use the slice to densify the labels
                             targets = slice(chunk_start, chunk_end)
                         # densify the needed part of the sparse labels tensor
                         labels_targets = self._densify_labels_of_targets(
@@ -556,10 +555,28 @@ class EntityRankingJob(EvaluationJob):
         else:
             num_targets = len(targets)
             # simulate np.isin in torch
-            # todo: this is way too memory heavy
-            #  keep labels on cpu instead and use np.isin
-            mask_sp = (indices[1].view(-1, 1) == targets).any(-1)
-            mask_po = (indices[1].view(-1, 1) == targets + num_entities).any(-1)
+            # this is a very expensive and memory heavy operation
+            mask_sp = torch.zeros(len(indices[1]), dtype=torch.bool, device=self.device)
+            mask_po = torch.zeros(len(indices[1]), dtype=torch.bool, device=self.device)
+            sp_indices_mask = indices[1] < num_entities
+            po_indices_mask = ~sp_indices_mask
+            # the indices contain a lot of duplicates
+            # take unique to save isin computations
+            unique_sp_indices, unique_sp_inverse = torch.unique(
+                indices[1][sp_indices_mask], return_inverse=True
+            )
+            unique_sp_indices_in_mask = self._chunked_isin(unique_sp_indices, targets)
+            unique_po_indices, unique_po_inverse = torch.unique(
+                indices[1][po_indices_mask], return_inverse=True
+            )
+            unique_po_indices_in_mask = self._chunked_isin(
+                unique_po_indices, targets + num_entities
+            )
+            # mark all unique indices that are irrelevant to filter them out
+            unique_sp_indices[~unique_sp_indices_in_mask] = -1
+            unique_po_indices[~unique_po_indices_in_mask] = -1
+            mask_sp[sp_indices_mask] = unique_sp_indices[unique_sp_inverse] != -1
+            mask_po[po_indices_mask] = unique_po_indices[unique_po_inverse] != -1
         indices_mapper = torch.empty(num_entities, dtype=torch.long, device=self.device)
         indices_mapper[targets] = torch.arange(
             num_targets, dtype=torch.long, device=self.device
@@ -577,6 +594,26 @@ class EntityRankingJob(EvaluationJob):
             torch.Size([labels.size()[0], num_targets * 2]),
         ).to_dense()
         return dense_labels
+
+    def _chunked_isin(self, tensor_a, tensor_b, chunk_size=None):
+        """
+        This method performs a computation similar to numpy isin.
+        This can be run on GPU. To reduce the memory footprint, the computation
+        is chunked.
+
+        :param tensor_a: tensor, which will be chunked
+        :param tensor_b: tensor to compare against
+        :param chunk_size: size of chunks for tensor a; default chunk_size is
+                           self.batch_size
+        :return: mask of size (len(tensor_a)
+        """
+        if chunk_size is None:
+            chunk_size = self.batch_size
+        mask = []
+        for chunk_a in torch.split(tensor_a, chunk_size):
+            mask.append((chunk_a.view(-1, 1) == tensor_b).any(-1))
+        mask = torch.cat(mask)
+        return mask
 
     def _filter_and_rank(
         self,
