@@ -507,6 +507,9 @@ class KgeModel(KgeBase):
         if config.get(config.get("model") + ".create_eval"):
             batch_size = config.get("eval.batch_size")
             chunk_size = config.get("entity_ranking.chunk_size")
+            rank_against = config.get("entity_ranking.rank_against")
+            if rank_against > 0:
+                chunk_size = rank_against
             if chunk_size <= 0:
                 return dataset.num_entities()
             return min(dataset.num_entities(), 2*batch_size+chunk_size)
