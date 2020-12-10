@@ -849,7 +849,7 @@ class KgeFrequencySampler(KgeSampler):
         return result
 
 
-class KgeBatchSampler(KgeUniformSampler):
+class KgeBatchSampler(KgeSampler):
     def __init__(self, config, configuration_key, dataset):
         super().__init__(config, configuration_key, dataset)
         if self.get_option("shared"):
