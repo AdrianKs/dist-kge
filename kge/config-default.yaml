@@ -310,12 +310,6 @@ negative_sampling:
     # 0). Corresponds to a symmetric Dirichlet prior.
     smoothing: 1
 
-  # Options for sampling type batch (negative_sampling.sampling_type=="batch")
-  batch:
-    # percentage of triples to sample uniformly from the entire set instead from the
-    # batch
-    uniform_percentage: 0.0
-
   # Number of times each slot of each positive triple is corrupted by the
   # sampler to obtain negative triples.
   num_samples:
@@ -359,6 +353,20 @@ negative_sampling:
   # Whether sampling should be performed with replacement. Without replacement
   # sampling is currently only supported for shared sampling.
   with_replacement: True
+
+  # combine sampler with a second sampler
+  # configuration for the second sampler is defined in combined_options
+  combined: False
+
+  # sampler options for the second sampler
+  # options from sampler 1 used for everything that can not be defined here
+  combined_options:
+    # Negative sampler to use
+    sampling_type: batch
+    # Percentage of negative samples to use in the second sampler
+    negatives_percentage: 0.5
+    # Type of shared sampling implementation
+    shared_type: naive
 
   # Implementation to use for the negative sampling job. Possible values are:
   # - triple: Scores every positive and negative triple in the batch

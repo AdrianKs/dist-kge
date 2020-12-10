@@ -67,6 +67,15 @@ class KgeSampler(Configurable):
     def create(
         config: Config, configuration_key: str, dataset: Dataset
     ) -> "KgeSampler":
+        if config.get(configuration_key + ".combined"):
+            return KgeCombinedSampler(config, configuration_key, dataset)
+        else:
+            return KgeSampler._create(config, configuration_key, dataset)
+
+    @staticmethod
+    def _create(
+        config: Config, configuration_key: str, dataset: Dataset
+    ) -> "KgeSampler":
         """Factory method for sampler creation."""
         sampling_type = config.get(configuration_key + ".sampling_type")
         if sampling_type == "uniform":
@@ -587,6 +596,51 @@ class DefaultSharedNegativeSample(BatchNegativeSample):
         return self
 
 
+class CombinedSharedBatchNegativeSample(BatchNegativeSample):
+    def __init__(
+        self,
+        config: Config,
+        configuration_key: str,
+        positive_triples: torch.Tensor,
+        slot: int,
+        num_samples: int,
+        batch_negative_sample_1: BatchNegativeSample,
+        batch_negative_sample_2: BatchNegativeSample,
+    ):
+        super().__init__(config, configuration_key, positive_triples, slot, num_samples)
+        self.batch_negative_sample_1 = batch_negative_sample_1
+        self.batch_negative_sample_2 = batch_negative_sample_2
+
+    def unique_samples(self, indexes=None, return_inverse=False):
+        if return_inverse:
+            # slow but probably rarely used anyway
+            samples = self.samples(indexes)
+            return torch.unique(samples.contiguous().view(-1), return_inverse=True)
+        else:
+            unique_samples_1 = self.batch_negative_sample_1.unique_samples(
+                indexes, return_inverse
+            )
+            unique_samples_2 = self.batch_negative_sample_2.unique_samples(
+                indexes, return_inverse
+            )
+            return torch.unique(unique_samples_1, unique_samples_2)
+
+    def samples(self, indexes=None) -> torch.Tensor:
+        samples_1 = self.batch_negative_sample_1.samples(indexes)
+        samples_2 = self.batch_negative_sample_2.samples(indexes)
+        return torch.cat((samples_1, samples_2), dim=1)
+
+    def score(self, model, indexes=None) -> torch.Tensor:
+        scores_1 = self.batch_negative_sample_1.score(model, indexes)
+        scores_2 = self.batch_negative_sample_2.score(model, indexes)
+        return torch.cat((scores_1, scores_2), dim=1)
+
+    def to(self, device) -> "CombinedSharedBatchNegativeSample":
+        self.batch_negative_sample_1 = self.batch_negative_sample_1.to(device)
+        self.batch_negative_sample_2 = self.batch_negative_sample_2.to(device)
+        return self
+
+
 class KgeUniformSampler(KgeSampler):
     def __init__(self, config: Config, configuration_key: str, dataset: Dataset):
         super().__init__(config, configuration_key, dataset)
@@ -798,57 +852,36 @@ class KgeFrequencySampler(KgeSampler):
 class KgeBatchSampler(KgeUniformSampler):
     def __init__(self, config, configuration_key, dataset):
         super().__init__(config, configuration_key, dataset)
-        self.uniform_percentage = self.get_option("batch.uniform_percentage")
         if self.get_option("shared"):
             if not self.get_option("shared_type") == "naive":
                 raise ValueError("only shared_type naive supported with batch sampling")
             if not self.get_option("with_replacement"):
                 raise ValueError(
-                    "without replacement sampling not supported with " "batch sampling"
+                    "without replacement sampling not supported with batch sampling"
                 )
 
     def _sample(self, positive_triples: torch.Tensor, slot: int, num_samples: int):
-        num_uniform_samples = int(num_samples * self.uniform_percentage)
-        num_batch_samples = num_samples - num_uniform_samples
-        uniform_samples = super(KgeBatchSampler, self)._sample(
-            positive_triples, slot, num_uniform_samples
-        )
-        batch_samples = positive_triples[:, slot][
+        return positive_triples[:, slot][
             torch.randint(
                 len(positive_triples),
-                [positive_triples, num_batch_samples],
+                [positive_triples, num_samples],
                 dtype=torch.long,
             )
         ]
-        return torch.cat((uniform_samples, batch_samples), dim=1)
 
-    @torch.no_grad()
     def _sample_shared(
         self, positive_triples: torch.Tensor, slot: int, num_samples: int
     ):
-        num_uniform_samples = int(num_samples * self.uniform_percentage)
-        num_batch_samples = num_samples - num_uniform_samples
-
-        uniform_samples = torch.randint(
-            self.vocabulary_size[slot], (num_uniform_samples,), dtype=torch.long
-        )
         batch_samples = positive_triples[:, slot][
-            torch.randint(len(positive_triples), (num_batch_samples,), dtype=torch.long)
+            torch.randint(len(positive_triples), (num_samples,), dtype=torch.long)
         ]
 
-        unique_samples, counts = torch.unique(
-            torch.cat((uniform_samples, batch_samples)), return_counts=True
-        )
+        unique_samples, counts = torch.unique(batch_samples, return_counts=True)
         repeat_indexes = torch.from_numpy(
             self._create_repeat_index_from_counts(
                 unique_samples.numpy(), counts.numpy()
             )
         ).long()
-
-        # it seems to be faster to recompute the scores than to calculate
-        # repeat indexes an repeat the scores...
-        # unique_samples = torch.cat((uniform_samples, batch_samples))
-        # repeat_indexes = torch.empty(0)
 
         return NaiveSharedNegativeSample(
             self.config,
@@ -862,12 +895,123 @@ class KgeBatchSampler(KgeUniformSampler):
 
     @staticmethod
     @numba.njit
-    def _create_repeat_index_from_counts(unique_samples, counts):
-        len_repeat_index = np.sum(counts-1)
+    def _create_repeat_index_from_counts(unique_samples: np.array, counts: np.array):
+        """
+        Creates the repeat index needed for the shared negative sample object.
+        Calculates based on the counts of the unique samples
+        Args:
+            unique_samples: unique negative samples
+            counts: count of each unique negative sample
+
+        Returns:
+            returns a 1d-tensor with len(sum(counts-1)) containing the ids of entities
+            to repeat
+        """
+        len_repeat_index = np.sum(counts - 1)
         repeat_index = np.zeros((len_repeat_index,))
         repeat_position = 0
         for i in range(len(unique_samples)):
-            for j in range(counts[i]-1):
+            for j in range(counts[i] - 1):
                 repeat_index[repeat_position] = i
                 repeat_position += 1
         return repeat_index
+
+
+class KgeCombinedSampler(KgeSampler):
+    def __init__(self, config, configuration_key, dataset):
+        super().__init__(config, configuration_key, dataset)
+        self.sampler_1: KgeSampler = KgeSampler._create(
+            config, configuration_key, dataset
+        )
+        self.sampler_2: KgeSampler = KgeSampler._create(
+            self._create_second_sampler_config(), configuration_key, dataset
+        )
+        self.sampler_2_percentage = self.get_option(
+            "combined_options.negatives_percentage"
+        )
+
+    def _create_second_sampler_config(self):
+        """
+        Creates config object for the second sampler based on the options defined
+        under the key combined_options
+        Returns:
+            Config object
+        """
+        sampler_2_config = Config()
+        sampler_2_options = {
+            self.configuration_key: self.config.get(self.configuration_key)
+        }
+        combined_options = self.get_option("combined_options")
+        if __name__ == "__main__":
+            for key, option in combined_options.items():
+                if key == "negatives_percentage":
+                    continue
+                sampler_2_options[self.configuration_key][key] = option
+        sampler_2_config.set_all(sampler_2_options, create=True)
+        return sampler_2_config
+
+    def _sample(
+        self, positive_triples: torch.Tensor, slot: int, num_samples: int
+    ) -> torch.Tensor:
+        num_samples_2 = int(num_samples * self.sampler_2_percentage)
+        num_samples_1 = num_samples - num_samples_2
+        negatives_1 = self.sampler_1._sample(positive_triples, slot, num_samples_1)
+        negatives_2 = self.sampler_2._sample(positive_triples, slot, num_samples_2)
+        return torch.cat((negatives_1, negatives_2), dim=1)
+
+    def _sample_shared(
+        self, positive_triples: torch.Tensor, slot: int, num_samples: int
+    ) -> "BatchNegativeSample":
+        num_samples_2 = int(num_samples * self.sampler_2_percentage)
+        num_samples_1 = num_samples - num_samples_2
+        batch_negative_sample_1 = self.sampler_1._sample_shared(
+            positive_triples, slot, num_samples_1
+        )
+        batch_negative_sample_2 = self.sampler_2._sample_shared(
+            positive_triples, slot, num_samples_2
+        )
+        return CombinedSharedBatchNegativeSample(
+            config=self.config,
+            configuration_key=self.configuration_key,
+            positive_triples=positive_triples,
+            slot=slot,
+            num_samples=num_samples,
+            batch_negative_sample_1=batch_negative_sample_1,
+            batch_negative_sample_2=batch_negative_sample_2,
+        )
+
+    def _filter_and_resample(
+        self, negative_samples: torch.Tensor, slot: int, positive_triples: torch.Tensor
+    ) -> torch.Tensor:
+        return self._handle_filtering(
+            negative_samples, slot, positive_triples, implementation="standard"
+        )
+
+    def _filter_and_resample_fast(
+        self, negative_samples: torch.Tensor, slot: int, positive_triples: torch.Tensor
+    ) -> torch.Tensor:
+        return self._handle_filtering(
+            negative_samples, slot, positive_triples, implementation="fast"
+        )
+
+    def _handle_filtering(
+        self,
+        negative_samples: torch.Tensor,
+        slot: int,
+        positive_triples: torch.Tensor,
+        implementation="standard",
+    ) -> torch.Tensor:
+        if implementation == "fast":
+            filter_function_name = "_filter_and_resample_fast"
+        else:
+            filter_function_name = "_filter_and_resample"
+        num_samples = negative_samples.shape[1]
+        num_samples_2 = int(num_samples * self.sampler_2_percentage)
+        num_samples_1 = num_samples - num_samples_2
+        negative_samples_1 = self.sampler_1.__getattribute__(filter_function_name)(
+            negative_samples[:, :num_samples_1], slot, positive_triples
+        )
+        negative_samples_2 = self.sampler_2.__getattribute__(filter_function_name)(
+            negative_samples[:, num_samples_1:], slot, positive_triples
+        )
+        return torch.cat((negative_samples_1, negative_samples_2), dim=1)
