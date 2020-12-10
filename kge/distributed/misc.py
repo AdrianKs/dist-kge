@@ -10,7 +10,7 @@ def get_optimizer_dim(config: Config, dim):
     elif optimizer == "dist_adagrad":
         optimizer_dim = dim
     elif optimizer == "dist_rowadagrad":
-        optimizer_dim = 0
+        optimizer_dim = 1
     else:
         raise NotImplementedError(f"Optimizer {optimizer} not implemented in distributed setting")
     return optimizer_dim
