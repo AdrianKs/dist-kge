@@ -1,6 +1,12 @@
 from kge import Config
 
-MIN_RANK = 2
+
+def get_min_rank(config: Config):
+    if config.get("job.distributed.parameter_server") == "shared":
+        # with a shared parameter server we don't create an additional process
+        return 1
+    else:
+        return 2
 
 
 def get_optimizer_dim(config: Config, dim):
