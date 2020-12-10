@@ -24,7 +24,7 @@ from kge.job.trace import format_trace_entry
 #  from init. But directly it works (partially initialized model)
 from kge.distributed.work_scheduler import SchedulerClient
 from kge.distributed.parameter_client import KgeParameterClient
-from kge.distributed.misc import MIN_RANK
+from kge.distributed.misc import get_min_rank
 
 # from kge.distributed import KgeParameterClient, SchedulerClient
 from typing import Any, Callable, Dict, List, Optional
@@ -119,12 +119,13 @@ class TrainingJob(TrainingOrEvaluationJob):
 
         super().__init__(config, dataset, parent_job)
         self.parameter_client = parameter_client
+        self.min_rank = get_min_rank(config)
         self.entity_sync_level = self.config.get("job.distributed.entity_sync_level")
         self.relation_sync_level = self.config.get(
             "job.distributed.relation_sync_level"
         )
 
-        self.work_scheduler_client = SchedulerClient()
+        self.work_scheduler_client = SchedulerClient(self.config)
         (
             max_partition_entities,
             max_partition_relations,
@@ -190,7 +191,7 @@ class TrainingJob(TrainingOrEvaluationJob):
         #  init work is distributed by the work scheduler
         if not init_for_load_only and not self.config.get("lookup_embedder.pretrain.model_filename"):
             # only the first worker initializes the relations
-            if self.parameter_client.rank == MIN_RANK:
+            if self.parameter_client.rank == self.min_rank:
                 self.model.get_p_embedder().push_all()
             while True:
                 init_entities = self.work_scheduler_client.get_init_work(
@@ -359,7 +360,7 @@ class TrainingJob(TrainingOrEvaluationJob):
                 gc.collect()
                 torch.cuda.empty_cache()
                 self.parameter_client.barrier()
-                if self.parameter_client.rank == MIN_RANK:
+                if self.parameter_client.rank == self.min_rank:
                     # move current small model to a tmp model
                     # self.model = self.model.cpu()
                     tmp_optimizer = self.optimizer

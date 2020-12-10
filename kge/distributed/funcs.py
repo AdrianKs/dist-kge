@@ -5,19 +5,19 @@ from kge import Config, Dataset
 from kge.distributed.parameter_server import init_torch_server, init_lapse_scheduler
 from kge.distributed.worker_process import WorkerProcessPool
 from kge.distributed.work_scheduler import WorkScheduler
-from kge.distributed.misc import MIN_RANK, get_optimizer_dim
+from kge.distributed.misc import get_optimizer_dim, get_min_rank
 
 import torch
 from torch import multiprocessing as mp
 
 
-def create_and_run_distributed(config: Config, dataset: Optional[Dataset] = None,
-                               checkpoint: Optional[Dict] = None):
+def create_and_run_distributed(
+    config: Config, dataset: Optional[Dataset] = None, checkpoint: Optional[Dict] = None
+):
     os.environ["OMP_NUM_THREADS"] = str(
         config.get("job.distributed.num_threads_per_process")
     )
-    os.environ["GLOO_SOCKET_IFNAME"] = config.get(
-        "job.distributed.gloo_socket_ifname")
+    os.environ["GLOO_SOCKET_IFNAME"] = config.get("job.distributed.gloo_socket_ifname")
     processes = []
     num_keys = dataset.num_entities() + dataset.num_relations()
     num_meta_keys = 3
@@ -26,11 +26,15 @@ def create_and_run_distributed(config: Config, dataset: Optional[Dataset] = None
     master_port = config.get("job.distributed.master_port")
     lapse_port = config.get("job.distributed.lapse_port")
     num_partitions = config.get("job.distributed.num_partitions")
-    dist_world_size = num_workers + MIN_RANK
+    min_rank = get_min_rank(config)
+    dist_world_size = num_workers + min_rank
     dim = config.get("lookup_embedder.dim")
     optimizer_dim = get_optimizer_dim(config, dim)
-    if config.get("train.optimizer.default.type") in ["dist_adagrad", "dist_rowadagrad"]:
-    #    num_keys *= 2
+    if config.get("train.optimizer.default.type") in [
+        "dist_adagrad",
+        "dist_rowadagrad",
+    ]:
+        #    num_keys *= 2
         num_meta_keys += 2
     # meta keys. contains for example a variable indicating whether to stop or
     #  not
@@ -47,15 +51,23 @@ def create_and_run_distributed(config: Config, dataset: Optional[Dataset] = None
                     master_port,
                     lapse_port,
                     dist_world_size,
+                    min_rank,
                 ),
                 daemon=True,
             )
             p.start()
             processes.append(p)
-        else:
+        elif config.get("job.distributed.parameter_server") == "torch":
             p = mp.Process(
                 target=init_torch_server,
-                args=(num_workers, num_keys, dim + optimizer_dim, master_ip, master_port),
+                args=(
+                    num_workers,
+                    num_keys,
+                    dim + optimizer_dim,
+                    master_ip,
+                    master_port,
+                    min_rank,
+                ),
                 daemon=True,
             )
             p.start()
@@ -68,7 +80,7 @@ def create_and_run_distributed(config: Config, dataset: Optional[Dataset] = None
         scheduler = WorkScheduler.create(
             config=config,
             partition_type=partition_type,
-            world_size=num_workers + 2,
+            world_size=num_workers + min_rank,
             master_ip=master_ip,
             master_port=master_port,
             num_partitions=num_partitions,
@@ -92,12 +104,18 @@ def create_and_run_distributed(config: Config, dataset: Optional[Dataset] = None
         num_workers_machine = num_workers
     already_init_workers = config.get("job.distributed.already_init_workers")
     worker_process_pool = WorkerProcessPool(
-        num_workers, num_workers_machine, already_init_workers, num_keys,
-        num_meta_keys, dim, optimizer_dim, config, dataset, checkpoint
+        num_workers,
+        num_workers_machine,
+        already_init_workers,
+        num_keys,
+        num_meta_keys,
+        dim,
+        optimizer_dim,
+        config,
+        dataset,
+        checkpoint,
     )
     valid_trace = worker_process_pool.join()
     for p in processes:
         p.join()
     return valid_trace
-
-

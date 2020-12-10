@@ -15,6 +15,7 @@ from torch import multiprocessing as mp
 from torch import distributed as dist
 from enum import IntEnum
 from typing import Optional, Dict, Tuple, List
+from .misc import get_min_rank
 
 
 class SCHEDULER_CMDS(IntEnum):
@@ -40,14 +41,13 @@ class WorkScheduler(mp.get_context("spawn").Process):
         num_clients,
         dataset,
         dataset_folder,
-        rank=1,
         repartition_epoch=True,
     ):
         self._config_check(config)
         super(WorkScheduler, self).__init__(daemon=False, name="work-scheduler")
         self.config = config
         self.dataset = dataset
-        self.rank = rank
+        self.rank = get_min_rank(config) - 1
         self.num_clients = num_clients
         self.world_size = world_size
         self.master_ip = master_ip
@@ -151,6 +151,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
         os.environ["MASTER_PORT"] = self.master_port
         # we have to have a huge timeout here, since it is only called after a complete
         #  epoch on a partition
+        print("start scheduler with rank", self.rank, "world_size", self.world_size)
         dist.init_process_group(
             backend="gloo",
             init_method="env://",
@@ -1091,8 +1092,8 @@ class TwoDBlockWorkScheduler(WorkScheduler):
 
 
 class SchedulerClient:
-    def __init__(self, scheduler_rank=1):
-        self.scheduler_rank = scheduler_rank
+    def __init__(self, config):
+        self.scheduler_rank = get_min_rank(config) - 1
 
     def get_init_info(self):
         cmd = torch.LongTensor([SCHEDULER_CMDS.INIT_INFO, 0])

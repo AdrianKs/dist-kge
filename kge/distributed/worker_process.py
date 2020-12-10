@@ -11,7 +11,7 @@ from kge import Dataset
 from kge.misc import set_seeds
 from kge.job import Job
 from .parameter_client import KgeParameterClient
-from .misc import MIN_RANK
+from .misc import get_min_rank
 
 
 class WorkerProcessPool:
@@ -106,14 +106,15 @@ class WorkerProcess(mp.get_context("spawn").Process):
 
         os.environ["MASTER_ADDR"] = self.config.get("job.distributed.master_ip")
         os.environ["MASTER_PORT"] = self.config.get("job.distributed.master_port")
-        print("before init", self.rank + MIN_RANK)
+        min_rank = get_min_rank(self.config)
+        print("before init", self.rank + min_rank)
         dist.init_process_group(
             backend="gloo",
             init_method="env://",
-            world_size=self.num_total_workers + MIN_RANK,
-            rank=self.rank + MIN_RANK,
+            world_size=self.num_total_workers + min_rank,
+            rank=self.rank + min_rank,
         )
-        worker_ranks = list(range(MIN_RANK, self.num_total_workers+MIN_RANK))
+        worker_ranks = list(range(min_rank, self.num_total_workers+min_rank))
         worker_group = dist.new_group(worker_ranks)
 
         # create parameter server
@@ -149,7 +150,7 @@ class WorkerProcess(mp.get_context("spawn").Process):
         parameter_client = KgeParameterClient.create(
             client_type=self.config.get("job.distributed.parameter_server"),
             server_id=0,
-            client_id=worker_id + MIN_RANK,
+            client_id=worker_id + min_rank,
             embedding_dim=self.embedding_dim + self.optimizer_dim,
             server=server,
             num_keys=self.num_keys,
@@ -159,7 +160,7 @@ class WorkerProcess(mp.get_context("spawn").Process):
         init_for_load_only = False
 
         # load data from checkpoint and create job
-        if parameter_client.rank == MIN_RANK and self.checkpoint is not None:
+        if parameter_client.rank == min_rank and self.checkpoint is not None:
             # Todo: we still create a complete new job after creating the resume job
             self.config.set(self.config.get("model") + ".create_complete", True)
             tmp_device = self.config.get("job.device")
@@ -179,7 +180,7 @@ class WorkerProcess(mp.get_context("spawn").Process):
             parameter_client=parameter_client,
             init_for_load_only=init_for_load_only,
         )
-        if parameter_client.rank == MIN_RANK and self.checkpoint is not None:
+        if parameter_client.rank == min_rank and self.checkpoint is not None:
             job.epoch = self.checkpoint["epoch"]
             job.valid_trace = self.checkpoint["valid_trace"]
             del self.checkpoint
