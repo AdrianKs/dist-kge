@@ -200,7 +200,7 @@ class WorkerProcess(mp.get_context("spawn").Process):
         del parameter_client
         gc.collect()  # make sure lapse-worker destructor is called
         # shutdown server
-        if server is not None:
+        if server is not None and type(server) != torch.Tensor:
             server.shutdown()
         if self.result_pipe is not None:
             self.result_pipe.send(job.valid_trace)
