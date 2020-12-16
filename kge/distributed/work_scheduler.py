@@ -784,30 +784,31 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         start = -time.time()
 
         def random_map_entities():
-            mapper = torch.randperm(num_entities).type(torch.int64)
+            mapper = np.random.permutation(num_entities)
             mapped_data = deepcopy(
                 data
             )  # drop reference to dataset
-            mapped_data[:, 0] = mapper[mapped_data[:, 0].long()]
-            mapped_data[:, 2] = mapper[mapped_data[:, 2].long()]
+            mapped_data = mapped_data.numpy()
+            mapped_data[:, 0] = mapper[mapped_data[:, 0]]
+            mapped_data[:, 2] = mapper[mapped_data[:, 2]]
             return mapped_data, mapper
 
         mapped_data, mapped_entities = random_map_entities()
         print("repartition s")
         s_block = TwoDBlockWorkScheduler._get_partition(
-            mapped_data[:, 0].numpy(),
+            mapped_data[:, 0],
             num_entities,
             num_partitions,
         )
         print("repartition o")
         o_block = TwoDBlockWorkScheduler._get_partition(
-            mapped_data[:, 2].numpy(),
+            mapped_data[:, 2],
             num_entities,
             num_partitions,
         )
         print("map entity ids to partition")
         entity_to_partition = TwoDBlockWorkScheduler._get_partition(
-            mapped_entities.numpy(),
+            mapped_entities,
             num_entities,
             num_partitions,
         )
@@ -819,7 +820,7 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         entities_in_bucket = TwoDBlockWorkScheduler._get_entities_in_bucket(
             entity_to_partition,
             partitions,
-            data,
+            data.numpy(),
             entities_needed_only
         )
         print("repartitioning done")
@@ -833,8 +834,8 @@ class TwoDBlockWorkScheduler(WorkScheduler):
             for strata, strata_data in partitions.items():
                 # np.unique is slightly faster than torch.unique
                 entities_in_bucket[strata] = torch.from_numpy(
-                    np.unique(data[strata_data][:, [0, 2]])
-                ).long().contiguous()
+                    np.unique(data[strata_data][:, [0, 2]]).astype(np.long)
+                ).contiguous()
         else:
             for partition in partitions:
                 entities_in_bucket[partition] = torch.from_numpy(
