@@ -3,7 +3,6 @@ import time
 
 import torch
 import numpy as np
-import numba
 import kge.job
 from kge.job import EvaluationJob, Job
 from kge import Config, Dataset
@@ -113,6 +112,17 @@ class EntityRankingJob(EvaluationJob):
 
     def _collate(self, batch):
         "Looks up true triples for each triple in the batch"
+        negatives = None
+        negatives_numpy = None
+        if self.rank_against > 0:
+            negatives = self.sampler.sample(
+                torch.empty((self.batch_size, 3), dtype=torch.long),
+                slot=0,
+                num_samples=self.rank_against,
+            ).unique_samples()
+            negatives_numpy = negatives.numpy()
+
+        self.collate_time -= time.time()
         label_coords = []
         for split in self.filter_splits:
             split_label_coords = kge.job.util.get_sp_po_coords_from_spo_batch(
@@ -120,6 +130,7 @@ class EntityRankingJob(EvaluationJob):
                 self.dataset.num_entities(),
                 self.dataset.index(f"{split}_sp_to_o"),
                 self.dataset.index(f"{split}_po_to_s"),
+                targets=negatives_numpy
             )
             label_coords.append(split_label_coords)
         label_coords = torch.cat(label_coords)
@@ -130,17 +141,10 @@ class EntityRankingJob(EvaluationJob):
                 self.dataset.num_entities(),
                 self.dataset.index("test_sp_to_o"),
                 self.dataset.index("test_po_to_s"),
+                targets=negatives_numpy
             )
         else:
             test_label_coords = torch.zeros([0, 2], dtype=torch.long)
-
-        negatives = None
-        if self.rank_against > 0:
-            negatives = self.sampler.sample(
-                torch.empty((self.batch_size, 3), dtype=torch.long),
-                slot=0,
-                num_samples=self.rank_against,
-            ).unique_samples()
 
         batch = torch.cat(batch).reshape((-1, 3))
         return batch, label_coords, test_label_coords, negatives
@@ -545,6 +549,8 @@ class EntityRankingJob(EvaluationJob):
             mask_po = torch.zeros(len(indices[1]), dtype=torch.bool, device=self.device)
             sp_indices_mask = indices[1] < num_entities
             po_indices_mask = ~sp_indices_mask
+            # todo: the following part is not needed anymore, since labels are computed
+            #  in collate
             # the indices contain a lot of duplicates
             # take unique to save isin computations
             unique_sp_indices, unique_sp_inverse = torch.unique(
@@ -554,10 +560,10 @@ class EntityRankingJob(EvaluationJob):
                 indices[1][po_indices_mask], return_inverse=True
             )
             unique_sp_indices_in_mask = torch.from_numpy(
-                np.isin(unique_sp_indices.cpu(), cpu_targets)
+                np.isin(unique_sp_indices.cpu(), cpu_targets, assume_unique=True)
             ).to(self.device)
             unique_po_indices_in_mask = torch.from_numpy(
-                np.isin(unique_po_indices.cpu(), cpu_targets)
+                np.isin(unique_po_indices.cpu(), cpu_targets, assume_unique=True)
             ).to(self.device)
             # mark all unique indices that are irrelevant to filter them out
             unique_sp_indices[~unique_sp_indices_in_mask] = -1
