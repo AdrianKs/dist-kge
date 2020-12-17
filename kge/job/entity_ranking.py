@@ -105,6 +105,8 @@ class EntityRankingJob(EvaluationJob):
             self.dataset.index("test_po_to_s")
 
         # and data loader
+        mp_context = torch.multiprocessing.get_context("fork") if self.config.get(
+            "eval.num_workers") > 0 else None
         self.loader = torch.utils.data.DataLoader(
             self.triples,
             collate_fn=self._collate,
@@ -112,6 +114,7 @@ class EntityRankingJob(EvaluationJob):
             batch_size=self.batch_size,
             num_workers=self.config.get("eval.num_workers"),
             pin_memory=self.config.get("eval.pin_memory"),
+            multiprocessing_context=mp_context,
         )
 
     def _collate(self, batch):
