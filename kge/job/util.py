@@ -31,15 +31,15 @@ def get_sp_po_coords_from_spo_batch(
         s, p, o = triple[0].item(), triple[1].item(), triple[2].item()
 
         objects = sp_index.get((s, p), NOTHING)
-        subjects = po_index.get((p, o), NOTHING) + num_entities
+        subjects = po_index.get((p, o), NOTHING)
         if targets is None:
             relevant_objects = objects
-            relevant_subjects = subjects
+            relevant_subjects = subjects + num_entities
         else:
             relevant_objects = torch.from_numpy(intersection(objects.numpy(), targets))
             relevant_subjects = torch.from_numpy(
                 intersection(subjects.numpy(), targets)
-            )
+            ) + num_entities
         coords[current_index : (current_index + len(relevant_objects)), 0] = i
         coords[
             current_index : (current_index + len(relevant_objects)), 1
