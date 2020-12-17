@@ -126,7 +126,6 @@ class EntityRankingJob(EvaluationJob):
             ).unique_samples()
             negatives_numpy = negatives.numpy()
 
-        self.collate_time -= time.time()
         label_coords = []
         for split in self.filter_splits:
             split_label_coords = kge.job.util.get_sp_po_coords_from_spo_batch(
@@ -593,7 +592,7 @@ class EntityRankingJob(EvaluationJob):
                 indices[1][sp_indices_mask], return_inverse=True
             )
             unique_po_indices, unique_po_inverse = torch.unique(
-                indices[1][po_indices_mask], return_inverse=True
+                indices[1][po_indices_mask]-num_entities, return_inverse=True
             )
             unique_sp_indices_in_mask = torch.from_numpy(
                 np.isin(unique_sp_indices.cpu(), cpu_targets, assume_unique=True)
