@@ -479,7 +479,7 @@ class RandomWorkScheduler(WorkScheduler):
 
     def _load_partitions(self, dataset_folder, num_partitions):
         num_triples = len(self.dataset.split("train"))
-        permuted_triple_index = torch.randperm(num_triples)
+        permuted_triple_index = torch.from_numpy(np.random.permutation(num_triples))
         partitions = list(torch.chunk(permuted_triple_index, num_partitions))
         partitions = [p.clone() for p in partitions]
         return partitions
