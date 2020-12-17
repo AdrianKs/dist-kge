@@ -122,7 +122,6 @@ class EntityRankingJob(EvaluationJob):
             ).unique_samples()
             negatives_numpy = negatives.numpy()
 
-        self.collate_time -= time.time()
         label_coords = []
         for split in self.filter_splits:
             split_label_coords = kge.job.util.get_sp_po_coords_from_spo_batch(
