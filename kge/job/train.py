@@ -16,19 +16,10 @@ from kge import Config, Dataset
 from kge.job import Job, TrainingOrEvaluationJob
 from kge.model import KgeModel
 
-from kge.util import KgeLoss, KgeOptimizer, KgeSampler, KgeLRScheduler
-from kge.util.io import load_checkpoint
+from kge.util import KgeLoss, KgeOptimizer, KgeLRScheduler
 from kge.job.trace import format_trace_entry
 
-# fixme: for some reason python from console cries about circular imports if loaded
-#  from init. But directly it works (partially initialized model)
-from kge.distributed.work_scheduler import SchedulerClient
-from kge.distributed.parameter_client import KgeParameterClient
-from kge.distributed.misc import get_min_rank
-
-# from kge.distributed import KgeParameterClient, SchedulerClient
 from typing import Any, Callable, Dict, List, Optional
-import kge.job.util
 from kge.util.metric import Metric
 from kge.misc import init_from
 
@@ -71,36 +62,20 @@ class TrainingJob(TrainingOrEvaluationJob):
         dataset: Dataset,
         parent_job: Job = None,
         model=None,
+        optimizer=None,
         forward_only=False,
-        parameter_client: Optional[KgeParameterClient] = None,
-        init_for_load_only=False,
     ) -> None:
         from kge.job import EvaluationJob
 
         super().__init__(config, dataset, parent_job)
-        self.parameter_client = parameter_client
-        self.min_rank = get_min_rank(config)
-        self.entity_sync_level = self.config.get("job.distributed.entity_sync_level")
-        self.relation_sync_level = self.config.get(
-            "job.distributed.relation_sync_level"
-        )
 
-        self.work_scheduler_client = SchedulerClient(self.config)
-        (
-            max_partition_entities,
-            max_partition_relations,
-        ) = self.work_scheduler_client.get_init_info()
         if model is None:
             self.model: KgeModel = KgeModel.create(
                 config,
                 dataset,
-                parameter_client=parameter_client,
-                max_partition_entities=max_partition_entities,
             )
         else:
             self.model: KgeModel = model
-        # barrier to wait for loading of pretrained embeddings
-        self.parameter_client.barrier()
         self.loss = KgeLoss.create(config)
         self.abort_on_nan: bool = config.get("train.abort_on_nan")
         self.batch_size: int = config.get("train.batch_size")
@@ -113,27 +88,17 @@ class TrainingJob(TrainingOrEvaluationJob):
         self.trace_batch: bool = self.config.get("train.trace_level") == "batch"
         self.epoch: int = 0
         self.is_forward_only = forward_only
-        self.entity_mapper_tensors = deque()
-        for i in range(self.config.get("train.num_workers") + 1):
-            self.entity_mapper_tensors.append(
-                torch.full((self.dataset.num_entities(),), -1, dtype=torch.long)
-            )
 
         if not self.is_forward_only:
             self.model.train()
-            lapse_indexes = [
-                torch.arange(dataset.num_entities(), dtype=torch.int),
-                torch.arange(dataset.num_relations(), dtype=torch.int)
-                + dataset.num_entities(),
-                ]
-            self.model.get_s_embedder().to_device()
-            self.model.get_p_embedder().to_device()
-            self.optimizer = KgeOptimizer.create(
-                config,
-                self.model,
-                parameter_client=parameter_client,
-                lapse_indexes=lapse_indexes,
-            )
+
+            if optimizer is None:
+                self.optimizer = KgeOptimizer.create(
+                    config,
+                    self.model,
+                )
+            else:
+                self.optimizer = optimizer
             self.kge_lr_scheduler = KgeLRScheduler(config, self.optimizer)
 
             self.valid_trace: List[Dict[str, Any]] = []
@@ -145,37 +110,6 @@ class TrainingJob(TrainingOrEvaluationJob):
             self.valid_job = EvaluationJob.create(
                 valid_conf, dataset, parent_job=self, model=self.model
             )
-
-        # initialize the parameter server
-        #  each worker takes as many entities as it can fit, inits and pushes
-        #  init work is distributed by the work scheduler
-        if not init_for_load_only and not self.config.get("lookup_embedder.pretrain.model_filename"):
-            # only the first worker initializes the relations
-            if self.parameter_client.rank == self.min_rank:
-                self.model.get_p_embedder().push_all()
-            while True:
-                init_entities = self.work_scheduler_client.get_init_work(
-                    self.model.get_s_embedder().vocab_size
-                )
-                if init_entities is None:
-                    break
-                self.model.get_s_embedder().initialize(
-                    self.model.get_s_embedder()._embeddings.weight.data
-                )
-                self.model.get_s_embedder()._normalize_embeddings()
-                push_tensor = torch.cat(
-                    (self.model.get_s_embedder()._embeddings.weight.data[:len(init_entities)].cpu(),
-                     self.model.get_s_embedder().optimizer_values[:len(init_entities)].cpu()),
-                    dim=1
-                )
-                self.parameter_client.push(
-                    init_entities + self.model.get_s_embedder().lapse_offset,
-                    push_tensor.cpu()
-                )
-        self.parameter_client.barrier()
-
-        self.entity_pre_pull = self.config.get("job.distributed.entity_pre_pull")
-        self.relation_pre_pull = self.config.get("job.distributed.relation_pre_pull")
 
         # attributes filled in by implementing classes
         self.loader = None

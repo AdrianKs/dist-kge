@@ -4,12 +4,15 @@ import torch.utils.data
 import numpy as np
 import math
 
-from collections import defaultdict, deque
+from collections import deque
 
 from kge.job import Job
 from kge.job.train import TrainingJob, _generate_worker_init_fn
 from kge.job.train_negative_sampling import TrainingJobNegativeSampling
-from kge.util import KgeSampler
+from kge.model import KgeModel
+from kge.util import KgeOptimizer
+from kge.distributed.work_scheduler import SchedulerClient
+from kge.distributed.misc import get_min_rank
 
 SLOTS = [0, 1, 2]
 S, P, O = SLOTS
@@ -65,18 +68,49 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
         dataset,
         parent_job=None,
         model=None,
+        optimizer=None,
         forward_only=False,
         parameter_client=None,
         init_for_load_only=False,
     ):
+        self.parameter_client = parameter_client
+        self.min_rank = get_min_rank(config)
+
+        self.work_scheduler_client = SchedulerClient(config)
+        (
+            max_partition_entities,
+            max_partition_relations,
+        ) = self.work_scheduler_client.get_init_info()
+        if model is None:
+            model: KgeModel = KgeModel.create(
+                config,
+                dataset,
+                parameter_client=parameter_client,
+                max_partition_entities=max_partition_entities,
+            )
+        model.get_s_embedder().to_device()
+        model.get_p_embedder().to_device()
+        lapse_indexes = [
+            torch.arange(dataset.num_entities(), dtype=torch.int),
+            torch.arange(dataset.num_relations(), dtype=torch.int)
+            + dataset.num_entities(),
+            ]
+        if optimizer is None:
+            optimizer = KgeOptimizer.create(
+                config,
+                model,
+                parameter_client=parameter_client,
+                lapse_indexes=lapse_indexes
+            )
+        # barrier to wait for loading of pretrained embeddings
+        self.parameter_client.barrier()
         super().__init__(
             config,
             dataset,
             parent_job,
             model=model,
+            optimizer=optimizer,
             forward_only=forward_only,
-            parameter_client=parameter_client,
-            init_for_load_only=init_for_load_only,
         )
         self.type_str = "negative_sampling"
         self.load_batch = self.config.get("job.distributed.load_batch")
@@ -84,10 +118,52 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
         self.relation_localize = self.config.get("job.distributed.relation_localize")
         self.entity_async_write_back = self.config.get("job.distributed.entity_async_write_back")
         self.relation_async_write_back = self.config.get("job.distributed.relation_async_write_back")
+        self.entity_sync_level = self.config.get("job.distributed.entity_sync_level")
+        self.relation_sync_level = self.config.get(
+            "job.distributed.relation_sync_level"
+        )
+        self.entity_pre_pull = self.config.get("job.distributed.entity_pre_pull")
+        self.relation_pre_pull = self.config.get("job.distributed.relation_pre_pull")
+        self.entity_mapper_tensors = deque()
+        for i in range(self.config.get("train.num_workers") + 1):
+            self.entity_mapper_tensors.append(
+                torch.full((self.dataset.num_entities(),), -1, dtype=torch.long)
+            )
+
+        self._initialize_parameter_server(init_for_load_only=init_for_load_only)
 
         if self.__class__ == TrainingJobNegativeSamplingDistributed:
             for f in Job.job_created_hooks:
                 f(self)
+
+    def _initialize_parameter_server(self, init_for_load_only=False):
+        # initialize the parameter server
+        #  each worker takes as many entities as it can fit, inits and pushes
+        #  init work is distributed by the work scheduler
+        if not init_for_load_only and not self.config.get("lookup_embedder.pretrain.model_filename"):
+            # only the first worker initializes the relations
+            if self.parameter_client.rank == self.min_rank:
+                self.model.get_p_embedder().push_all()
+            while True:
+                init_entities = self.work_scheduler_client.get_init_work(
+                    self.model.get_s_embedder().vocab_size
+                )
+                if init_entities is None:
+                    break
+                self.model.get_s_embedder().initialize(
+                    self.model.get_s_embedder()._embeddings.weight.data
+                )
+                self.model.get_s_embedder()._normalize_embeddings()
+                push_tensor = torch.cat(
+                    (self.model.get_s_embedder()._embeddings.weight.data[:len(init_entities)].cpu(),
+                     self.model.get_s_embedder().optimizer_values[:len(init_entities)].cpu()),
+                    dim=1
+                )
+                self.parameter_client.push(
+                    init_entities + self.model.get_s_embedder().lapse_offset,
+                    push_tensor.cpu()
+                )
+        self.parameter_client.barrier()
 
     def _prepare(self):
         """Construct dataloader"""
