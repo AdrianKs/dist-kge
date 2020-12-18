@@ -8,6 +8,7 @@ from collections import defaultdict, deque
 
 from kge.job import Job
 from kge.job.train import TrainingJob, _generate_worker_init_fn
+from kge.job.train_negative_sampling import TrainingJobNegativeSampling
 from kge.util import KgeSampler
 
 SLOTS = [0, 1, 2]
@@ -57,7 +58,7 @@ class BatchDataset(torch.utils.data.Dataset):
             self.samples = samples
 
 
-class TrainingJobNegativeSamplingDistributed(TrainingJob):
+class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
     def __init__(
         self,
         config,
@@ -76,23 +77,6 @@ class TrainingJobNegativeSamplingDistributed(TrainingJob):
             forward_only=forward_only,
             parameter_client=parameter_client,
             init_for_load_only=init_for_load_only,
-        )
-        self._sampler = KgeSampler.create(config, "negative_sampling", dataset)
-        self._implementation = self.config.check(
-            "negative_sampling.implementation", ["triple", "all", "batch", "auto"],
-        )
-        if self._implementation == "auto":
-            max_nr_of_negs = max(self._sampler.num_samples)
-            if self._sampler.shared:
-                self._implementation = "batch"
-            elif max_nr_of_negs <= 30:
-                self._implementation = "triple"
-            elif max_nr_of_negs > 30:
-                self._implementation = "batch"
-
-        config.log(
-            "Initializing negative sampling training job with "
-            "'{}' scoring function ...".format(self._implementation)
         )
         self.type_str = "negative_sampling"
         self.load_batch = self.config.get("job.distributed.load_batch")
@@ -246,64 +230,3 @@ class TrainingJobNegativeSamplingDistributed(TrainingJob):
         result.size = len(batch["triples"])
         result.prepare_time += time.time()
 
-    def _process_subbatch(
-        self,
-        batch_index,
-        batch,
-        subbatch_slice,
-        result: TrainingJob._ProcessBatchResult,
-    ):
-        # prepare
-        result.prepare_time -= time.time()
-        triples = batch["triples"][subbatch_slice]
-        batch_negative_samples = batch["negative_samples"]
-        batch_size = len(batch["triples"])
-        subbatch_size = len(triples)
-        result.prepare_time += time.time()
-        labels = batch["labels"]  # reuse b/w subbatches
-
-        # process the subbatch for each slot separately
-        for slot in [S, P, O]:
-            num_samples = self._sampler.num_samples[slot]
-            if num_samples <= 0:
-                continue
-
-            # construct gold labels: first column corresponds to positives,
-            # remaining columns to negatives
-            if labels[slot] is None or labels[slot].shape != (
-                subbatch_size,
-                1 + num_samples,
-            ):
-                result.prepare_time -= time.time()
-                labels[slot] = torch.zeros(
-                    (subbatch_size, 1 + num_samples), device=self.device
-                )
-                labels[slot][:, 0] = 1
-                result.prepare_time += time.time()
-
-            # compute the scores
-            result.forward_time -= time.time()
-            scores = torch.empty((subbatch_size, num_samples + 1), device=self.device)
-            scores[:, 0] = self.model.score_spo(
-                triples[:, S], triples[:, P], triples[:, O], direction=SLOT_STR[slot],
-            )
-            result.forward_time += time.time()
-            scores[:, 1:] = batch_negative_samples[slot].score(
-                self.model, indexes=subbatch_slice
-            )
-            result.forward_time += batch_negative_samples[slot].forward_time
-            result.prepare_time += batch_negative_samples[slot].prepare_time
-
-            # compute loss for slot in subbatch (concluding the forward pass)
-            result.forward_time -= time.time()
-            loss_value_torch = (
-                self.loss(scores, labels[slot], num_negatives=num_samples) / batch_size
-            )
-            result.avg_loss += loss_value_torch.item()
-            result.forward_time += time.time()
-
-            # backward pass for this slot in the subbatch
-            result.backward_time -= time.time()
-            if not self.is_forward_only:
-                loss_value_torch.backward()
-            result.backward_time += time.time()

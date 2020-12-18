@@ -13,10 +13,10 @@ SLOT_STR = ["s", "p", "o"]
 
 class TrainingJobNegativeSampling(TrainingJob):
     def __init__(
-        self, config, dataset, parent_job=None, model=None, forward_only=False
+        self, config, dataset, parent_job=None, model=None, forward_only=False, parameter_client=None, init_for_load_only=False
     ):
         super().__init__(
-            config, dataset, parent_job, model=model, forward_only=forward_only
+            config, dataset, parent_job, model=model, forward_only=forward_only, parameter_client=parameter_client, init_for_load_only=init_for_load_only
         )
         self._sampler = KgeSampler.create(config, "negative_sampling", dataset)
         self._implementation = self.config.check(
