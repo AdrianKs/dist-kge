@@ -23,18 +23,35 @@ For link prediction tasks, rule-based systems such as
 [AnyBURL](http://web.informatik.uni-mannheim.de/AnyBURL/) are a competitive
 alternative to KGE.
 
+## Quick start
+
+```sh
+# retrieve and install project in development mode
+git clone https://github.com/uma-pi1/kge.git
+cd kge
+pip install -e .
+
+# download and preprocess datasets
+cd data
+sh download_all.sh
+cd ..
+
+# train an example model on toy dataset (you can omit '--job.device cpu' when you have a gpu)
+kge start examples/toy-complex-train.yaml --job.device cpu
+
+```
+
 ## Table of contents
 
 1. [Features](#features)
 2. [Results and pretrained models](#results-and-pretrained-models)
-3. [Quick start](#quick-start)
-4. [Using LibKGE](#using-libkge)
-5. [Currently supported KGE models](#currently-supported-kge-models)
-6. [Adding a new model](#adding-a-new-model)
-7. [Known issues](#known-issues)
-8. [Changelog](CHANGELOG.md)
-9. [Other KGE frameworks](#other-kge-frameworks)
-10. [How to cite](#how-to-cite)
+3. [Using LibKGE](#using-libkge)
+4. [Currently supported KGE models](#currently-supported-kge-models)
+6. [Extending LibKGE](#extending-libkge)
+6. [Known issues](#known-issues)
+7. [Changelog](CHANGELOG.md)
+8. [Other KGE frameworks](#other-kge-frameworks)
+9. [How to cite](#how-to-cite)
 
 ## Features
 
@@ -160,23 +177,44 @@ The result given below was found by the same automatic hyperparameter search use
 |-------------------------------------------------------------|------:|-------:|-------:|--------:|-----------------------------------------------------------------------------------------------:|--------------------------------------------------------------------------------------------:|
 | [ComplEx](http://proceedings.mlr.press/v48/trouillon16.pdf) | 0.551 |  0.476 |  0.596 |   0.682 | [config.yaml](http://web.informatik.uni-mannheim.de/pi1/libkge-models/yago3-10-complex.yaml) | [NegSamp-kl](http://web.informatik.uni-mannheim.de/pi1/libkge-models/yago3-10-complex.pt) |
 
-## Quick start
+#### CoDEx
 
-```sh
-# retrieve and install project in development mode
-git clone https://github.com/uma-pi1/kge.git
-cd kge
-pip install -e .
+[CoDEx](https://github.com/tsafavi/codex) is a Wikidata-based KG completion
+benchmark. The results here have been obtained using the automatic
+hyperparameter search used for the Freebase and WordNet datasets, but with fewer
+epochs and Ax trials for CoDEx-M and CoDEx-L. See the [CoDEx
+paper](https://arxiv.org/pdf/2009.07810.pdf) (EMNLP 2020) for details.
 
-# download and preprocess datasets
-cd data
-sh download_all.sh
-cd ..
+##### CoDEx-S
 
-# train an example model on toy dataset (you can omit '--job.device cpu' when you have a gpu)
-kge start examples/toy-complex-train.yaml --job.device cpu
+|  | MRR | Hits@1 | Hits@3 | Hits@10 | Config file | Pretrained model |
+|---------|----:|----:|-------:|--------:|------------:|-----------------:|
+| RESCAL | 0.404 | 0.293 | 0.4494 | 0.623 | [config.yaml](https://github.com/tsafavi/codex/tree/master/models/link-prediction/codex-s/rescal/config.yaml) | [1vsAll-kl](https://www.dropbox.com/s/v209jchl93mmeuv/codex-s-lp-rescal.pt?dl=0) |
+| TransE | 0.354 | 0.219 | 0.4218 | 0.634 | [config.yaml](https://github.com/tsafavi/codex/tree/master/models/link-prediction/codex-s/transe/config.yaml) | [NegSamp-kl](https://www.dropbox.com/s/8brqhb4bd5gnktc/codex-s-lp-transe.pt?dl=0) |
+| ComplEx | 0.465 | 0.372 | 0.5038 | 0.646 | [config.yaml](https://github.com/tsafavi/codex/tree/master/models/link-prediction/codex-s/complex/config.yaml) | [1vsAll-kl](https://www.dropbox.com/s/kk3pgdnyddsdzn9/codex-s-lp-complex.pt?dl=0) |
+| ConvE | 0.444 | 0.343 | 0.4926  | 0.635 | [config.yaml](https://github.com/tsafavi/codex/tree/master/models/link-prediction/codex-s/conve/config.yaml) | [1vsAll-kl](https://www.dropbox.com/s/atvu77pzed6mcgh/codex-s-lp-conve.pt?dl=0) |
+| TuckER | 0.444 | 0.339 | 0.4975 | 0.638 | [config.yaml](https://github.com/tsafavi/codex/tree/master/models/link-prediction/codex-s/tucker/config.yaml) | [KvsAll-kl](https://www.dropbox.com/s/f87xloe2g3f4fvy/codex-s-lp-tucker.pt?dl=0) 
 
-```
+##### CoDEx-M
+
+|  | MRR | Hits@1 | Hits@3 |Hits@10 | Config file | Pretrained model |
+|---------|----:|----:|-------:|--------:|------------:|-----------------:|
+| RESCAL | 0.317 | 0.244 | 0.3477 | 0.456 | [config.yaml](https://github.com/tsafavi/codex/tree/master/models/link-prediction/codex-m/rescal/config.yaml) | [1vsAll-kl](https://www.dropbox.com/s/e3kp3eu4nnknn5b/codex-m-lp-rescal.pt?dl=0) |
+| TransE | 0.303 | 0.223 | 0.3363 | 0.454 | [config.yaml](https://github.com/tsafavi/codex/tree/master/models/link-prediction/codex-m/transe/config.yaml) | [NegSamp-kl](https://www.dropbox.com/s/y8uucaajpofct3x/codex-m-lp-transe.pt?dl=0) |
+| ComplEx | 0.337 | 0.262 | 0.3701 | 0.476 | [config.yaml](https://github.com/tsafavi/codex/tree/master/models/link-prediction/codex-m/complex/config.yaml) | [KvsAll-kl](https://www.dropbox.com/s/psy21fvbn5pbmw6/codex-m-lp-complex.pt?dl=0) |
+| ConvE | 0.318 | 0.239 | 0.3551 | 0.464 | [config.yaml](https://github.com/tsafavi/codex/tree/master/models/link-prediction/codex-m/conve/config.yaml) | [NegSamp-kl](https://www.dropbox.com/s/awjhlrfjrgz9phi/codex-m-lp-conve.pt?dl=0) |
+| TuckER | 0.328 | 0.259 | 0.3599 | 0.458 | [config.yaml](https://github.com/tsafavi/codex/tree/master/models/link-prediction/codex-m/tucker/config.yaml) | [KvsAll-kl](https://www.dropbox.com/s/so5l2owtx7wcos1/codex-m-lp-tucker.pt?dl=0) |
+
+
+##### CoDEx-L
+
+|  | MRR | Hits@1 | Hits@3 | Hits@10 | Config file | Pretrained model |
+|---------|----:|----:|-------:|--------:|------------:|-----------------:|
+| RESCAL | 0.304 | 0.242 | 0.3313 | 0.419 | [config.yaml](https://github.com/tsafavi/codex/tree/master/models/link-prediction/codex-l/rescal/config.yaml) | [1vsAll-kl](https://www.dropbox.com/s/wvbef9u98vmkbi8/codex-l-lp-rescal.pt?dl=0) |
+| TransE | 0.187 | 0.116 | 0.2188 | 0.317 | [config.yaml](https://github.com/tsafavi/codex/tree/master/models/link-prediction/codex-l/transe/config.yaml) | [NegSamp-kl](https://www.dropbox.com/s/s9d682b49tuq5mc/codex-l-lp-transe.pt?dl=0) |
+| ComplEx | 0.294 | 0.237 | 0.3179 | 0.400 | [config.yaml](https://github.com/tsafavi/codex/tree/master/models/link-prediction/codex-l/complex/config.yaml) | [1vsAll-kl](https://www.dropbox.com/s/jqubvr77og2pvzv/codex-l-lp-complex.pt?dl=0) |
+| ConvE | 0.303 | 0.240 | 0.3298 | 0.420 | [config.yaml](https://github.com/tsafavi/codex/tree/master/models/link-prediction/codex-l/conve/config.yaml) | [1vsAll-kl](https://www.dropbox.com/s/qcfjy6i1sqbec0z/codex-l-lp-conve.pt?dl=0) |
+| TuckER | 0.309 | 0.244 | 0.3395 | 0.430 | [config.yaml](https://github.com/tsafavi/codex/tree/master/models/link-prediction/codex-l/tucker/config.yaml) | [KvsAll-kl](https://www.dropbox.com/s/j8u4nqwzz3v7jw1/codex-l-lp-tucker.pt?dl=0) |
 
 ## Using LibKGE
 
@@ -405,23 +443,48 @@ The [examples](examples) folder contains some configuration files as examples of
 
 We welcome contributions to expand the list of supported models! Please see [CONTRIBUTING](CONTRIBUTING.md) for details and feel free to initially open an issue.
 
-## Adding a new model or embedder
+## Extending LibKGE
 
-To add a new model to LibKGE, extend the
-[KgeModel](https://github.com/uma-pi1/kge/blob/1c69d8a6579d10e9d9c483994941db97e04f99b3/kge/model/kge_model.py#L243)
-class. A model is made up of a
-[KgeEmbedder](https://github.com/uma-pi1/kge/blob/1c69d8a6579d10e9d9c483994941db97e04f99b3/kge/model/kge_model.py#L170)
-to associate each subject, relation and object to an embedding, and a
-[KgeScorer](https://github.com/uma-pi1/kge/blob/1c69d8a6579d10e9d9c483994941db97e04f99b3/kge/model/kge_model.py#L76)
-to score triples given their embeddings.
+LibKGE can be extended with new training, evaluation, or search jobs as well as
+new models and embedders.
 
-The model implementation should be stored under
-`<kge-home>/kge/model/<model-name>.py`, its configuration options under
-`<kge-home>/kge/model/<model-name>.yaml` and its import has to be added to `<kge-home>/kge/model/__init__.py`.
+KGE models implement the `KgeModel` class and generally consist of a
+`KgeEmbedder` to associate each subject, relation and object to an embedding and
+a `KgeScorer` to score triples given their embeddings. All these base classes
+are defined in [kge_model.py](kge/model/kge_model.py). 
 
-The embdedder implementation should be stored under
-`<kge-home>/kge/model/embedder/<embedder-name>.py`, its configuration options under
-`<kge-home>/kge/model/embedder/<embedder-name>.yaml` and its import has to be added to `<kge-home>/kge/model/__init__.py`.
+KGE jobs perform training, evaluation, and hyper-parameter search. The relevant base classes are [Job](kge/job/job.py), [TrainingJob](kge/job/train.py), [EvaluationJob](kge/job/eval.py), and [SearchJob](kge/job/search.py).
+
+To add a component, say `mycomp` (= a model, embedder, or job) with
+implementation `MyClass`, you need to:
+
+1. Create a configuration file `mycomp.yaml`. You may store this file directly
+   in the LibKGE module folders (e.g., `<kge-home>/kge/model/`) or in your own
+   module folder. If you plan to contribute your code to LibKGE, we suggest to
+   directly develop in the LibKGE module folders. If you just want to play
+   around or publish your code separately from LibKGE, use your own module.
+
+2. Define all required options for your component, their default values, and
+   their types in `mycomp.yaml`. We suggest to follow LibKGE's core philosophy
+   and define every option that can influence the outcome of an experiment in
+   this way. Please pay attention w.r.t. integer (`0`) vs. float (`0.0`) values;
+   e.g., `float_option: 0` is incorrect because is interpreted as an integer.
+
+3. Implement `MyClass` in a module of your choice. In `mycomp.yaml`, add key
+   `mycomp.class_name` with value `MyClass`. If you follow LibKGE's directory
+   structure (`mycomp.yaml` for configuration and `mycomp.py` for
+   implementation), then ensure that `MyClass` is imported in `__init__.py`
+   (e.g., as done [here](kge/model/__init__.py)).
+
+4. To use your component in an experiment, register your module via the
+   `modules` key and its configuration via the `import` key in the experiment's
+   configuration file. See [config-default.yaml](kge/config-default.yaml) for a
+   description of those keys. For example, in `myexp_config.yaml`, add:
+
+   ```yaml
+   modules: [ kge.model, kge.model.embedder, mymodule ]
+   import: [ mycomp ]
+   ```
 
 ## Known issues
 
