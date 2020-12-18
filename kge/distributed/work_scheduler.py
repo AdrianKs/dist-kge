@@ -202,8 +202,8 @@ class WorkScheduler(mp.get_context("spawn").Process):
                     if self.repartition_epoch:
                         if self.repartition_future is not None:
                             self.repartition_future.cancel()
-                    if self.repartition_worker_pool is not None:
-                        self.repartition_worker_pool.shutdown()
+                        if self.repartition_worker_pool is not None:
+                            self.repartition_worker_pool.shutdown()
                     break
             if cmd == SCHEDULER_CMDS.INIT_INFO:
                 self._handle_init_info(rank)
