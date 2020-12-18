@@ -84,17 +84,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
         scheduling_order="random",
         repartition_epoch=True,
     ):
-        if partition_type == "block_partition":
-            return BlockWorkScheduler(
-                config=config,
-                world_size=world_size,
-                master_ip=master_ip,
-                master_port=master_port,
-                num_partitions=num_partitions,
-                num_clients=num_clients,
-                dataset_folder=dataset_folder,
-            )
-        elif partition_type == "random_partition":
+        if partition_type == "random_partition":
             return RandomWorkScheduler(
                 config=config,
                 world_size=world_size,
@@ -391,52 +381,6 @@ class WorkScheduler(mp.get_context("spawn").Process):
                 partition_assignment,
             )
         return partition_assignment
-
-
-class BlockWorkScheduler(WorkScheduler):
-    def __init__(
-        self,
-        config,
-        world_size,
-        master_ip,
-        master_port,
-        num_partitions,
-        num_clients,
-        dataset_folder,
-    ):
-        self.partition_type = "block_partition"
-        super(BlockWorkScheduler, self).__init__(
-            config,
-            world_size,
-            master_ip,
-            master_port,
-            num_partitions,
-            num_clients,
-            dataset_folder,
-        )
-
-    def _next_work(
-        self, rank
-    ) -> Tuple[
-        Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor], bool
-    ]:
-        """add work/partitions to the list of work to do"""
-        try:
-            return self.partitions[self.work_to_do.pop()], None, None, False
-        except IndexError:
-            return None, None, None, False
-
-    def _load_partitions(self, dataset_folder, num_partitions):
-        partition_assignment = self._load_partition_file(
-            self.partition_type, dataset_folder, num_partitions
-        )
-        # todo: let the partitions start at zero, then we do not need this unique
-        partition_indexes = np.unique(partition_assignment)
-        partitions = [
-            torch.from_numpy(np.where(partition_assignment == i)[0])
-            for i in partition_indexes
-        ]
-        return partitions
 
 
 class RandomWorkScheduler(WorkScheduler):
