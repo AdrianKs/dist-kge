@@ -864,7 +864,7 @@ class KgeBatchSampler(KgeSampler):
         return positive_triples[:, slot][
             torch.randint(
                 len(positive_triples),
-                [positive_triples, num_samples],
+                [len(positive_triples), num_samples],
                 dtype=torch.long,
             )
         ]
