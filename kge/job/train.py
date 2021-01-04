@@ -3,7 +3,6 @@ import os
 import math
 import time
 import traceback
-import gc
 from collections import defaultdict, deque
 
 from dataclasses import dataclass
@@ -120,6 +119,9 @@ class TrainingJob(TrainingOrEvaluationJob):
         # in self.valid_trace[-1] Signature: job
         self.post_valid_hooks: List[Callable[[Job], Any]] = []
 
+        # Hooks run on early stopping
+        self.early_stop_hooks: List[Callable[[Job], Any]] = []
+
         if self.__class__ == TrainingJob:
             for f in Job.job_created_hooks:
                 f(self)
@@ -162,6 +164,7 @@ class TrainingJob(TrainingOrEvaluationJob):
         checkpoint_keep = self.config.get("train.checkpoint.keep")
         metric_name = self.config.get("valid.metric")
         patience = self.config.get("valid.early_stopping.patience")
+        distributed = "distributed" in self.config.get("train.type")
         while True:
             # checking for model improvement according to metric_name
             # and do early stopping and keep the best checkpoint
@@ -172,10 +175,8 @@ class TrainingJob(TrainingOrEvaluationJob):
                 best_index = Metric(self).best_index(
                     list(map(lambda trace: trace[metric_name], self.valid_trace))
                 )
-                # we are now saving the best checkpoint directly after validating
-                # otherwise we would have to create the complete model again here
-                # if best_index == len(self.valid_trace) - 1:
-                #     self.save(self.config.checkpoint_file("best"))
+                if best_index == len(self.valid_trace) - 1 and distributed:
+                    self.save(self.config.checkpoint_file("best"))
                 if (
                     patience > 0
                     and len(self.valid_trace) > patience
@@ -187,9 +188,10 @@ class TrainingJob(TrainingOrEvaluationJob):
                         )
                         + "in the last {} validation runs).".format(patience)
                     )
-                    self.parameter_client.stop()
-                    # break
-                elif self.epoch > self.config.get(
+                    for f in self.early_stop_hooks:
+                        f(self)
+                    break
+                if self.epoch > self.config.get(
                     "valid.early_stopping.threshold.epochs"
                 ):
                     achieved = self.valid_trace[best_index][metric_name]
@@ -202,18 +204,13 @@ class TrainingJob(TrainingOrEvaluationJob):
                                 metric_name, self.epoch
                             )
                         )
-                        self.parameter_client.stop()
-                        # self.work_scheduler_client.shutdown()
-                        # break
+                        for f in self.early_stop_hooks:
+                            f(self)
+                        break
 
             # should we stop?
             if self.epoch >= self.config.get("train.max_epochs"):
                 self.config.log("Maximum number of epochs reached.")
-                break
-
-            self.parameter_client.barrier()
-            if self.parameter_client.is_stopped():
-                self.config.log(f"Shutting down Trainer {self.parameter_client.rank}")
                 break
 
             # start a new epoch
@@ -228,142 +225,62 @@ class TrainingJob(TrainingOrEvaluationJob):
             self.model.meta["train_config"] = self.config
             self.model.meta["train_trace_entry"] = trace_entry
 
-            print("done worker: ", self.parameter_client.rank)
-            if self.config.get("valid.every") > 0 and self.epoch % self.config.get("valid.every") == 0:
-                tmp_model = self.model.cpu()
-                self.valid_job.model = tmp_model
-                del self.model
-                gc.collect()
-                torch.cuda.empty_cache()
-                self.parameter_client.barrier()
-                if self.parameter_client.rank == self.min_rank:
-                    # move current small model to a tmp model
-                    # self.model = self.model.cpu()
-                    tmp_optimizer = self.optimizer
-                    # TODO: we also need to handle the learning rate scheduler somehow
-                    #  in the checkpoint
-
-                    # create a model for validation with entity embedder size
-                    #  batch_size x 2 + eval.chunk_size
-                    self.config.set(self.config.get("model") + ".create_eval", True)
-                    self.model = KgeModel.create(
-                        self.config, self.dataset, parameter_client=self.parameter_client
-                    )
-                    self.model.get_s_embedder().to_device(move_optim_data=False)
-                    self.model.get_p_embedder().to_device(move_optim_data=False)
-                    self.config.set(self.config.get("model") + ".create_eval", False)
-
-                    self.valid_job.model = self.model
-                    # validate and update learning rate
-                    if (
-                        self.config.get("valid.every") > 0
-                        and self.epoch % self.config.get("valid.every") == 0
-                    ):
-                        self.valid_job.epoch = self.epoch
-                        trace_entry = self.valid_job.run()
-                        self.valid_trace.append(trace_entry)
-                        for f in self.post_valid_hooks:
-                            f(self)
-                        self.model.meta["valid_trace_entry"] = trace_entry
-
-                        # metric-based scheduler step
-                        self.kge_lr_scheduler.step(trace_entry[metric_name])
-                    else:
-                        self.kge_lr_scheduler.step()
-
-                    # create a new complete model, to be able to store
-                    self.config.set(self.config.get("model") + ".create_complete", True)
-                    worker_folder = self.config.folder
-                    valid_folder = os.path.dirname(worker_folder)
-                    self.config.folder = valid_folder
-                    self.config.set("job.device", "cpu")
-                    self.model = KgeModel.create(
-                        self.config, self.dataset, parameter_client=self.parameter_client
-                    )
-                    self.model.get_s_embedder().pull_all()
-                    self.model.get_p_embedder().pull_all()
-                    self.optimizer = KgeOptimizer.create(
-                        self.config, self.model, parameter_client=self.parameter_client
-                    )
-                    self.optimizer.pull_all()
-                    self.config.set("job.device", self.device)
-                    # self.model = self.model.to(self.device)
-                    # we need to move some mappers separately to device
-                    # self.model.get_s_embedder().to_device(move_optim_data=False)
-                    # self.model.get_p_embedder().to_device(move_optim_data=False)
-
-                    # create checkpoint and delete old one, if necessary
-                    self.save(self.config.checkpoint_file(self.epoch))
-                    if (
-                            len(self.valid_trace) > 0
-                            and self.valid_trace[-1]["epoch"] == self.epoch
-                    ):
-                        best_index = max(
-                            range(len(self.valid_trace)),
-                            key=lambda index: self.valid_trace[index][metric_name],
-                        )
-                        if best_index == len(self.valid_trace) - 1:
-                            self.save(self.config.checkpoint_file("best"))
-                    if self.epoch > 1:
-                        delete_checkpoint_epoch = -1
-                        if checkpoint_every == 0:
-                            # do not keep any old checkpoints
-                            delete_checkpoint_epoch = self.epoch - 1
-                        # in the distributed setup we only save checkpoints when we evaluate
-                        #  since it is expensive to create the complete model
-                        # therefore checkpoint every does not work
-                        # elif (self.epoch - 1) % checkpoint_every != 0:
-                        #     # delete checkpoints that are not in the checkpoint.every schedule
-                        #     delete_checkpoint_epoch = self.epoch - 1
-                        elif checkpoint_keep > 0:
-                            # keep a maximum number of checkpoint_keep checkpoints
-                            # since in distributed setup we only create checkpoints when
-                            #  we evaluate, checkpoint_keep needs to refer to valid.every
-                            # delete_checkpoint_epoch = (
-                            #     self.epoch - checkpoint_every * checkpoint_keep
-                            # )
-                            delete_checkpoint_epoch = (
-                                    self.epoch - self.config.get("valid.every") * checkpoint_keep
-                            )
-                        if delete_checkpoint_epoch > 0:
-                            if os.path.exists(
-                                self.config.checkpoint_file(delete_checkpoint_epoch)
-                            ):
-                                self.config.log(
-                                    "Removing old checkpoint {}...".format(
-                                        self.config.checkpoint_file(delete_checkpoint_epoch)
-                                    )
-                                )
-                                os.remove(
-                                    self.config.checkpoint_file(delete_checkpoint_epoch)
-                                )
-                            else:
-                                self.config.log(
-                                    "Could not delete old checkpoint {}, does not exits.".format(
-                                        self.config.checkpoint_file(delete_checkpoint_epoch)
-                                    )
-                                )
-                    self.config.set(self.config.get("model") + ".create_complete", False)
-                    self.config.folder = worker_folder
-                    # self.model = self.model.cpu()
-                    del self.optimizer
-                    del self.model
-                    del self.valid_job.model
-                    gc.collect()
-                    torch.cuda.empty_cache()
-                    self.optimizer = tmp_optimizer
-                    self.model = tmp_model.to(self.device)
-                    del tmp_optimizer
-                else:
-                    self.kge_lr_scheduler.step()
-                self.parameter_client.barrier()
-                self.model = tmp_model.to(self.device)
-                del tmp_model
-                gc.collect()
+            # validate and update learning rate
+            if (
+                self.config.get("valid.every") > 0
+                and self.epoch % self.config.get("valid.every") == 0
+            ):
+                self.handle_validation(metric_name)
             else:
                 self.kge_lr_scheduler.step()
 
+            self.handle_running_checkpoint(checkpoint_every, checkpoint_keep)
+
         self.trace(event="train_completed")
+
+    def handle_validation(self, metric_name):
+        self.valid_job.epoch = self.epoch
+        trace_entry = self.valid_job.run()
+        self.valid_trace.append(trace_entry)
+        for f in self.post_valid_hooks:
+            f(self)
+        self.model.meta["valid_trace_entry"] = trace_entry
+
+        # metric-based scheduler step
+        self.kge_lr_scheduler.step(trace_entry[metric_name])
+
+    def handle_running_checkpoint(self, checkpoint_every, checkpoint_keep):
+        # create checkpoint and delete old one, if necessary
+        self.save(self.config.checkpoint_file(self.epoch))
+        if self.epoch > 1:
+            delete_checkpoint_epoch = -1
+            if checkpoint_every == 0:
+                # do not keep any old checkpoints
+                delete_checkpoint_epoch = self.epoch - 1
+            elif (self.epoch - 1) % checkpoint_every != 0:
+                # delete checkpoints that are not in the checkpoint.every schedule
+                delete_checkpoint_epoch = self.epoch - 1
+            elif checkpoint_keep > 0:
+                # keep a maximum number of checkpoint_keep checkpoints
+                delete_checkpoint_epoch = (
+                        self.epoch - 1 - checkpoint_every * checkpoint_keep
+                )
+            if delete_checkpoint_epoch > 0:
+                if os.path.exists(
+                        self.config.checkpoint_file(delete_checkpoint_epoch)
+                ):
+                    self.config.log(
+                        "Removing old checkpoint {}...".format(
+                            self.config.checkpoint_file(delete_checkpoint_epoch)
+                        )
+                    )
+                    os.remove(self.config.checkpoint_file(delete_checkpoint_epoch))
+                else:
+                    self.config.log(
+                        "Could not delete old checkpoint {}, does not exits.".format(
+                            self.config.checkpoint_file(delete_checkpoint_epoch)
+                        )
+                    )
 
     def save(self, filename) -> None:
         """Save current state to specified file"""

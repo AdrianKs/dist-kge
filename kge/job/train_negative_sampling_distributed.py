@@ -3,6 +3,8 @@ import torch
 import torch.utils.data
 import numpy as np
 import math
+import gc
+import os
 
 from collections import deque
 
@@ -11,6 +13,7 @@ from kge.job.train import TrainingJob, _generate_worker_init_fn
 from kge.job.train_negative_sampling import TrainingJobNegativeSampling
 from kge.model import KgeModel
 from kge.util import KgeOptimizer
+from kge.util.metric import Metric
 from kge.distributed.work_scheduler import SchedulerClient
 from kge.distributed.misc import get_min_rank
 
@@ -138,6 +141,7 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             )
 
         self._initialize_parameter_server(init_for_load_only=init_for_load_only)
+        self.early_stop_hooks.append(lambda job: job.parameter_client.stop())
 
         if self.__class__ == TrainingJobNegativeSamplingDistributed:
             for f in Job.job_created_hooks:
@@ -357,3 +361,143 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
         batch["labels"] = [None] * 3  # reuse label tensors b/w subbatches
         result.size = len(batch["triples"])
         result.prepare_time += time.time()
+
+    def handle_validation(self, metric_name):
+        checkpoint_every = self.config.get("train.checkpoint.every")
+        checkpoint_keep = self.config.get("train.checkpoint.keep")
+
+        tmp_model = self.model.cpu()
+        self.valid_job.model = tmp_model
+        del self.model
+        gc.collect()
+        torch.cuda.empty_cache()
+        self.parameter_client.barrier()
+        if self.parameter_client.rank == self.min_rank:
+            # move current small model to a tmp model
+            # self.model = self.model.cpu()
+            tmp_optimizer = self.optimizer
+            # TODO: we also need to handle the learning rate scheduler somehow
+            #  in the checkpoint
+
+            # create a model for validation with entity embedder size
+            #  batch_size x 2 + eval.chunk_size
+            self.config.set(self.config.get("model") + ".create_eval", True)
+            self.model = KgeModel.create(
+                self.config, self.dataset, parameter_client=self.parameter_client
+            )
+            self.model.get_s_embedder().to_device(move_optim_data=False)
+            self.model.get_p_embedder().to_device(move_optim_data=False)
+            self.config.set(self.config.get("model") + ".create_eval", False)
+
+            self.valid_job.model = self.model
+            # validate and update learning rate
+            if (
+                    self.config.get("valid.every") > 0
+                    and self.epoch % self.config.get("valid.every") == 0
+            ):
+                self.valid_job.epoch = self.epoch
+                trace_entry = self.valid_job.run()
+                self.valid_trace.append(trace_entry)
+                for f in self.post_valid_hooks:
+                    f(self)
+                self.model.meta["valid_trace_entry"] = trace_entry
+
+                # metric-based scheduler step
+                self.kge_lr_scheduler.step(trace_entry[metric_name])
+            else:
+                self.kge_lr_scheduler.step()
+
+            # create a new complete model, to be able to store
+            self.config.set(self.config.get("model") + ".create_complete", True)
+            worker_folder = self.config.folder
+            valid_folder = os.path.dirname(worker_folder)
+            self.config.folder = valid_folder
+            self.config.set("job.device", "cpu")
+            self.model = KgeModel.create(
+                self.config, self.dataset, parameter_client=self.parameter_client
+            )
+            self.model.get_s_embedder().pull_all()
+            self.model.get_p_embedder().pull_all()
+            self.optimizer = KgeOptimizer.create(
+                self.config, self.model, parameter_client=self.parameter_client
+            )
+            self.optimizer.pull_all()
+            self.config.set("job.device", self.device)
+            # self.model = self.model.to(self.device)
+            # we need to move some mappers separately to device
+            # self.model.get_s_embedder().to_device(move_optim_data=False)
+            # self.model.get_p_embedder().to_device(move_optim_data=False)
+
+            # create checkpoint and delete old one, if necessary
+            self.save(self.config.checkpoint_file(self.epoch))
+            if (
+                    len(self.valid_trace) > 0
+                    and self.valid_trace[-1]["epoch"] == self.epoch
+            ):
+                best_index = max(
+                    range(len(self.valid_trace)),
+                    key=lambda index: self.valid_trace[index][metric_name],
+                )
+                if best_index == len(self.valid_trace) - 1:
+                    self.save(self.config.checkpoint_file("best"))
+            if self.epoch > 1:
+                delete_checkpoint_epoch = -1
+                if checkpoint_every == 0:
+                    # do not keep any old checkpoints
+                    delete_checkpoint_epoch = self.epoch - 1
+                # in the distributed setup we only save checkpoints when we evaluate
+                #  since it is expensive to create the complete model
+                # therefore checkpoint every does not work
+                # elif (self.epoch - 1) % checkpoint_every != 0:
+                #     # delete checkpoints that are not in the checkpoint.every schedule
+                #     delete_checkpoint_epoch = self.epoch - 1
+                elif checkpoint_keep > 0:
+                    # keep a maximum number of checkpoint_keep checkpoints
+                    # since in distributed setup we only create checkpoints when
+                    #  we evaluate, checkpoint_keep needs to refer to valid.every
+                    # delete_checkpoint_epoch = (
+                    #     self.epoch - checkpoint_every * checkpoint_keep
+                    # )
+                    delete_checkpoint_epoch = (
+                            self.epoch - self.config.get(
+                        "valid.every") * checkpoint_keep
+                    )
+                if delete_checkpoint_epoch > 0:
+                    if os.path.exists(
+                            self.config.checkpoint_file(delete_checkpoint_epoch)
+                    ):
+                        self.config.log(
+                            "Removing old checkpoint {}...".format(
+                                self.config.checkpoint_file(delete_checkpoint_epoch)
+                            )
+                        )
+                        os.remove(
+                            self.config.checkpoint_file(delete_checkpoint_epoch)
+                        )
+                    else:
+                        self.config.log(
+                            "Could not delete old checkpoint {}, does not exits.".format(
+                                self.config.checkpoint_file(delete_checkpoint_epoch)
+                            )
+                        )
+            self.config.set(self.config.get("model") + ".create_complete", False)
+            self.config.folder = worker_folder
+            # self.model = self.model.cpu()
+            del self.optimizer
+            del self.model
+            del self.valid_job.model
+            gc.collect()
+            torch.cuda.empty_cache()
+            self.optimizer = tmp_optimizer
+            self.model = tmp_model.to(self.device)
+            del tmp_optimizer
+        else:
+            self.kge_lr_scheduler.step()
+        self.parameter_client.barrier()
+        self.model = tmp_model.to(self.device)
+        del tmp_model
+        gc.collect()
+
+    def handle_running_checkpoint(self, checkpoint_every, checkpoint_keep):
+        # do nothing since we are handling this in handle validation currently
+        pass
