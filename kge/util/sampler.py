@@ -942,11 +942,10 @@ class KgeCombinedSampler(KgeSampler):
             self.configuration_key: self.config.get(self.configuration_key)
         }
         combined_options = self.get_option("combined_options")
-        if __name__ == "__main__":
-            for key, option in combined_options.items():
-                if key == "negatives_percentage":
-                    continue
-                sampler_2_options[self.configuration_key][key] = option
+        for key, option in combined_options.items():
+            if key == "negatives_percentage":
+                continue
+            sampler_2_options[self.configuration_key][key] = option
         sampler_2_config.set_all(sampler_2_options, create=True)
         return sampler_2_config
 
