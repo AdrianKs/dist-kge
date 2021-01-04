@@ -1,4 +1,5 @@
 import time
+import traceback
 import torch
 import torch.utils.data
 import numpy as np
@@ -6,7 +7,8 @@ import math
 import gc
 import os
 
-from collections import deque
+from collections import defaultdict, deque
+from typing import Dict, Any
 
 from kge.job import Job
 from kge.job.train import TrainingJob, _generate_worker_init_fn
@@ -14,6 +16,7 @@ from kge.job.train_negative_sampling import TrainingJobNegativeSampling
 from kge.model import KgeModel
 from kge.util import KgeOptimizer
 from kge.util.metric import Metric
+from kge.job.trace import format_trace_entry
 from kge.distributed.work_scheduler import SchedulerClient
 from kge.distributed.misc import get_min_rank
 
@@ -501,3 +504,326 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
     def handle_running_checkpoint(self, checkpoint_every, checkpoint_keep):
         # do nothing since we are handling this in handle validation currently
         pass
+
+    def run_epoch(self) -> Dict[str, Any]:
+        """ Runs an epoch and returns its trace entry. """
+
+        # create initial trace entry
+        self.current_trace["epoch"] = dict(
+            type=self.type_str,
+            scope="epoch",
+            epoch=self.epoch,
+            split=self.train_split,
+            batches=len(self.loader),
+            size=self.num_examples,
+        )
+        if not self.is_forward_only:
+            self.current_trace["epoch"].update(
+                lr=[group["lr"] for group in self.optimizer.param_groups],
+            )
+
+        # run pre-epoch hooks (may modify trace)
+        for f in self.pre_epoch_hooks:
+            f(self)
+
+        trace_entry = None
+        while True:
+            # variables that record various statitics
+            sum_loss = 0.0
+            sum_penalty = 0.0
+            sum_penalties = defaultdict(lambda: 0.0)
+            epoch_time = -time.time()
+            prepare_time = 0.0
+            forward_time = 0.0
+            backward_time = 0.0
+            optimizer_time = 0.0
+            unique_time = 0.0
+            pull_and_map_time = 0.0
+            entity_pull_time = 0.0
+            relation_pull_time = 0.0
+            pre_pull_time = 0.0
+            cpu_gpu_time = 0.0
+            ps_wait_time = 0.0
+            ps_set_time = 0.0
+            scheduler_time = -time.time()
+
+            # load new work package
+            work, work_entities, work_relations = self.work_scheduler_client.get_work()
+            if work is None:
+                break
+            self.dataloader_dataset.set_samples(work)
+            if self.entity_sync_level == "partition":
+                if work_entities is not None:
+                    entity_pull_time -= time.time()
+                    self.model.get_s_embedder()._pull_embeddings(work_entities)
+                    self.model.get_s_embedder().global_to_local_mapper[work_entities] = torch.arange(len(work_entities), dtype=torch.long, device="cpu")
+                    entity_pull_time += time.time()
+                else:
+                    raise ValueError(
+                        "the used work-scheduler seems not to support "
+                        "syncing entities on a partition level"
+                    )
+            if self.relation_sync_level == "partition":
+                if work_relations is not None:
+                    relation_pull_time -= time.time()
+                    self.model.get_p_embedder()._pull_embeddings(work_relations)
+                    self.model.get_p_embedder().global_to_local_mapper[work_relations] = torch.arange(len(work_relations), dtype=torch.long, device="cpu")
+                    relation_pull_time += time.time()
+                else:
+                    raise ValueError(
+                        "the used work-scheduler seems not to support "
+                        "syncing relations on a partition level"
+                    )
+
+            if (
+                    work_entities is not None
+                    and self.config.get("negative_sampling.sampling_type") == "pooled"
+            ):
+                self._sampler.set_pool(work_entities, S)
+                self._sampler.set_pool(work_entities, O)
+            scheduler_time += time.time()
+
+            # process each batch
+            pre_load_batches = deque()
+            batch = None
+            epoch_done = False
+            iter_dataloader = iter(self.loader)
+            batch_index = 0
+            num_prepulls = max(self.entity_pre_pull, self.relation_pre_pull, 1)
+            #for batch_index, batch in enumerate(self.loader):
+            while not epoch_done:
+                try:
+                    if batch is None and len(pre_load_batches) < num_prepulls:
+                        pre_load_batches.append(next(iter_dataloader))
+                        prepare_time -= time.time()
+                        pre_pull_time -= time.time()
+                        self._prepare_batch_ahead(pre_load_batches)
+                        pre_pull_time += time.time()
+                        prepare_time += time.time()
+                        continue
+                    else:
+                        batch = pre_load_batches.popleft()
+                    pre_load_batches.append(next(iter_dataloader))
+                    prepare_time -= time.time()
+                    pre_pull_time -= time.time()
+                    self._prepare_batch_ahead(pre_load_batches)
+                    pre_pull_time += time.time()
+                    prepare_time += time.time()
+                except StopIteration:
+                    if len(pre_load_batches) == 0:
+                        epoch_done = True
+
+                # create initial batch trace (yet incomplete)
+                self.current_trace["batch"] = {
+                    "type": self.type_str,
+                    "scope": "batch",
+                    "epoch": self.epoch,
+                    "split": self.train_split,
+                    "batch": batch_index,
+                    "batches": len(self.loader),
+                }
+                if not self.is_forward_only:
+                    self.current_trace["batch"].update(
+                        lr=[group["lr"] for group in self.optimizer.param_groups],
+                    )
+
+                # run the pre-batch hooks (may update the trace)
+                for f in self.pre_batch_hooks:
+                    f(self)
+
+                # process batch (preprocessing + forward pass + backward pass on loss)
+                batch_result: TrainingJob._ProcessBatchResult = self._auto_subbatched_process_batch(
+                    batch_index, batch)
+                sum_loss += batch_result.avg_loss * batch_result.size
+
+                # determine penalty terms (forward pass)
+                batch_forward_time = batch_result.forward_time - time.time()
+                penalties_torch = self.model.penalty(
+                    epoch=self.epoch,
+                    batch_index=batch_index,
+                    num_batches=len(self.loader),
+                    batch=batch,
+                )
+                batch_forward_time += time.time()
+
+                # backward pass on penalties
+                batch_backward_time = batch_result.backward_time - time.time()
+                penalty = 0.0
+                for index, (penalty_key, penalty_value_torch) in enumerate(
+                        penalties_torch
+                ):
+                    if not self.is_forward_only:
+                        penalty_value_torch.backward()
+                    penalty += penalty_value_torch.item()
+                    sum_penalties[penalty_key] += penalty_value_torch.item()
+                sum_penalty += penalty
+                batch_backward_time += time.time()
+
+                # determine full cost
+                cost_value = batch_result.avg_loss + penalty
+
+                # abort on nan
+                if self.abort_on_nan and math.isnan(cost_value):
+                    raise FloatingPointError("Cost became nan, aborting training job")
+
+                # print memory stats
+                if self.epoch == 1 and batch_index == 0:
+                    if self.device.startswith("cuda"):
+                        self.config.log(
+                            "CUDA memory after first batch: allocated={:14,} "
+                            "reserved={:14,} max_allocated={:14,}".format(
+                                torch.cuda.memory_allocated(self.device),
+                                torch.cuda.memory_reserved(self.device),
+                                torch.cuda.max_memory_allocated(self.device),
+                            )
+                        )
+
+                # update parameters
+                batch_optimizer_time = -time.time()
+                if not self.is_forward_only:
+                    self.optimizer.step()
+                batch_optimizer_time += time.time()
+
+                if self.entity_sync_level == "batch":
+                    self.model.get_s_embedder().push_back()
+                if self.relation_sync_level == "batch":
+                    self.model.get_p_embedder().push_back()
+
+                # update batch trace with the results
+                self.current_trace["batch"].update(
+                    {
+                        "size": batch_result.size,
+                        "avg_loss": batch_result.avg_loss,
+                        #"penalties": [p.item() for k, p in penalties_torch],
+                        "penalty": penalty,
+                        "cost": cost_value,
+                        "prepare_time": batch_result.prepare_time,
+                        "forward_time": batch_forward_time,
+                        "backward_time": batch_backward_time,
+                        "optimizer_time": batch_optimizer_time,
+                        "event": "batch_completed",
+                    }
+                )
+
+                # run the post-batch hooks (may modify the trace)
+                for f in self.post_batch_hooks:
+                    f(self)
+
+                # output, then clear trace
+                if self.trace_batch:
+                    self.trace(**self.current_trace["batch"])
+                self.current_trace["batch"] = None
+
+                # print console feedback
+                self.config.print(
+                    (
+                            "\r"  # go back
+                            + "{}  batch{: "
+                            + str(1 + int(math.ceil(math.log10(len(self.loader)))))
+                            + "d}/{}"
+                            + ", avg_loss {:.4E}, penalty {:.4E}, cost {:.4E}, time {:6.2f}s"
+                            + "\033[K"  # clear to right
+                    ).format(
+                        self.config.log_prefix,
+                        batch_index,
+                        len(self.loader) - 1,
+                        batch_result.avg_loss,
+                        penalty,
+                        cost_value,
+                        batch_result.prepare_time
+                        + batch_forward_time
+                        + batch_backward_time
+                        + batch_optimizer_time,
+                        ),
+                    end="",
+                    flush=True,
+                )
+
+                # update epoch times
+                prepare_time += batch_result.prepare_time
+                forward_time += batch_forward_time
+                backward_time += batch_backward_time
+                optimizer_time += batch_optimizer_time
+                pull_and_map_time += batch_result.pull_and_map_time
+                entity_pull_time += batch_result.entity_pull_time
+                relation_pull_time += batch_result.relation_pull_time
+                unique_time += batch_result.unique_time
+                cpu_gpu_time += batch_result.cpu_gpu_time
+                ps_wait_time += batch_result.ps_wait_time
+
+                batch_index += 1
+
+            # all done; now trace and log
+            epoch_time += time.time()
+            self.config.print("\033[2K\r", end="", flush=True)  # clear line and go back
+
+            other_time = (
+                    epoch_time
+                    - prepare_time
+                    - forward_time
+                    - backward_time
+                    - optimizer_time
+                    - scheduler_time
+            )
+
+            print("work done", self.parameter_client.rank)
+            if self.entity_sync_level == "partition":
+                ps_set_time -= time.time()
+                self.model.get_s_embedder().set_embeddings()
+                ps_set_time += time.time()
+                # this is expensive and unnecessary
+                # self.model.get_s_embedder().global_to_local_mapper[:] = -1
+                self.model.get_s_embedder().push_back()
+            if self.relation_sync_level == "partition":
+                ps_set_time -= time.time()
+                self.model.get_p_embedder().set_embeddings()
+                ps_set_time += time.time()
+                # self.model.get_p_embedder().global_to_local_mapper[:] = -1
+                self.model.get_p_embedder().push_back()
+            self.work_scheduler_client.work_done()
+
+            # add results to trace entry
+            self.current_trace["epoch"].update(
+                dict(
+                    avg_loss=sum_loss / self.num_examples,
+                    avg_penalty=sum_penalty / len(self.loader),
+                    avg_penalties={
+                        k: p / len(self.loader) for k, p in sum_penalties.items()
+
+                    },
+                    avg_cost=sum_loss / self.num_examples + sum_penalty / len(self.loader),
+                    epoch_time=epoch_time,
+                    prepare_time=prepare_time,
+                    ps_wait_time=ps_wait_time,
+                    unique_time=unique_time,
+                    pull_and_map_time=pull_and_map_time,
+                    pre_pull_time=pre_pull_time,
+                    entity_pull_time=entity_pull_time,
+                    relation_pull_time=relation_pull_time,
+                    ps_set_time=ps_set_time,
+                    cpu_gpu_time=cpu_gpu_time,
+                    forward_time=forward_time,
+                    backward_time=backward_time,
+                    optimizer_time=optimizer_time,
+                    scheduler_time=scheduler_time,
+                    other_time=other_time,
+                    embedding_mapping_time=self.model.get_s_embedder().mapping_time + self.model.get_p_embedder().mapping_time,
+                    event="epoch_completed",
+                )
+            )
+            self.model.get_p_embedder().mapping_time = 0.0
+            self.model.get_s_embedder().mapping_time = 0.0
+
+
+            # run hooks (may modify trace)
+            for f in self.post_epoch_hooks:
+                f(self)
+
+            # output the trace, then clear it
+            trace_entry = self.trace(
+                **self.current_trace["epoch"], echo=False,  log=True
+            )
+        self.config.log(format_trace_entry("train_epoch", trace_entry, self.config), prefix="  "
+                        )
+        self.current_trace["epoch"] = None
+        return trace_entry
