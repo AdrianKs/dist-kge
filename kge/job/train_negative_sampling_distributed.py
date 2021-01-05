@@ -1,5 +1,5 @@
 import time
-import traceback
+import shutil
 import torch
 import torch.utils.data
 import numpy as np
@@ -15,7 +15,6 @@ from kge.job.train import TrainingJob, _generate_worker_init_fn
 from kge.job.train_negative_sampling import TrainingJobNegativeSampling
 from kge.model import KgeModel
 from kge.util import KgeOptimizer
-from kge.util.metric import Metric
 from kge.job.trace import format_trace_entry
 from kge.distributed.work_scheduler import SchedulerClient
 from kge.distributed.misc import get_min_rank
@@ -170,22 +169,25 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
                     self.model.get_s_embedder()._embeddings.weight.data
                 )
                 self.model.get_s_embedder()._normalize_embeddings()
-                push_tensor = torch.cat(
-                    (
-                        self.model.get_s_embedder()
-                        ._embeddings.weight.data[: len(init_entities)]
-                        .cpu(),
-                        self.model.get_s_embedder()
-                        .optimizer_values[: len(init_entities)]
-                        .cpu(),
-                    ),
-                    dim=1,
-                )
-                self.parameter_client.push(
-                    init_entities + self.model.get_s_embedder().lapse_offset,
-                    push_tensor.cpu(),
-                )
+                self._push_init_to_parameter_server(init_entities)
         self.parameter_client.barrier()
+
+    def _push_init_to_parameter_server(self, entity_ids: torch.Tensor):
+        push_tensor = torch.cat(
+            (
+                self.model.get_s_embedder()
+                    ._embeddings.weight.data[: len(entity_ids)]
+                    .cpu(),
+                self.model.get_s_embedder()
+                    .optimizer_values[: len(entity_ids)]
+                    .cpu(),
+            ),
+            dim=1,
+        )
+        self.parameter_client.push(
+            entity_ids + self.model.get_s_embedder().lapse_offset,
+            push_tensor.cpu(),
+            )
 
     def _prepare(self):
         """Construct dataloader"""
@@ -410,26 +412,20 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             else:
                 self.kge_lr_scheduler.step()
 
-            # create a new complete model, to be able to store
-            self.config.set(self.config.get("model") + ".create_complete", True)
+            # store checkpoints to root dir
             worker_folder = self.config.folder
             valid_folder = os.path.dirname(worker_folder)
             self.config.folder = valid_folder
-            self.config.set("job.device", "cpu")
-            self.model = KgeModel.create(
-                self.config, self.dataset, parameter_client=self.parameter_client
-            )
-            self.model.get_s_embedder().pull_all()
-            self.model.get_p_embedder().pull_all()
-            self.optimizer = KgeOptimizer.create(
-                self.config, self.model, parameter_client=self.parameter_client
-            )
-            self.optimizer.pull_all()
-            self.config.set("job.device", self.device)
-            # self.model = self.model.to(self.device)
-            # we need to move some mappers separately to device
-            # self.model.get_s_embedder().to_device(move_optim_data=False)
-            # self.model.get_p_embedder().to_device(move_optim_data=False)
+
+            # clean up valid model
+            del self.optimizer
+            del self.model
+            del self.valid_job.model
+            gc.collect()
+            torch.cuda.empty_cache()
+            self.optimizer = tmp_optimizer
+            self.model = tmp_model.to(self.device)
+            del tmp_optimizer
 
             # create checkpoint and delete old one, if necessary
             self.save(self.config.checkpoint_file(self.epoch))
@@ -474,7 +470,9 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
                                 self.config.checkpoint_file(delete_checkpoint_epoch)
                             )
                         )
-                        os.remove(
+                        # in the distributed setup the checkpoint is a directory
+                        # containing multiple checkpoint chunks
+                        shutil.rmtree(
                             self.config.checkpoint_file(delete_checkpoint_epoch)
                         )
                     else:
@@ -483,17 +481,8 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
                                 self.config.checkpoint_file(delete_checkpoint_epoch)
                             )
                         )
-            self.config.set(self.config.get("model") + ".create_complete", False)
             self.config.folder = worker_folder
             # self.model = self.model.cpu()
-            del self.optimizer
-            del self.model
-            del self.valid_job.model
-            gc.collect()
-            torch.cuda.empty_cache()
-            self.optimizer = tmp_optimizer
-            self.model = tmp_model.to(self.device)
-            del tmp_optimizer
         else:
             self.kge_lr_scheduler.step()
         self.parameter_client.barrier()
@@ -827,3 +816,61 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
                         )
         self.current_trace["epoch"] = None
         return trace_entry
+
+    def save(self, filename) -> None:
+        if self.parameter_client.rank == get_min_rank(self.config):
+            # todo: we do not need to store the weights of the emebdders and optim here
+            super(TrainingJobNegativeSamplingDistributed, self).save(filename)
+            local_model_size = self.model.get_s_embedder().vocab_size
+            num_entities = self.dataset.num_entities()
+            file, file_ending = filename.rsplit(".", 1)
+            entities_dir = f"{file}_entities"
+            if not os.path.exists(entities_dir):
+                os.mkdir(entities_dir)
+            for chunk_number in range(math.ceil(num_entities / local_model_size)):
+                chunk_start = local_model_size * chunk_number
+                chunk_end = min(local_model_size * (chunk_number + 1), num_entities)
+                entity_ids = torch.arange(chunk_start, chunk_end, dtype=torch.long)
+                lapse_offset = self.model.get_s_embedder().lapse_offset
+                pull_tensor = self.model.get_s_embedder().pull_tensors[0][1][:len(entity_ids)]
+                self.parameter_client.pull(entity_ids + lapse_offset, pull_tensor)
+                torch.save(
+                    pull_tensor,
+                    os.path.join(
+                        entities_dir, f"{chunk_start}-{chunk_end}.{file_ending}"
+                    )
+                )
+            lapse_offset = self.model.get_p_embedder().lapse_offset
+            pull_tensor = self.model.get_p_embedder().pull_tensors[0][1]
+            relation_ids = torch.arange(self.dataset.num_relations(), dtype=torch.long)
+            self.parameter_client.pull(relation_ids + lapse_offset, pull_tensor)
+            torch.save(pull_tensor, f"{file}_relations.{file_ending}")
+
+    def load_distributed(self, checkpoint_name):
+        """
+        Separate function for loading distributed checkpoints.
+        The main worker iterates over all checkpoints in the dir loads all of them and
+        pushes them to the parameter server.
+        Args:
+            checkpoint_name: Path to the checkpoint
+
+        Returns:
+            None
+        """
+        self.parameter_client.barrier()
+        if self.parameter_client.rank == self.min_rank:
+            checkpoint_name, file_ending = checkpoint_name.rsplit(".", 1)
+            entities_dir = checkpoint_name + "_entities"
+            entities_ps_offset = self.model.get_s_embedder().lapse_offset
+            for file in os.listdir(entities_dir):
+                entity_start, entity_end = os.path.basename(file).split(".")[0].split("-")
+                push_tensor = torch.load(os.path.join(entities_dir, file))
+                entity_ids = torch.arange(
+                    int(entity_start), int(entity_end), dtype=torch.long
+                )
+                self.parameter_client.push(entity_ids + entities_ps_offset, push_tensor)
+            relations_ps_offset = self.model.get_p_embedder().lapse_offset
+            push_tensor = torch.load(f"{checkpoint_name}_relations.{file_ending}")
+            relation_ids = torch.arange(self.dataset.num_relations(), dtype=torch.long)
+            self.parameter_client.push(relation_ids + relations_ps_offset, push_tensor)
+        self.parameter_client.barrier()

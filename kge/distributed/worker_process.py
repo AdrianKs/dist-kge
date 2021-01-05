@@ -10,6 +10,7 @@ from torch import distributed as dist
 from kge import Dataset
 from kge.misc import set_seeds
 from kge.job import Job
+from kge.util.io import load_checkpoint
 from .parameter_client import KgeParameterClient
 from .misc import get_min_rank
 
@@ -29,7 +30,7 @@ class WorkerProcessPool:
         optimizer_dim,
         config,
         dataset,
-        checkpoint: Optional[Dict] = None,
+        checkpoint_name: Optional[str] = None,
     ):
         config.log(f"creating worker process pool with {num_total_workers} worker")
         self.workers = []
@@ -55,7 +56,7 @@ class WorkerProcessPool:
                 configs[rank],
                 dataset,
                 parameters=parameters,
-                checkpoint=checkpoint,
+                checkpoint_name=checkpoint_name,
                 result_pipe=send_end
             )
             worker.start()
@@ -82,7 +83,7 @@ class WorkerProcess(mp.get_context("spawn").Process):
         config,
         dataset,
         parameters=None,
-        checkpoint: Optional[Dict] = None,
+        checkpoint_name: Optional[str] = None,
         result_pipe=None,
     ):
         # rank = rank + 1
@@ -97,7 +98,7 @@ class WorkerProcess(mp.get_context("spawn").Process):
         self.config = config
         self.dataset = dataset
         self.parameters = parameters
-        self.checkpoint = checkpoint
+        self.checkpoint_name = checkpoint_name
         self.result_pipe = result_pipe
 
     def run(self):
@@ -157,33 +158,18 @@ class WorkerProcess(mp.get_context("spawn").Process):
             num_meta_keys=self.num_meta_keys,
             worker_group=worker_group,
         )
-        init_for_load_only = False
-
-        # load data from checkpoint and create job
-        if parameter_client.rank == min_rank and self.checkpoint is not None:
-            # Todo: we still create a complete new job after creating the resume job
-            self.config.set(self.config.get("model") + ".create_complete", True)
-            tmp_device = self.config.get("job.device")
-            self.config.set("job.device", "cpu")
-            job = Job.create_from(self.checkpoint, new_config=self.config, parameter_client=parameter_client)
-            job.model.get_s_embedder().push_all()
-            job.model.get_p_embedder().push_all()
-            self.config.set("job.device", tmp_device)
-            self.config.set(self.config.get("model") + ".create_complete", False)
-
-            # don't re-initialize the model afterwards
-            init_for_load_only = True
-
+        # don't re-initialize the model after loading checkpoint
+        init_for_load_only = self.checkpoint_name is not None
         job = Job.create(
             config=config,
             dataset=dataset,
             parameter_client=parameter_client,
             init_for_load_only=init_for_load_only,
         )
-        if parameter_client.rank == min_rank and self.checkpoint is not None:
-            job.epoch = self.checkpoint["epoch"]
-            job.valid_trace = self.checkpoint["valid_trace"]
-            del self.checkpoint
+        if self.checkpoint_name is not None:
+            checkpoint = load_checkpoint(self.checkpoint_name)
+            job._load(checkpoint)
+            job.load_distributed(checkpoint_name=self.checkpoint_name)
 
         job.run()
 

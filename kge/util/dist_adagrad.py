@@ -100,7 +100,7 @@ class DistAdagrad(Optimizer):
         super(DistAdagrad, self).__init__(params, defaults)
 
         for group in self.param_groups:
-            if parameter_client.rank == 2 and group["name"] != "default":
+            if group["name"] != "default":
                 if parameter_client.get_lr(group["name"]) == 0:
                     self.parameter_client.set_lr(group["name"], group["lr"])
             for i, p in enumerate(group["params"]):
@@ -254,4 +254,36 @@ class DistAdagrad(Optimizer):
             if group["name"] == "default":
                 continue
             group["lr"] = self.parameter_client.get_lr(group["name"])
+
+    def state_dict(self) -> dict:
+        """
+        We are removing the optimizer values from state dict since stored separately
+        """
+        state_dict = super(DistAdagrad, self).state_dict()
+        for i, group in enumerate(state_dict["param_groups"]):
+            for key in ["optimizer_values", "local_to_lapse_mapper"]:
+                state_dict["param_groups"][i].pop(key, None)
+        return state_dict
+
+    def load_state_dict(self, state_dict: dict) -> None:
+        """
+        We need to keep the created references to the opitmizer values in the embedder.
+        super.load_state_dict removes the created references if not in state_dict.
+        """
+
+        saved_references = list()
+        for group in self.param_groups:
+            ref = dict()
+            if "optimizer_values" in group:
+                ref["optimizer_values"] = group["optimizer_values"]
+            if "local_to_lapse_mapper" in group:
+                ref["local_to_lapse_mapper"] = group["local_to_lapse_mapper"]
+            saved_references.append(ref)
+        super(DistAdagrad, self).load_state_dict(state_dict)
+        for ref, group in zip(saved_references, self.param_groups):
+            group.update(ref)
+            if group["name"] != "default":
+                if self.parameter_client.get_lr(group["name"]) == 0:
+                    self.parameter_client.set_lr(group["name"], group["lr"])
+
 
