@@ -291,6 +291,7 @@ class KgeEmbedder(KgeBase):
                     vocab_size=vocab_size,
                     init_for_load_only=init_for_load_only,
                     parameter_client=parameter_client,
+                    lapse_offset=lapse_offset,
                     complete_vocab_size=complete_vocab_size
                 )
             else:
@@ -415,11 +416,11 @@ class KgeModel(KgeBase):
                 embedding_layer_size = self._calc_embedding_layer_size(config, dataset)
             config.log(f"creating entity_embedder with {embedding_layer_size} keys")
             self._entity_embedder = KgeEmbedder.create(
-                config,
-                dataset,
-                self.configuration_key + ".entity_embedder",
+                config=config,
+                dataset=dataset,
+                configuration_key=self.configuration_key + ".entity_embedder",
                 #dataset.num_entities(),
-                embedding_layer_size,
+                vocab_size=embedding_layer_size,
                 init_for_load_only=init_for_load_only,
                 parameter_client=parameter_client,
                 lapse_offset=0,
