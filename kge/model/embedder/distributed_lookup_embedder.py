@@ -34,7 +34,9 @@ class DistributedLookupEmbedder(LookupEmbedder):
         )
         self.optimizer_dim = get_optimizer_dim(config, self.dim)
         self.optimizer_values = torch.zeros(
-            (self.vocab_size, self.optimizer_dim), dtype=torch.float32
+            (self.vocab_size, self.optimizer_dim),
+            dtype=torch.float32,
+            requires_grad=False
         )
 
         self.complete_vocab_size = complete_vocab_size
@@ -49,7 +51,12 @@ class DistributedLookupEmbedder(LookupEmbedder):
 
         # maps the local embeddings to the embeddings in lapse
         # used in optimizer
-        self.local_to_lapse_mapper = torch.full((vocab_size,), -1, dtype=torch.long)
+        self.local_to_lapse_mapper = torch.full(
+            (vocab_size,),
+            -1,
+            dtype=torch.long,
+            requires_grad=False
+        )
         self.pull_dim = self.dim + self.optimizer_dim
 
         # 3 pull tensors to pre-pull up to 3 batches
