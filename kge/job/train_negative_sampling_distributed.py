@@ -176,18 +176,15 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
         push_tensor = torch.cat(
             (
                 self.model.get_s_embedder()
-                    ._embeddings.weight.data[: len(entity_ids)]
-                    .cpu(),
-                self.model.get_s_embedder()
-                    .optimizer_values[: len(entity_ids)]
-                    .cpu(),
+                ._embeddings.weight.data[: len(entity_ids)]
+                .cpu(),
+                self.model.get_s_embedder().optimizer_values[: len(entity_ids)].cpu(),
             ),
             dim=1,
         )
         self.parameter_client.push(
-            entity_ids + self.model.get_s_embedder().lapse_offset,
-            push_tensor.cpu(),
-            )
+            entity_ids + self.model.get_s_embedder().lapse_offset, push_tensor.cpu(),
+        )
 
     def _prepare(self):
         """Construct dataloader"""
@@ -388,7 +385,9 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
 
             self.valid_job.model = self.model
             # validate and update learning rate
-            super(TrainingJobNegativeSamplingDistributed, self).handle_validation(metric_name)
+            super(TrainingJobNegativeSamplingDistributed, self).handle_validation(
+                metric_name
+            )
 
             # clean up valid model
             del self.model
@@ -421,7 +420,7 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             elif checkpoint_keep > 0:
                 # keep a maximum number of checkpoint_keep checkpoints
                 delete_checkpoint_epoch = (
-                        self.epoch - valid_every - valid_every * checkpoint_keep
+                    self.epoch - valid_every - valid_every * checkpoint_keep
                 )
             if delete_checkpoint_epoch > 0:
                 self._delete_checkpoint(
@@ -480,7 +479,9 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
                 if work_entities is not None:
                     entity_pull_time -= time.time()
                     self.model.get_s_embedder()._pull_embeddings(work_entities)
-                    self.model.get_s_embedder().global_to_local_mapper[work_entities] = torch.arange(len(work_entities), dtype=torch.long, device="cpu")
+                    self.model.get_s_embedder().global_to_local_mapper[
+                        work_entities
+                    ] = torch.arange(len(work_entities), dtype=torch.long, device="cpu")
                     entity_pull_time += time.time()
                 else:
                     raise ValueError(
@@ -491,7 +492,11 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
                 if work_relations is not None:
                     relation_pull_time -= time.time()
                     self.model.get_p_embedder()._pull_embeddings(work_relations)
-                    self.model.get_p_embedder().global_to_local_mapper[work_relations] = torch.arange(len(work_relations), dtype=torch.long, device="cpu")
+                    self.model.get_p_embedder().global_to_local_mapper[
+                        work_relations
+                    ] = torch.arange(
+                        len(work_relations), dtype=torch.long, device="cpu"
+                    )
                     relation_pull_time += time.time()
                 else:
                     raise ValueError(
@@ -500,8 +505,8 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
                     )
 
             if (
-                    work_entities is not None
-                    and self.config.get("negative_sampling.sampling_type") == "pooled"
+                work_entities is not None
+                and self.config.get("negative_sampling.sampling_type") == "pooled"
             ):
                 self._sampler.set_pool(work_entities, S)
                 self._sampler.set_pool(work_entities, O)
@@ -514,7 +519,7 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             iter_dataloader = iter(self.loader)
             batch_index = 0
             num_prepulls = max(self.entity_pre_pull, self.relation_pre_pull, 1)
-            #for batch_index, batch in enumerate(self.loader):
+            # for batch_index, batch in enumerate(self.loader):
             while not epoch_done:
                 try:
                     if batch is None and len(pre_load_batches) < num_prepulls:
@@ -557,7 +562,8 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
 
                 # process batch (preprocessing + forward pass + backward pass on loss)
                 batch_result: TrainingJob._ProcessBatchResult = self._auto_subbatched_process_batch(
-                    batch_index, batch)
+                    batch_index, batch
+                )
                 sum_loss += batch_result.avg_loss * batch_result.size
 
                 # determine penalty terms (forward pass)
@@ -574,7 +580,7 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
                 batch_backward_time = batch_result.backward_time - time.time()
                 penalty = 0.0
                 for index, (penalty_key, penalty_value_torch) in enumerate(
-                        penalties_torch
+                    penalties_torch
                 ):
                     if not self.is_forward_only:
                         penalty_value_torch.backward()
@@ -618,7 +624,7 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
                     {
                         "size": batch_result.size,
                         "avg_loss": batch_result.avg_loss,
-                        #"penalties": [p.item() for k, p in penalties_torch],
+                        # "penalties": [p.item() for k, p in penalties_torch],
                         "penalty": penalty,
                         "cost": cost_value,
                         "prepare_time": batch_result.prepare_time,
@@ -641,12 +647,12 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
                 # print console feedback
                 self.config.print(
                     (
-                            "\r"  # go back
-                            + "{}  batch{: "
-                            + str(1 + int(math.ceil(math.log10(len(self.loader)))))
-                            + "d}/{}"
-                            + ", avg_loss {:.4E}, penalty {:.4E}, cost {:.4E}, time {:6.2f}s"
-                            + "\033[K"  # clear to right
+                        "\r"  # go back
+                        + "{}  batch{: "
+                        + str(1 + int(math.ceil(math.log10(len(self.loader)))))
+                        + "d}/{}"
+                        + ", avg_loss {:.4E}, penalty {:.4E}, cost {:.4E}, time {:6.2f}s"
+                        + "\033[K"  # clear to right
                     ).format(
                         self.config.log_prefix,
                         batch_index,
@@ -658,7 +664,7 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
                         + batch_forward_time
                         + batch_backward_time
                         + batch_optimizer_time,
-                        ),
+                    ),
                     end="",
                     flush=True,
                 )
@@ -682,12 +688,12 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             self.config.print("\033[2K\r", end="", flush=True)  # clear line and go back
 
             other_time = (
-                    epoch_time
-                    - prepare_time
-                    - forward_time
-                    - backward_time
-                    - optimizer_time
-                    - scheduler_time
+                epoch_time
+                - prepare_time
+                - forward_time
+                - backward_time
+                - optimizer_time
+                - scheduler_time
             )
 
             print("work done", self.parameter_client.rank)
@@ -713,9 +719,9 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
                     avg_penalty=sum_penalty / len(self.loader),
                     avg_penalties={
                         k: p / len(self.loader) for k, p in sum_penalties.items()
-
                     },
-                    avg_cost=sum_loss / self.num_examples + sum_penalty / len(self.loader),
+                    avg_cost=sum_loss / self.num_examples
+                    + sum_penalty / len(self.loader),
                     epoch_time=epoch_time,
                     prepare_time=prepare_time,
                     ps_wait_time=ps_wait_time,
@@ -731,13 +737,13 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
                     optimizer_time=optimizer_time,
                     scheduler_time=scheduler_time,
                     other_time=other_time,
-                    embedding_mapping_time=self.model.get_s_embedder().mapping_time + self.model.get_p_embedder().mapping_time,
+                    embedding_mapping_time=self.model.get_s_embedder().mapping_time
+                    + self.model.get_p_embedder().mapping_time,
                     event="epoch_completed",
                 )
             )
             self.model.get_p_embedder().mapping_time = 0.0
             self.model.get_s_embedder().mapping_time = 0.0
-
 
             # run hooks (may modify trace)
             for f in self.post_epoch_hooks:
@@ -745,10 +751,11 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
 
             # output the trace, then clear it
             trace_entry = self.trace(
-                **self.current_trace["epoch"], echo=False,  log=True
+                **self.current_trace["epoch"], echo=False, log=True
             )
-        self.config.log(format_trace_entry("train_epoch", trace_entry, self.config), prefix="  "
-                        )
+        self.config.log(
+            format_trace_entry("train_epoch", trace_entry, self.config), prefix="  "
+        )
         self.current_trace["epoch"] = None
         return trace_entry
 
@@ -773,13 +780,15 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
                 chunk_end = min(local_model_size * (chunk_number + 1), num_entities)
                 entity_ids = torch.arange(chunk_start, chunk_end, dtype=torch.long)
                 lapse_offset = self.model.get_s_embedder().lapse_offset
-                pull_tensor = self.model.get_s_embedder().pull_tensors[0][1][:len(entity_ids)]
+                pull_tensor = self.model.get_s_embedder().pull_tensors[0][1][
+                    : len(entity_ids)
+                ]
                 self.parameter_client.pull(entity_ids + lapse_offset, pull_tensor)
                 torch.save(
                     pull_tensor,
                     os.path.join(
                         entities_dir, f"{chunk_start}-{chunk_end}.{file_ending}"
-                    )
+                    ),
                 )
             lapse_offset = self.model.get_p_embedder().lapse_offset
             pull_tensor = self.model.get_p_embedder().pull_tensors[0][1]
@@ -804,7 +813,9 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             entities_dir = checkpoint_name + "_entities"
             entities_ps_offset = self.model.get_s_embedder().lapse_offset
             for file in os.listdir(entities_dir):
-                entity_start, entity_end = os.path.basename(file).split(".")[0].split("-")
+                entity_start, entity_end = (
+                    os.path.basename(file).split(".")[0].split("-")
+                )
                 push_tensor = torch.load(os.path.join(entities_dir, file))
                 entity_ids = torch.arange(
                     int(entity_start), int(entity_end), dtype=torch.long
