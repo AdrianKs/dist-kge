@@ -368,9 +368,7 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
         result.prepare_time += time.time()
 
     def handle_validation(self, metric_name):
-        checkpoint_every = self.config.get("train.checkpoint.every")
-        checkpoint_keep = self.config.get("train.checkpoint.keep")
-
+        # move all models to cpu and store as tmp model
         tmp_model = self.model.cpu()
         self.valid_job.model = tmp_model
         del self.model
@@ -378,12 +376,6 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
         torch.cuda.empty_cache()
         self.parameter_client.barrier()
         if self.parameter_client.rank == self.min_rank:
-            # move current small model to a tmp model
-            # self.model = self.model.cpu()
-            tmp_optimizer = self.optimizer
-            # TODO: we also need to handle the learning rate scheduler somehow
-            #  in the checkpoint
-
             # create a model for validation with entity embedder size
             #  batch_size x 2 + eval.chunk_size
             self.config.set(self.config.get("model") + ".create_eval", True)
@@ -396,93 +388,13 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
 
             self.valid_job.model = self.model
             # validate and update learning rate
-            if (
-                    self.config.get("valid.every") > 0
-                    and self.epoch % self.config.get("valid.every") == 0
-            ):
-                self.valid_job.epoch = self.epoch
-                trace_entry = self.valid_job.run()
-                self.valid_trace.append(trace_entry)
-                for f in self.post_valid_hooks:
-                    f(self)
-                self.model.meta["valid_trace_entry"] = trace_entry
-
-                # metric-based scheduler step
-                self.kge_lr_scheduler.step(trace_entry[metric_name])
-            else:
-                self.kge_lr_scheduler.step()
-
-            # store checkpoints to root dir
-            worker_folder = self.config.folder
-            valid_folder = os.path.dirname(worker_folder)
-            self.config.folder = valid_folder
+            super(TrainingJobNegativeSamplingDistributed, self).handle_validation(metric_name)
 
             # clean up valid model
-            del self.optimizer
             del self.model
             del self.valid_job.model
             gc.collect()
             torch.cuda.empty_cache()
-            self.optimizer = tmp_optimizer
-            self.model = tmp_model.to(self.device)
-            del tmp_optimizer
-
-            # create checkpoint and delete old one, if necessary
-            self.save(self.config.checkpoint_file(self.epoch))
-            if (
-                    len(self.valid_trace) > 0
-                    and self.valid_trace[-1]["epoch"] == self.epoch
-            ):
-                best_index = max(
-                    range(len(self.valid_trace)),
-                    key=lambda index: self.valid_trace[index][metric_name],
-                )
-                if best_index == len(self.valid_trace) - 1:
-                    self.save(self.config.checkpoint_file("best"))
-            if self.epoch > 1:
-                delete_checkpoint_epoch = -1
-                if checkpoint_every == 0:
-                    # do not keep any old checkpoints
-                    delete_checkpoint_epoch = self.epoch - 1
-                # in the distributed setup we only save checkpoints when we evaluate
-                #  since it is expensive to create the complete model
-                # therefore checkpoint every does not work
-                # elif (self.epoch - 1) % checkpoint_every != 0:
-                #     # delete checkpoints that are not in the checkpoint.every schedule
-                #     delete_checkpoint_epoch = self.epoch - 1
-                elif checkpoint_keep > 0:
-                    # keep a maximum number of checkpoint_keep checkpoints
-                    # since in distributed setup we only create checkpoints when
-                    #  we evaluate, checkpoint_keep needs to refer to valid.every
-                    # delete_checkpoint_epoch = (
-                    #     self.epoch - checkpoint_every * checkpoint_keep
-                    # )
-                    delete_checkpoint_epoch = (
-                            self.epoch - self.config.get(
-                        "valid.every") * checkpoint_keep
-                    )
-                if delete_checkpoint_epoch > 0:
-                    if os.path.exists(
-                            self.config.checkpoint_file(delete_checkpoint_epoch)
-                    ):
-                        self.config.log(
-                            "Removing old checkpoint {}...".format(
-                                self.config.checkpoint_file(delete_checkpoint_epoch)
-                            )
-                        )
-                        # in the distributed setup the checkpoint is a directory
-                        # containing multiple checkpoint chunks
-                        shutil.rmtree(
-                            self.config.checkpoint_file(delete_checkpoint_epoch)
-                        )
-                    else:
-                        self.config.log(
-                            "Could not delete old checkpoint {}, does not exits.".format(
-                                self.config.checkpoint_file(delete_checkpoint_epoch)
-                            )
-                        )
-            self.config.folder = worker_folder
-            # self.model = self.model.cpu()
         else:
             self.kge_lr_scheduler.step()
         self.parameter_client.barrier()
@@ -491,8 +403,31 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
         gc.collect()
 
     def handle_running_checkpoint(self, checkpoint_every, checkpoint_keep):
-        # do nothing since we are handling this in handle validation currently
-        pass
+        # since it is rather expensive to handle checkpoints in every epoch we only
+        # do it every time we are evaluating now
+        valid_every = self.config.get("valid.every")
+        if (
+            valid_every > 0
+            and self.epoch % valid_every == 0
+            and self.epoch > 0
+            and self.parameter_client.rank == self.min_rank
+        ):
+            self.save(self.config.checkpoint_file(self.epoch))
+            delete_checkpoint_epoch = 0
+            if checkpoint_every == 0:
+                # do not keep any old checkpoints
+                delete_checkpoint_epoch = self.epoch - valid_every
+                # checkpoint every does not help a lot if we only store on valid
+            elif checkpoint_keep > 0:
+                # keep a maximum number of checkpoint_keep checkpoints
+                delete_checkpoint_epoch = (
+                        self.epoch - valid_every - valid_every * checkpoint_keep
+                )
+            if delete_checkpoint_epoch > 0:
+                self._delete_checkpoint(
+                    self.config.checkpoint_file(delete_checkpoint_epoch)
+                )
+        self.parameter_client.barrier()
 
     def run_epoch(self) -> Dict[str, Any]:
         """ Runs an epoch and returns its trace entry. """
@@ -816,6 +751,12 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
                         )
         self.current_trace["epoch"] = None
         return trace_entry
+
+    def _delete_checkpoint(self, filename):
+        super(TrainingJobNegativeSamplingDistributed, self)._delete_checkpoint(filename)
+        file, file_ending = filename.rsplit(".", 1)
+        shutil.rmtree(f"{file}_entities")
+        os.remove(f"{file}_relations.{file_ending}")
 
     def save(self, filename) -> None:
         if self.parameter_client.rank == get_min_rank(self.config):

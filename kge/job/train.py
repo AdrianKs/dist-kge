@@ -164,7 +164,6 @@ class TrainingJob(TrainingOrEvaluationJob):
         checkpoint_keep = self.config.get("train.checkpoint.keep")
         metric_name = self.config.get("valid.metric")
         patience = self.config.get("valid.early_stopping.patience")
-        distributed = "distributed" in self.config.get("train.type")
         while True:
             # checking for model improvement according to metric_name
             # and do early stopping and keep the best checkpoint
@@ -175,7 +174,7 @@ class TrainingJob(TrainingOrEvaluationJob):
                 best_index = Metric(self).best_index(
                     list(map(lambda trace: trace[metric_name], self.valid_trace))
                 )
-                if best_index == len(self.valid_trace) - 1 and not distributed:
+                if best_index == len(self.valid_trace) - 1:
                     self.save(self.config.checkpoint_file("best"))
                 if (
                     patience > 0
@@ -266,21 +265,18 @@ class TrainingJob(TrainingOrEvaluationJob):
                         self.epoch - 1 - checkpoint_every * checkpoint_keep
                 )
             if delete_checkpoint_epoch > 0:
-                if os.path.exists(
-                        self.config.checkpoint_file(delete_checkpoint_epoch)
-                ):
-                    self.config.log(
-                        "Removing old checkpoint {}...".format(
-                            self.config.checkpoint_file(delete_checkpoint_epoch)
-                        )
-                    )
-                    os.remove(self.config.checkpoint_file(delete_checkpoint_epoch))
-                else:
-                    self.config.log(
-                        "Could not delete old checkpoint {}, does not exits.".format(
-                            self.config.checkpoint_file(delete_checkpoint_epoch)
-                        )
-                    )
+                self._delete_checkpoint(
+                    self.config.checkpoint_file(delete_checkpoint_epoch)
+                )
+
+    def _delete_checkpoint(self, filename):
+        if os.path.exists(filename):
+            self.config.log(f"Removing old checkpoint {filename}...")
+            os.remove(filename)
+        else:
+            self.config.log(
+                f"Could not delete old checkpoint {filename}, does not exist."
+            )
 
     def save(self, filename) -> None:
         """Save current state to specified file"""

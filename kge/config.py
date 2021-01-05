@@ -487,11 +487,16 @@ class Config:
     def checkpoint_file(self, cpt_id: Union[str, int]) -> str:
         "Return path of checkpoint file for given checkpoint id"
         from kge.misc import is_number
+        folder = self.folder
+        # todo: find a better way to go into root dir to store checkpoints in
+        #  distributed setup
+        if "worker" in os.path.basename(folder):
+            folder = os.path.dirname(folder)
 
         if is_number(cpt_id, int):
-            return os.path.join(self.folder, "checkpoint_{:05d}.pt".format(int(cpt_id)))
+            return os.path.join(folder, "checkpoint_{:05d}.pt".format(int(cpt_id)))
         else:
-            return os.path.join(self.folder, "checkpoint_{}.pt".format(cpt_id))
+            return os.path.join(folder, "checkpoint_{}.pt".format(cpt_id))
 
     def last_checkpoint_number(self) -> Optional[int]:
         "Return number (epoch) of latest checkpoint"
