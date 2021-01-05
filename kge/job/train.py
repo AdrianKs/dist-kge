@@ -175,7 +175,7 @@ class TrainingJob(TrainingOrEvaluationJob):
                 best_index = Metric(self).best_index(
                     list(map(lambda trace: trace[metric_name], self.valid_trace))
                 )
-                if best_index == len(self.valid_trace) - 1 and distributed:
+                if best_index == len(self.valid_trace) - 1 and not distributed:
                     self.save(self.config.checkpoint_file("best"))
                 if (
                     patience > 0
