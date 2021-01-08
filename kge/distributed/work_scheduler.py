@@ -155,6 +155,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
         epoch_time = None
         if self.repartition_epoch:
             if self.repartition_worker_pool is None:
+                torch.multiprocessing.set_sharing_strategy('file_system')
                 self.repartition_worker_pool = concurrent.futures.ProcessPoolExecutor(
                     max_workers=1,
                     mp_context=torch.multiprocessing.get_context("fork"),
@@ -1064,7 +1065,7 @@ class TwoDBlockWorkScheduler(WorkScheduler):
             partition_lengths[i] = 0
             partition_data.append(
                 np.empty(
-                    int(len(partition_assignment)/((num_partitions*num_partitions)/2)),
+                    int(len(partition_assignment)/num_partitions),
                     dtype=np.int64
                 )
             )
