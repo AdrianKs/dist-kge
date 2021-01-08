@@ -516,8 +516,7 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             if self.entity_sync_level == "partition":
                 if work_entities is not None:
                     entity_pull_time -= time.time()
-                    if self.entity_localize:
-                        self.model.get_s_embedder()._pull_embeddings(work_entities)
+                    self.model.get_s_embedder()._pull_embeddings(work_entities)
                     self.model.get_s_embedder().global_to_local_mapper[
                         work_entities
                     ] = torch.arange(len(work_entities), dtype=torch.long, device="cpu")
