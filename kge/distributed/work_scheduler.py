@@ -812,10 +812,12 @@ class TwoDBlockWorkScheduler(WorkScheduler):
             num_entities_in_strata = [len(i) for i in self._entities_in_bucket.values()]
             len_std = np.std(num_entities_in_strata).item()
             if self.combine_mirror_blocks:
-                self.num_max_entities = self._get_mirrored_max_entities(
+                max_num_entities, std_num_entities = self._get_mirrored_max_entities(
                     self.num_partitions,
-                    list(self._entities_in_bucket.values())
-                ) + 2*(round(len_std))
+                    list(self._entities_in_bucket.values()),
+                    return_std=True
+                )
+                self.num_max_entities = max_num_entities + 2*(round(std_num_entities))
             else:
                 self.num_max_entities = max(num_entities_in_strata) + 5*round(len_std)
         else:
@@ -825,7 +827,7 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         return self.num_max_entities
 
     @staticmethod
-    def _get_mirrored_max_entities(num_partitions, strata_entities):
+    def _get_mirrored_max_entities(num_partitions, strata_entities, return_std=False):
         """
         Calculate how many entities occur at most if we combine mirrored blocks
         Combining blocks (0,1) and (1,0)
@@ -840,6 +842,7 @@ class TwoDBlockWorkScheduler(WorkScheduler):
 
         """
         max_value = 0
+        all_num_entities = []
         for i in range(num_partitions):
             for j in range(i, num_partitions):
                 num_entities = 0
@@ -856,9 +859,15 @@ class TwoDBlockWorkScheduler(WorkScheduler):
                         (strata_entities[i*num_partitions+j],
                          strata_entities[j*num_partitions+i]))
                     ))
+                all_num_entities.append(num_entities)
                 if num_entities > max_value:
                     # this will lead to a race condition if we do this in parallel
                     max_value = num_entities
+        all_num_entities = np.array(all_num_entities)
+        max_value = all_num_entities.max()
+        if return_std:
+            std = all_num_entities.std()
+            return max_value, std
         print("max entities", max_value)
         return max_value
 
