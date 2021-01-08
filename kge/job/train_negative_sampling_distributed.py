@@ -144,6 +144,11 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
 
         self._initialize_parameter_server(init_for_load_only=init_for_load_only)
         self.early_stop_hooks.append(lambda job: job.parameter_client.stop())
+        self.work_pre_localized = False
+        if self.config.get("job.distributed.pre_localize_partition"):
+            self.pre_localized_entities = None
+            self.pre_localized_relations = None
+            self.pre_batch_hooks.append(self._pre_localize_work)
 
         if self.__class__ == TrainingJobNegativeSamplingDistributed:
             for f in Job.job_created_hooks:
@@ -185,6 +190,28 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
         self.parameter_client.push(
             entity_ids + self.model.get_s_embedder().lapse_offset, push_tensor.cpu(),
         )
+
+    @staticmethod
+    def _pre_localize_work(job, batch_index):
+        if batch_index % 100 != 0:
+            return
+        if not job.work_pre_localized:
+            work, entities, relations, wait = job.work_scheduler_client.get_pre_localize_work()
+            if wait:
+                return
+            if entities is not None:
+                entities_ps_offset = job.model.get_s_embedder().lapse_offset
+                job.pre_localized_entities = entities + entities_ps_offset
+                job.parameter_client.localize(
+                    job.pre_localized_entities, asynchronous=True
+                )
+            if relations is not None:
+                relations_ps_offset = job.model.get_p_embedder().lapse_offset
+                job.pre_localized_relations = relations + relations_ps_offset
+                job.parameter_client.localize(
+                    job.pre_localized_relations, asynchronous=True
+                )
+            job.work_pre_localized = True
 
     def _prepare(self):
         """Construct dataloader"""
@@ -474,6 +501,7 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             work, work_entities, work_relations = self.work_scheduler_client.get_work()
             if work is None:
                 break
+            self.work_pre_localized = False
             self.dataloader_dataset.set_samples(work)
             if self.entity_sync_level == "partition":
                 if work_entities is not None:
@@ -558,7 +586,7 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
 
                 # run the pre-batch hooks (may update the trace)
                 for f in self.pre_batch_hooks:
-                    f(self)
+                    f(self, batch_index)
 
                 # process batch (preprocessing + forward pass + backward pass on loss)
                 batch_result: TrainingJob._ProcessBatchResult = self._auto_subbatched_process_batch(

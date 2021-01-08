@@ -28,6 +28,7 @@ class SCHEDULER_CMDS(IntEnum):
     SHUTDOWN = 6
     INIT_INFO = 7
     GET_INIT_WORK = 8
+    PRE_LOCALIZE_WORK = 9
 
 
 class WorkScheduler(mp.get_context("spawn").Process):
@@ -187,15 +188,16 @@ class WorkScheduler(mp.get_context("spawn").Process):
                 if rank in self.done_workers:
                     self.asking_workers.append(rank)
                     continue
-                self._send_work(rank, cmd_buffer)
-            if cmd == SCHEDULER_CMDS.WORK_DONE:
+                work, entities, relations, wait = self._next_work(rank)
+                self._send_work(rank, cmd_buffer, work, entities, relations, wait)
+            elif cmd == SCHEDULER_CMDS.WORK_DONE:
                 self._handle_work_done(rank)
-            if cmd == SCHEDULER_CMDS.BARRIER:
+            elif cmd == SCHEDULER_CMDS.BARRIER:
                 barrier_count += 1
                 if barrier_count == self.num_clients:
                     barrier_count = 0
                     dist.barrier()
-            if cmd == SCHEDULER_CMDS.SHUTDOWN:
+            elif cmd == SCHEDULER_CMDS.SHUTDOWN:
                 shutdown_count += 1
                 if shutdown_count == self.num_clients:
                     print("shutting down work scheduler")
@@ -205,10 +207,15 @@ class WorkScheduler(mp.get_context("spawn").Process):
                         if self.repartition_worker_pool is not None:
                             self.repartition_worker_pool.shutdown()
                     break
-            if cmd == SCHEDULER_CMDS.INIT_INFO:
+            elif cmd == SCHEDULER_CMDS.INIT_INFO:
                 self._handle_init_info(rank)
-            if cmd == SCHEDULER_CMDS.GET_INIT_WORK:
+            elif cmd == SCHEDULER_CMDS.GET_INIT_WORK:
                 self._handle_get_init_work(rank=rank, embedding_layer_size=cmd_buffer[1].item())
+            elif cmd == SCHEDULER_CMDS.PRE_LOCALIZE_WORK:
+                work, entities, relations, wait = self._handle_pre_localize_work(rank=rank)
+                self._send_work(rank, cmd_buffer, work, entities, relations, wait, pre_localize=True)
+            else:
+                raise ValueError(f"The work scheduler received an unknown command: {cmd}")
 
     def _next_work(
         self, rank
@@ -223,8 +230,8 @@ class WorkScheduler(mp.get_context("spawn").Process):
     def _repartition_in_background(self):
         pass
 
-    def _send_work(self, rank, cmd_buffer):
-        work, entities, relations, wait = self._next_work(rank)
+    def _send_work(self, rank, cmd_buffer, work, entities, relations, wait, pre_localize=False):
+        # work, entities, relations, wait = self._next_work(rank)
         if work is not None:
             cmd_buffer[0] = SCHEDULER_CMDS.WORK
             cmd_buffer[1] = len(work)
@@ -249,7 +256,8 @@ class WorkScheduler(mp.get_context("spawn").Process):
             cmd_buffer[1] = self.wait_time
             dist.send(cmd_buffer, dst=rank)
         else:
-            self.done_workers.append(rank)
+            if not pre_localize:
+                self.done_workers.append(rank)
             cmd_buffer[0] = SCHEDULER_CMDS.NO_WORK
             cmd_buffer[1] = 0
             dist.send(cmd_buffer, dst=rank)
@@ -281,6 +289,9 @@ class WorkScheduler(mp.get_context("spawn").Process):
             )
         self.init_up_to_entity += embedding_layer_size
         dist.send(return_buffer, dst=rank)
+
+    def _handle_pre_localize_work(self, rank):
+        raise ValueError("The current partition scheme does not support pre-localizing")
 
     def _get_max_entities(self):
         return 0
@@ -639,6 +650,7 @@ class TwoDBlockWorkScheduler(WorkScheduler):
             deepcopy(self.partitions)
         )
         self.current_iteration = set()
+        self._pre_localized_strata: Dict[int, Tuple[int, int]] = {}
 
     def _order_by_schedule(
         self, partitions: Dict[Tuple[int, int], torch.Tensor]
@@ -859,20 +871,27 @@ class TwoDBlockWorkScheduler(WorkScheduler):
             return self._acquire_bucket_by_fixed_schedule(rank)
         return self._acquire_bucket(rank)
 
-    def _acquire_bucket_by_fixed_schedule(self, rank):
+    def _handle_pre_localize_work(self, rank):
+        return self._acquire_bucket_by_fixed_schedule(rank, pre_localize=True)
+
+    def _acquire_bucket_by_fixed_schedule(self, rank, pre_localize=False):
         try:
-            if len(self.current_iteration) == 0:
-                self.current_iteration = set(self.fixed_schedule.pop())
             locked_entity_strata = set()
-            for strata in self.running_blocks.values():
-                locked_entity_strata.add(strata[0])
-                locked_entity_strata.add(strata[1])
-            for strata in self.current_iteration:
-                if strata[0] in locked_entity_strata:
-                    continue
-                if strata[1] in locked_entity_strata:
-                    continue
-                self.current_iteration.remove(strata)
+            for locked_dict in [self.running_blocks, self._pre_localized_strata]:
+                for running_rank, strata in locked_dict.items():
+                    if rank == running_rank:
+                        continue
+                    locked_entity_strata.add(strata[0])
+                    locked_entity_strata.add(strata[1])
+
+            def _strata_locked(strata):
+                return strata[0] in locked_entity_strata or strata[1] in locked_entity_strata
+
+            def _acquire(strata, acquire_pre_localized=False):
+                if acquire_pre_localized:
+                    del self._pre_localized_strata[rank]
+                else:
+                    self.current_iteration.remove(strata)
                 strata_data = self.partitions[strata]
                 entities_in_strata = self._entities_in_bucket.get(strata)
                 if self.combine_mirror_blocks:
@@ -892,8 +911,29 @@ class TwoDBlockWorkScheduler(WorkScheduler):
                     strata_data = torch.cat(
                         (strata_data, self.partitions[mirror_strata])
                     )
-                self.running_blocks[rank] = strata
+                if not pre_localize:
+                    self.running_blocks[rank] = strata
+                else:
+                    self._pre_localized_strata[rank] = strata
                 return strata_data, entities_in_strata, None, False
+
+            # only use pre localized strata, if we are not about to pre-localize a new
+            # one --> not pre_localize
+            if not pre_localize and self._pre_localized_strata.get(rank, None) is not None:
+                strata = self._pre_localized_strata[rank]
+                if _strata_locked(strata):
+                    # we are waiting until the localized strata is free
+                    return None, None, None, True
+                return _acquire(strata, acquire_pre_localized=True)
+
+            if len(self.current_iteration) == 0:
+                self.current_iteration = set(self.fixed_schedule.pop())
+
+            for strata in self.current_iteration:
+                if _strata_locked(strata):
+                    continue
+                return _acquire(strata)
+
             # return wait here
             return None, None, None, True
         except IndexError:
@@ -1049,36 +1089,51 @@ class SchedulerClient:
         max_relations = info_buffer[1]
         return max_entities, max_relations
 
+    def _receive_work(self, cmd):
+        work_buffer = torch.empty((cmd[1].item(),), dtype=torch.long)
+        dist.recv(work_buffer, src=self.scheduler_rank)
+        # get partition entities
+        dist.recv(cmd, src=self.scheduler_rank)
+        num_entities = cmd[1].item()
+        entity_buffer = None
+        if num_entities != 0:
+            entity_buffer = torch.empty((num_entities,), dtype=torch.long)
+            dist.recv(entity_buffer, src=self.scheduler_rank)
+        # get partition relations
+        dist.recv(cmd, src=self.scheduler_rank)
+        num_relations = cmd[1].item()
+        relation_buffer = None
+        if num_relations != 0:
+            relation_buffer = torch.empty((num_relations,), dtype=torch.long)
+            dist.recv(relation_buffer, src=self.scheduler_rank)
+        return work_buffer, entity_buffer, relation_buffer
+
     def get_work(
-        self,
+            self,
     ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
         while True:
             cmd = torch.LongTensor([SCHEDULER_CMDS.GET_WORK, 0])
             dist.send(cmd, dst=self.scheduler_rank)
             dist.recv(cmd, src=self.scheduler_rank)
             if cmd[0] == SCHEDULER_CMDS.WORK:
-                work_buffer = torch.empty((cmd[1].item(),), dtype=torch.long)
-                dist.recv(work_buffer, src=self.scheduler_rank)
-                # get partition entities
-                dist.recv(cmd, src=self.scheduler_rank)
-                num_entities = cmd[1].item()
-                entity_buffer = None
-                if num_entities != 0:
-                    entity_buffer = torch.empty((num_entities,), dtype=torch.long)
-                    dist.recv(entity_buffer, src=self.scheduler_rank)
-                # get partition relations
-                dist.recv(cmd, src=self.scheduler_rank)
-                num_relations = cmd[1].item()
-                relation_buffer = None
-                if num_relations != 0:
-                    relation_buffer = torch.empty((num_relations,), dtype=torch.long)
-                    dist.recv(relation_buffer, src=self.scheduler_rank)
-                return work_buffer, entity_buffer, relation_buffer
+                return self._receive_work(cmd)
             elif cmd[0] == SCHEDULER_CMDS.WAIT:
                 # print("waiting for a block")
                 time.sleep(cmd[1].item())
             else:
                 return None, None, None
+
+    def get_pre_localize_work(self):
+        cmd = torch.LongTensor([SCHEDULER_CMDS.PRE_LOCALIZE_WORK, 0])
+        dist.send(cmd, dst=self.scheduler_rank)
+        dist.recv(cmd, src=self.scheduler_rank)
+        if cmd[0] == SCHEDULER_CMDS.WORK:
+            work, entities, relations = self._receive_work(cmd)
+            return work, entities, relations, False
+        elif cmd[0] == SCHEDULER_CMDS.WAIT:
+            return None, None, None, True
+        else:
+            return None, None, None, False
 
     def get_init_work(self, entity_embedder_size):
         """

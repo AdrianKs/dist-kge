@@ -54,6 +54,7 @@ job:
     relation_pre_pull: 0  # number of relation batches to prepull: 1 - from ps, 2 - to gpu
     repartition_epoch: True  # currently only works with 2d_block_partition and random
     scheduling_order: 'random'  # block ordering for 2d_block_partition: random, sequential
+    pre_localize_partition: False
 
     # combine mirrored strata to reduce number of partitions
     #  e.g.: (1,2) and (2,1)

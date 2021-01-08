@@ -373,7 +373,7 @@ class TrainingJob(TrainingOrEvaluationJob):
 
             # run the pre-batch hooks (may update the trace)
             for f in self.pre_batch_hooks:
-                f(self)
+                f(self, batch_index)
 
             # process batch (preprocessing + forward pass + backward pass on loss)
             batch_result: TrainingJob._ProcessBatchResult = self._auto_subbatched_process_batch(batch_index, batch)
