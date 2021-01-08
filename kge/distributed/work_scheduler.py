@@ -569,7 +569,7 @@ class MetisWorkScheduler(WorkScheduler):
         # todo: let the partitions start at zero, then we do not need this unique
         partition_indexes = np.unique(partition_assignment)
         partitions = [
-            torch.from_numpy(np.where(partition_assignment == i)[0])
+            torch.from_numpy(np.where(partition_assignment == i)[0]).contiguous()
             for i in partition_indexes
         ]
         return partitions
@@ -579,7 +579,7 @@ class MetisWorkScheduler(WorkScheduler):
         for partition in range(self.num_partitions):
             entities_in_partition[partition] = torch.from_numpy(
                 np.where((self.entities_to_partition == partition),)[0]
-            )
+            ).contiguous()
         return entities_in_partition
 
     def _get_max_entities(self):
