@@ -232,10 +232,10 @@ class DistributedLookupEmbedder(LookupEmbedder):
         self.optimizer_values[:len_indexes].copy_(pulled_optim_values)
         return pull_time, cpu_gpu_time
 
-    def localize(self, indexes: Tensor, make_unique=False):
+    def localize(self, indexes: Tensor, asynchronous=False, make_unique=False):
         if make_unique:
             indexes = torch.unique(indexes)
-        self.parameter_client.localize((indexes + self.lapse_offset).cpu())
+        self.parameter_client.localize((indexes + self.lapse_offset).cpu(), asynchronous)
         # TODO: also pull the embeddings and store in a tensor on gpu
         #  this needs to be handled in the background somehow
         #  to device can be done in background, but this needs to wait for localize

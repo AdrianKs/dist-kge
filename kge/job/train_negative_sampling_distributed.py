@@ -124,6 +124,8 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
         self.load_batch = self.config.get("job.distributed.load_batch")
         self.entity_localize = self.config.get("job.distributed.entity_localize")
         self.relation_localize = self.config.get("job.distributed.relation_localize")
+        self.entity_partition_localized = False
+        self.relation_partition_localized = False
         self.entity_async_write_back = self.config.get(
             "job.distributed.entity_async_write_back"
         )
@@ -355,7 +357,7 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
                         self.parameter_client.wait(wait_value)
                     self.optimizer.entity_async_wait_values.clear()
                 result.ps_wait_time += time.time()
-                if self.entity_localize:
+                if self.entity_localize and not self.entity_partition_localized:
                     self.model.get_s_embedder().localize(unique_entities)
                 result.pull_and_map_time -= time.time()
                 (
@@ -376,7 +378,7 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
                         self.parameter_client.wait(wait_value)
                     self.optimizer.relation_async_wait_values.clear()
                 result.ps_wait_time += time.time()
-                if self.relation_localize:
+                if self.relation_localize and not self.relation_partition_localized:
                     self.model.get_p_embedder().localize(unique_relations)
                 result.pull_and_map_time -= time.time()
                 (
@@ -499,14 +501,23 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
 
             # load new work package
             work, work_entities, work_relations = self.work_scheduler_client.get_work()
+            self.entity_partition_localized = False
+            self.relation_partition_localized = False
             if work is None:
                 break
             self.work_pre_localized = False
             self.dataloader_dataset.set_samples(work)
+            if work_entities is not None and self.entity_localize:
+                self.model.get_s_embedder().localize(work_entities)
+                self.entity_partition_localized = True
+            if work_relations is not None and self.relation_localize:
+                self.model.get_p_embedder().localize(work_relations)
+                self.relation_partition_localized = True
             if self.entity_sync_level == "partition":
                 if work_entities is not None:
                     entity_pull_time -= time.time()
-                    self.model.get_s_embedder()._pull_embeddings(work_entities)
+                    if self.entity_localize:
+                        self.model.get_s_embedder()._pull_embeddings(work_entities)
                     self.model.get_s_embedder().global_to_local_mapper[
                         work_entities
                     ] = torch.arange(len(work_entities), dtype=torch.long, device="cpu")
