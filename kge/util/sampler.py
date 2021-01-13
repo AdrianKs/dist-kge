@@ -901,9 +901,9 @@ class KgePooledSampler(KgeSampler):
         positives = positive_triples[:, slot].numpy()
         drop_index = np.random.choice(num_unique + 1, batch_size, replace=True)
         # convert back to python list, so that dictionary creation is faster
-        unique_samples = unique_samples.tolist()
+        unique_samples_list = unique_samples.tolist()
         # TODO can we do the following quicker?
-        unique_samples_index = {s: j for j, s in enumerate(unique_samples)}
+        unique_samples_index = {s: j for j, s in enumerate(unique_samples_list)}
         for i, v in [
             (i, unique_samples_index.get(positives[i]))
             for i in range(batch_size)
@@ -918,7 +918,7 @@ class KgePooledSampler(KgeSampler):
             positive_triples,
             slot,
             num_samples,
-            torch.LongTensor(unique_samples),
+            unique_samples,
             # torch.tensor(unique_samples, dtype=torch.long),
             torch.tensor(drop_index),
             repeat_indexes,
