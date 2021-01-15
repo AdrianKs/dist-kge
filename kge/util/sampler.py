@@ -847,7 +847,7 @@ class KgePooledSampler(KgeSampler):
             num_unique = len(
                 np.unique(
                     np.random.choice(
-                        self.sample_pools[slot]
+                        len(self.sample_pools[slot])
                         # if self.shared_type == "naive"
                         # else self.vocabulary_size[slot] - 1,
                         ,
