@@ -2,7 +2,6 @@ import os
 import math
 import datetime
 import time
-import concurrent.futures
 import numpy as np
 import pandas as pd
 import numba
@@ -155,11 +154,8 @@ class WorkScheduler(mp.get_context("spawn").Process):
         epoch_time = None
         if self.repartition_epoch:
             if self.repartition_worker_pool is None:
-                torch.multiprocessing.set_sharing_strategy('file_system')
-                self.repartition_worker_pool = concurrent.futures.ProcessPoolExecutor(
-                    max_workers=1,
-                    mp_context=torch.multiprocessing.get_context("fork"),
-                )
+                mp.Pool()
+                self.repartition_worker_pool = mp.Pool(processes=1)
             self._repartition_in_background()
 
         while True:
@@ -203,10 +199,9 @@ class WorkScheduler(mp.get_context("spawn").Process):
                 if shutdown_count == self.num_clients:
                     print("shutting down work scheduler")
                     if self.repartition_epoch:
-                        if self.repartition_future is not None:
-                            self.repartition_future.cancel()
                         if self.repartition_worker_pool is not None:
-                            self.repartition_worker_pool.shutdown()
+                            self.repartition_worker_pool.close()
+                            self.repartition_worker_pool.terminate()
                     break
             elif cmd == SCHEDULER_CMDS.INIT_INFO:
                 self._handle_init_info(rank)
@@ -1017,17 +1012,17 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         del self.running_blocks[rank]
 
     def _repartition_in_background(self):
-        self.repartition_future = self.repartition_worker_pool.submit(
+        self.repartition_future = self.repartition_worker_pool.apply_async(
             self._repartition,
-            self.dataset.split("train"),
-            self.dataset.num_entities(),
-            self.num_partitions,
-            self.entities_needed_only
+            (self.dataset.split("train"),
+             self.dataset.num_entities(),
+             self.num_partitions,
+             self.entities_needed_only)
         )
 
     def _refill_work(self):
         if self.repartition_epoch:
-            self.partitions, self._entities_in_bucket = self.repartition_future.result()
+            self.partitions, self._entities_in_bucket = self.repartition_future.get()
             self._repartition_in_background()
         #self.fixed_schedule = [item for sublist in self.schedule_creator.create_schedule() for item in sublist]
         self.fixed_schedule = self.schedule_creator.create_schedule()
@@ -1128,7 +1123,7 @@ class SchedulerClient:
             if cmd[0] == SCHEDULER_CMDS.WORK:
                 return self._receive_work(cmd)
             elif cmd[0] == SCHEDULER_CMDS.WAIT:
-                # print("waiting for a block")
+                print("waiting for a block")
                 time.sleep(cmd[1].item())
             else:
                 return None, None, None

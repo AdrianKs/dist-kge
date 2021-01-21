@@ -174,6 +174,7 @@ class WorkerProcess(mp.get_context("spawn").Process):
         job.run()
 
         # all done, clean up
+        print("shut down everything")
         job.work_scheduler_client.shutdown()
         parameter_client.shutdown()
         # delete all occurrences of the parameter client to properly shutdown lapse
