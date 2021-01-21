@@ -1123,7 +1123,7 @@ class SchedulerClient:
             if cmd[0] == SCHEDULER_CMDS.WORK:
                 return self._receive_work(cmd)
             elif cmd[0] == SCHEDULER_CMDS.WAIT:
-                print("waiting for a block")
+                # print("waiting for a block")
                 time.sleep(cmd[1].item())
             else:
                 return None, None, None
