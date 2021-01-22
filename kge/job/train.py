@@ -122,6 +122,10 @@ class TrainingJob(TrainingOrEvaluationJob):
         # Hooks run on early stopping
         self.early_stop_hooks: List[Callable[[Job], Any]] = []
 
+        # Hooks to add conditions to stop early
+        # The hooked function needs to return a boolean
+        self.early_stop_conditions: List[Callable[[Job], Any]] = []
+
         if self.__class__ == TrainingJob:
             for f in Job.job_created_hooks:
                 f(self)
@@ -210,6 +214,13 @@ class TrainingJob(TrainingOrEvaluationJob):
             # should we stop?
             if self.epoch >= self.config.get("train.max_epochs"):
                 self.config.log("Maximum number of epochs reached.")
+                break
+
+            # check additional stop conditions
+            done = False
+            for f in self.early_stop_conditions:
+                done = done or f(self)
+            if done:
                 break
 
             # start a new epoch

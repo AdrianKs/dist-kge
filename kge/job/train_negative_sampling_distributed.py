@@ -145,7 +145,17 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             )
 
         self._initialize_parameter_server(init_for_load_only=init_for_load_only)
-        self.early_stop_hooks.append(lambda job: job.parameter_client.stop())
+
+        def stop_and_wait(job):
+            job.parameter_client.stop()
+            job.parameter_client.barrier()
+        self.early_stop_hooks.append(stop_and_wait)
+
+        def check_stopped(job):
+            print("checking for", job.parameter_client.rank)
+            job.parameter_client.barrier()
+            return job.parameter_client.is_stopped()
+        self.early_stop_conditions.append(check_stopped)
         self.work_pre_localized = False
         if self.config.get("job.distributed.pre_localize_partition"):
             self.pre_localized_entities = None
@@ -597,6 +607,8 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
                 # run the pre-batch hooks (may update the trace)
                 for f in self.pre_batch_hooks:
                     f(self, batch_index)
+                if batch_index > 5:
+                    break
 
                 # process batch (preprocessing + forward pass + backward pass on loss)
                 batch_result: TrainingJob._ProcessBatchResult = self._auto_subbatched_process_batch(
