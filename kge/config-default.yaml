@@ -43,7 +43,7 @@ job:
     lapse_port: '9091'
     gloo_socket_ifname: 'lo'  # 'eno1np0' get possible interfaces by echo /sys/class/net/*, corresponding ipaddresses with ip addr
     num_partitions: 2
-    partition_type: 'random_partition'  # random_partition, relation_partition, 2d_block_partition
+    partition_type: 'random'  # random, relation, stratification, graph-cut
     entity_sync_level: 'batch'  # batch, partition
     relation_sync_level: 'batch'  # batch, partition
     entity_async_write_back: True # write to parameter server asynchronous
@@ -52,8 +52,8 @@ job:
     relation_localize: False
     entity_pre_pull: 0  # number of entity batches to prepull: 1 - from ps, 2 - to gpu
     relation_pre_pull: 0  # number of relation batches to prepull: 1 - from ps, 2 - to gpu
-    repartition_epoch: True  # currently only works with 2d_block_partition and random
-    scheduling_order: 'random'  # block ordering for 2d_block_partition: random, sequential
+    repartition_epoch: True  # currently only works with stratification and random
+    scheduling_order: 'random'  # block ordering for stratification: random, sequential
     pre_localize_partition: False
 
     # combine mirrored strata to reduce number of partitions

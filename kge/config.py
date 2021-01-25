@@ -745,6 +745,12 @@ def _process_deprecated_options(options: Dict[str, Any]):
                     renamed_keys.add(key)
         return renamed_keys
 
+    # 25.01.21
+    rename_value("job.distributed.partition_type", "2d_block_partition", "stratification")
+    rename_value("job.distributed.partition_type", "metis_partition", "graph-cut")
+    rename_value("job.distributed.partition_type", "relation_partition", "relation")
+    rename_value("job.distributed.partition_type", "random_partition", "random")
+
     # 15.12.20
     rename_value("search.type", "ax", "ax_search")
     rename_value("search.type", "manual", "manual_search")

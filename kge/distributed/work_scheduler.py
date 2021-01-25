@@ -84,7 +84,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
         scheduling_order="random",
         repartition_epoch=True,
     ):
-        if partition_type == "random_partition":
+        if partition_type == "random":
             return RandomWorkScheduler(
                 config=config,
                 world_size=world_size,
@@ -96,7 +96,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
                 dataset_folder=dataset_folder,
                 repartition_epoch=repartition_epoch,
             )
-        elif partition_type == "relation_partition":
+        elif partition_type == "relation":
             return RelationWorkScheduler(
                 config=config,
                 world_size=world_size,
@@ -107,8 +107,8 @@ class WorkScheduler(mp.get_context("spawn").Process):
                 dataset_folder=dataset_folder,
                 dataset=dataset,
             )
-        elif partition_type == "metis_partition":
-            return MetisWorkScheduler(
+        elif partition_type == "graph-cut":
+            return GraphCutWorkScheduler(
                 config=config,
                 world_size=world_size,
                 master_ip=master_ip,
@@ -118,8 +118,8 @@ class WorkScheduler(mp.get_context("spawn").Process):
                 dataset_folder=dataset_folder,
                 dataset=dataset
             )
-        elif partition_type == "2d_block_partition":
-            return TwoDBlockWorkScheduler(
+        elif partition_type == "stratification":
+            return StratificationWorkScheduler(
                 config=config,
                 world_size=world_size,
                 master_ip=master_ip,
@@ -302,6 +302,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
         if os.path.exists(
             os.path.join(
                 dataset_folder,
+                "partitions",
                 partition_type,
                 f"num_{num_partitions}",
                 "train_assign_partitions.del.npy",
@@ -310,6 +311,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
             partition_assignment = np.load(
                 os.path.join(
                     dataset_folder,
+                    "partitions",
                     partition_type,
                     f"num_{num_partitions}",
                     "train_assign_partitions.del.npy",
@@ -319,6 +321,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
             partition_assignment = pd.read_csv(
                 os.path.join(
                     dataset_folder,
+                    "partitions",
                     partition_type,
                     f"num_{num_partitions}",
                     "train_assign_partitions.del"
@@ -330,6 +333,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
             np.save(
                 os.path.join(
                     dataset_folder,
+                    "partitions",
                     partition_type,
                     f"num_{num_partitions}",
                     "train_assign_partitions.del.npy",
@@ -359,6 +363,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
         if os.path.exists(
             os.path.join(
                 dataset_folder,
+                "partitions",
                 partition_type,
                 f"num_{num_partitions}",
                 f"{file_name}.npy",
@@ -367,6 +372,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
             partition_assignment = np.load(
                 os.path.join(
                     dataset_folder,
+                    "partitions",
                     partition_type,
                     f"num_{num_partitions}",
                     f"{file_name}.npy",
@@ -375,7 +381,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
         else:
             partition_assignment = pd.read_csv(
                 os.path.join(
-                    dataset_folder, partition_type, f"num_{num_partitions}", file_name,
+                    dataset_folder, "partitions", partition_type, f"num_{num_partitions}", file_name,
                 ),
                 header=None,
                 sep="\t",
@@ -383,7 +389,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
             ).to_numpy()
             np.save(
                 os.path.join(
-                    dataset_folder, partition_type, f"num_{num_partitions}", file_name,
+                    dataset_folder, "partitions", partition_type, f"num_{num_partitions}", file_name,
                 ),
                 partition_assignment,
             )
@@ -403,7 +409,7 @@ class RandomWorkScheduler(WorkScheduler):
         dataset_folder,
         repartition_epoch,
     ):
-        self.partition_type = "random_partition"
+        self.partition_type = "random"
         self.dataset = dataset
         super(RandomWorkScheduler, self).__init__(
             config=config,
@@ -453,7 +459,7 @@ class RelationWorkScheduler(WorkScheduler):
         dataset_folder,
         dataset,
     ):
-        self.partition_type = "relation_partition"
+        self.partition_type = "relation"
         super(RelationWorkScheduler, self).__init__(
             config=config,
             world_size=world_size,
@@ -507,7 +513,7 @@ class RelationWorkScheduler(WorkScheduler):
         return relations_in_partition
 
 
-class MetisWorkScheduler(WorkScheduler):
+class GraphCutWorkScheduler(WorkScheduler):
     def __init__(
         self,
         config,
@@ -519,8 +525,8 @@ class MetisWorkScheduler(WorkScheduler):
         dataset_folder,
         dataset,
     ):
-        self.partition_type = "metis_partition"
-        super(MetisWorkScheduler, self).__init__(
+        self.partition_type = "graph-cut"
+        super(GraphCutWorkScheduler, self).__init__(
             config=config,
             world_size=world_size,
             master_ip=master_ip,
@@ -532,14 +538,14 @@ class MetisWorkScheduler(WorkScheduler):
         )
 
     def _init_in_started_process(self):
-        super(MetisWorkScheduler, self)._init_in_started_process()
+        super(GraphCutWorkScheduler, self)._init_in_started_process()
         self.entities_to_partition = self._load_entities_to_partitions_file(
             self.partition_type, self.dataset.folder, self.num_partitions
         )
         self.entities_to_partition = self._get_entities_in_partition()
 
     def _config_check(self, config):
-        super(MetisWorkScheduler, self)._config_check(config)
+        super(GraphCutWorkScheduler, self)._config_check(config)
         if config.get("job.distributed.entity_sync_level") == "partition":
             raise ValueError("Metis partitioning does not support entity sync level 'parititon'. "
                              "Triples still have outside partition accesses.")
@@ -582,7 +588,7 @@ class MetisWorkScheduler(WorkScheduler):
         return max([len(i) for i in self.entities_to_partition.values()])
 
 
-class TwoDBlockWorkScheduler(WorkScheduler):
+class StratificationWorkScheduler(WorkScheduler):
     """
     Lets look at the PBG scheduling here to make it correct
     """
@@ -600,7 +606,7 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         scheduling_order="random",
         repartition_epoch=True,
     ):
-        self.partition_type = "2d_block_partition"
+        self.partition_type = "stratification"
         self.combine_mirror_blocks = config.get("job.distributed.combine_mirror_blocks")
         self.schedule_creator = TwoDBlockScheduleCreator(
             num_partitions=num_partitions,
@@ -610,7 +616,7 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         )
         #self.fixed_schedule = [item for sublist in self.schedule_creator.create_schedule() for item in sublist]
         self.fixed_schedule = self.schedule_creator.create_schedule()
-        super(TwoDBlockWorkScheduler, self).__init__(
+        super(StratificationWorkScheduler, self).__init__(
             config=config,
             world_size=world_size,
             master_ip=master_ip,
@@ -628,7 +634,7 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         self.num_max_entities = 0
         
     def _init_in_started_process(self):
-        super(TwoDBlockWorkScheduler, self)._init_in_started_process()
+        super(StratificationWorkScheduler, self)._init_in_started_process()
         # dictionary: key=worker_rank, value=block
         self.running_blocks: Dict[int, Tuple[int, int]] = {}
         # self.work_to_do = deepcopy(self.partitions)
@@ -747,29 +753,29 @@ class TwoDBlockWorkScheduler(WorkScheduler):
 
         mapped_data, mapped_entities = random_map_entities()
         print("repartition s")
-        s_block = TwoDBlockWorkScheduler._get_partition(
+        s_block = StratificationWorkScheduler._get_partition(
             mapped_data[:, 0],
             num_entities,
             num_partitions,
         )
         print("repartition o")
-        o_block = TwoDBlockWorkScheduler._get_partition(
+        o_block = StratificationWorkScheduler._get_partition(
             mapped_data[:, 2],
             num_entities,
             num_partitions,
         )
         print("map entity ids to partition")
-        entity_to_partition = TwoDBlockWorkScheduler._get_partition(
+        entity_to_partition = StratificationWorkScheduler._get_partition(
             mapped_entities,
             num_entities,
             num_partitions,
         )
         triple_partition_assignment = np.stack([s_block, o_block], axis=1)
-        partitions = TwoDBlockWorkScheduler._construct_partitions(
+        partitions = StratificationWorkScheduler._construct_partitions(
             triple_partition_assignment,
             num_partitions
         )
-        entities_in_bucket = TwoDBlockWorkScheduler._get_entities_in_bucket(
+        entities_in_bucket = StratificationWorkScheduler._get_entities_in_bucket(
             entity_to_partition,
             partitions,
             data.numpy(),
@@ -1039,7 +1045,7 @@ class TwoDBlockWorkScheduler(WorkScheduler):
 
     @staticmethod
     def _construct_partitions(partition_assignment, num_partitions):
-        partition_indexes, partition_data = TwoDBlockWorkScheduler._numba_construct_partitions(np.ascontiguousarray(partition_assignment), num_partitions)
+        partition_indexes, partition_data = StratificationWorkScheduler._numba_construct_partitions(np.ascontiguousarray(partition_assignment), num_partitions)
         partition_indexes = [(i, j) for i in range(num_partitions) for j in range(num_partitions)]
         partition_data = [torch.from_numpy(data).long().contiguous() for data in partition_data]
         partitions = dict(zip(partition_indexes, partition_data))
