@@ -607,8 +607,6 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
                 # run the pre-batch hooks (may update the trace)
                 for f in self.pre_batch_hooks:
                     f(self, batch_index)
-                if batch_index > 5:
-                    break
 
                 # process batch (preprocessing + forward pass + backward pass on loss)
                 batch_result: TrainingJob._ProcessBatchResult = self._auto_subbatched_process_batch(
