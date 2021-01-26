@@ -420,7 +420,10 @@ class NaiveSharedNegativeSample(BatchNegativeSample):
 
     def samples(self, indexes=None) -> torch.Tensor:
         # create one row, then expand to chunk size
-        chunk_size = len(indexes) if indexes else len(self.positive_triples)
+        if type(indexes) == slice:
+            chunk_size = len(range(*indexes.indices(len(self.positive_triples))))
+        else:
+            chunk_size = len(indexes) if indexes else len(self.positive_triples)
         device = self.positive_triples.device
         num_unique = len(self._unique_samples)
         if num_unique == self.num_samples:
