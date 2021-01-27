@@ -124,7 +124,7 @@ class DistributedLookupEmbedder(LookupEmbedder):
                 (
                     pretrained_embeddings,
                     torch.zeros(
-                        (len(pretrained_embeddings), self.optimizer_dim),
+                        (len(pretrained_embeddings), self.optimizer_dim + self.unnecessary_dim),
                         dtype=pretrained_embeddings.dtype,
                     ),
                 ),
