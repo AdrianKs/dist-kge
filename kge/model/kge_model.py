@@ -509,6 +509,8 @@ class KgeModel(KgeBase):
             if chunk_size <= 0:
                 return dataset.num_entities()
             return min(dataset.num_entities(), 2*batch_size+chunk_size)
+        if "distributed" not in config.get("train.type"):
+            return dataset.num_entities()
         num_samples_s = config.get("negative_sampling.num_samples.s")
         if config.get("negative_sampling.num_samples.o") == -1:
             num_samples_o = config.get("negative_sampling.num_samples.s")
