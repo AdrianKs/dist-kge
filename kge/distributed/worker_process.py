@@ -44,7 +44,7 @@ class WorkerProcessPool:
             else:
                 send_end = None
             configs[rank] = deepcopy(config)
-            configs[rank].set(config.get("model") + ".create_complete", False)
+            #configs[rank].set(config.get("model") + ".create_complete", False)
             configs[rank].init_folder()
             worker = WorkerProcess(
                 rank + already_init_workers,

@@ -408,9 +408,9 @@ class KgeModel(KgeBase):
         self._relation_embedder: KgeEmbedder
 
         if create_embedders:
-            if self.get_option("create_complete"):
-                embedding_layer_size = dataset.num_entities()
-            elif config.get("job.distributed.entity_sync_level") == "partition" and max_partition_entities != 0:
+            #if self.get_option("create_complete"):
+            #    embedding_layer_size = dataset.num_entities()
+            if config.get("job.distributed.entity_sync_level") == "partition" and max_partition_entities != 0:
                 embedding_layer_size =max_partition_entities
             else:
                 embedding_layer_size = self._calc_embedding_layer_size(config, dataset)
