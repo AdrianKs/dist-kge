@@ -227,6 +227,8 @@ class DistributedLookupEmbedder(LookupEmbedder):
         device = self._embeddings.weight.device
         len_indexes = len(indexes)
         if len(self.pre_pulled) > 0:
+            # todo: add workaround for relations here as well
+            # todo: clean up this method
             pre_pulled = self.pre_pulled.popleft()
             self.pulled_ids = pre_pulled["indexes"]
             self.parameter_client.wait(pre_pulled["pull_future"])
