@@ -415,11 +415,15 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             # create a model for validation with entity embedder size
             #  batch_size x 2 + eval.chunk_size
             self.config.set(self.config.get("model") + ".create_eval", True)
+
+            tmp_pretrain_model_filename = self.config.get("lookup_embedder.pretrain.model_filename")
+            self.config.set("lookup_embedder.pretrain.model_filename", "")
             self.model = KgeModel.create(
                 self.config, self.dataset, parameter_client=self.parameter_client
             )
             self.model.get_s_embedder().to_device(move_optim_data=False)
             self.model.get_p_embedder().to_device(move_optim_data=False)
+            self.config.set("lookup_embedder.pretrain.model_filename", tmp_pretrain_model_filename)
             self.config.set(self.config.get("model") + ".create_eval", False)
 
             self.valid_job.model = self.model
