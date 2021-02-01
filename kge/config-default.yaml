@@ -372,6 +372,8 @@ negative_sampling:
   #              of entities/relations
   # - frequency: samples entities/relations for corruption based on their relative
   #              frequency in the corresponding slot in the training data
+  # - batch    : samples entities/relations for corruption from the corresponding slot
+  #              inside the batch
   sampling_type: uniform
 
   # Options for sampling type frequency (negative_sampling.sampling_type=="frequency")
@@ -423,6 +425,20 @@ negative_sampling:
   # Whether sampling should be performed with replacement. Without replacement
   # sampling is currently only supported for shared sampling.
   with_replacement: True
+
+  # combine sampler with a second sampler
+  # configuration for the second sampler is defined in combined_options
+  combined: False
+
+  # sampler options for the second sampler
+  # options from sampler 1 used for everything that can not be defined here
+  combined_options:
+    # Negative sampler to use
+    sampling_type: batch
+    # Percentage of negative samples to use in the second sampler
+    negatives_percentage: 0.5
+    # Type of shared sampling implementation
+    shared_type: naive
 
   # Implementation to use for the negative sampling job. Possible values are:
   # - triple: Scores every positive and negative triple in the batch
