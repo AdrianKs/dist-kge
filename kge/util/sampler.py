@@ -630,19 +630,23 @@ class CombinedSharedBatchNegativeSample(BatchNegativeSample):
         self.batch_negative_sample_1 = batch_negative_sample_1
         self.batch_negative_sample_2 = batch_negative_sample_2
 
-    def unique_samples(self, indexes=None, return_inverse=False, remove_dropped=False):
+    def unique_samples(self, indexes=None, return_inverse=False, remove_dropped=True):
         if return_inverse:
             # slow but probably rarely used anyway
             samples = self.samples(indexes)
             return torch.unique(samples.contiguous().view(-1), return_inverse=True)
         else:
             unique_samples_1 = self.batch_negative_sample_1.unique_samples(
-                indexes, return_inverse
+                indexes, return_inverse, remove_dropped
             )
             unique_samples_2 = self.batch_negative_sample_2.unique_samples(
-                indexes, return_inverse
+                indexes, return_inverse, remove_dropped
             )
-            return torch.unique(unique_samples_1, unique_samples_2)
+            return torch.unique(torch.cat([unique_samples_1, unique_samples_2]))
+
+    def map_samples(self, mapper):
+        self.batch_negative_sample_1.map_samples(mapper)
+        self.batch_negative_sample_2.map_samples(mapper)
 
     def samples(self, indexes=None) -> torch.Tensor:
         samples_1 = self.batch_negative_sample_1.samples(indexes)
@@ -1033,6 +1037,12 @@ class KgeCombinedSampler(KgeSampler):
             negative_samples[:, num_samples_1:], slot, positive_triples
         )
         return torch.cat((negative_samples_1, negative_samples_2), dim=1)
+
+    def set_pool(self, pool: torch.Tensor, slot: int):
+        if type(self.sampler_1) is KgePooledSampler:
+            self.sampler_1.set_pool(pool, slot)
+        if type(self.sampler_2) is KgePooledSampler:
+            self.sampler_2.set_pool(pool, slot)
 
 
 class KgePooledSampler(KgeSampler):
