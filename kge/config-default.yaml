@@ -41,9 +41,9 @@ job:
     master_ip: '127.0.0.1'
     master_port: '8888'
     lapse_port: '9091'
-    gloo_socket_ifname: 'lo'  # 'eno1'
+    gloo_socket_ifname: 'lo'  # 'eno1np0' get possible interfaces by echo /sys/class/net/*, corresponding ipaddresses with ip addr
     num_partitions: 2
-    partition_type: 'random_partition'  # random_partition, relation_partition, 2d_block_partition
+    partition_type: 'random'  # random, relation, stratification, graph-cut
     entity_sync_level: 'batch'  # batch, partition
     relation_sync_level: 'batch'  # batch, partition
     entity_async_write_back: True # write to parameter server asynchronous
@@ -52,8 +52,9 @@ job:
     relation_localize: False
     entity_pre_pull: 0  # number of entity batches to prepull: 1 - from ps, 2 - to gpu
     relation_pre_pull: 0  # number of relation batches to prepull: 1 - from ps, 2 - to gpu
-    repartition_epoch: True  # currently only works with 2d_block_partition and random
-    scheduling_order: 'random'  # block ordering for 2d_block_partition: random, sequential
+    repartition_epoch: True  # currently only works with stratification and random
+    scheduling_order: 'random'  # block ordering for stratification: random, sequential
+    pre_localize_partition: False
 
     # combine mirrored strata to reduce number of partitions
     #  e.g.: (1,2) and (2,1)
@@ -160,11 +161,27 @@ dataset:
   # Additional dataset specific keys can be added as needed
   +++: +++
 
+
+## EXTENSIONS ###################################################################
+
+# Python modules that should be searched for models, embedders, jobs, etc.
+# LibKGE may not respect the module order specified here, so make sure to use
+# unique names. See also options 'import' and 'model' below.
+modules: [ kge.job, kge.model, kge.model.embedder ]
+
+# Names of additional configuration files to import. When this entry contains
+# entry NAME, then the modules above are searched for a file NAME.yaml, and this
+# file is imported into the configuration. By convention, NAME.yaml should have
+# a single top-level key NAME. Note that the configuration specified under
+# 'model' below is automatically imported in this way.
+import: []
+
+
 ## MODEL #######################################################################
 
 # Which KGE model to use. Examples include "rescal", "complex", "distmult",
 # "transe", or "conve". For available models, see the project homepage and/or
-# configuration files under kge/model.
+# configuration files under kge.model.
 model: ''
 
 num_workers: 1
@@ -177,7 +194,8 @@ train:
   # Split used for training (specified under 'dataset.files').
   split: train
 
-  # Type of training job.
+  # Type of training job (see respective configuration key). LibKGE ships with
+  # the following jobs:
   # - KvsAll: scores each unique sp/po/so pair along with all possible completions.
   # - negative_sampling: scores each unique spo triple along with sampled corrupted
   #   triples
@@ -318,9 +336,14 @@ train:
   # Other options
   pin_memory: False
 
+# Options for 1vsAll training (train.type=="1vsAll")
+1vsAll:
+  class_name: TrainingJob1vsAll
 
 # Options for KvsAll training (train.type=="KvsAll")
 KvsAll:
+  class_name: TrainingJobKvsAll
+
   # Amount of label smoothing (disabled when 0) for sp_ and _po queries.
   # Disencourages models to perform extreme predictions (0 or 1).
   #
@@ -342,11 +365,15 @@ KvsAll:
 
 # Options for negative sampling training (train.type=="negative_sampling")
 negative_sampling:
+  class_name: TrainingJobNegativeSampling
+
   # Negative sampler to use
   # - uniform  : samples entities/relations for corruption uniformly from the set
   #              of entities/relations
   # - frequency: samples entities/relations for corruption based on their relative
   #              frequency in the corresponding slot in the training data
+  # - batch    : samples entities/relations for corruption from the corresponding slot
+  #              inside the batch
   sampling_type: uniform
 
   # Options for sampling type frequency (negative_sampling.sampling_type=="frequency")
@@ -399,6 +426,20 @@ negative_sampling:
   # sampling is currently only supported for shared sampling.
   with_replacement: True
 
+  # combine sampler with a second sampler
+  # configuration for the second sampler is defined in combined_options
+  combined: False
+
+  # sampler options for the second sampler
+  # options from sampler 1 used for everything that can not be defined here
+  combined_options:
+    # Negative sampler to use
+    sampling_type: batch
+    # Percentage of negative samples to use in the second sampler
+    negatives_percentage: 0.5
+    # Type of shared sampling implementation
+    shared_type: naive
+
   # Implementation to use for the negative sampling job. Possible values are:
   # - triple: Scores every positive and negative triple in the batch
   # - all   : Scores against all possible targets and filters relevant scores
@@ -414,6 +455,9 @@ negative_sampling:
   # 'triple' (e.g., for TransE or RotatE in the current implementation).
   implementation: triple
 
+distributed_negative_sampling:
+  class_name: TrainingJobNegativeSamplingDistributed
+
 ## VALIDATION AND EVALUATION ###################################################
 
 # Options used for all evaluation jobs (job.type=="eval"). Also used during
@@ -423,7 +467,8 @@ eval:
   # Split used for evaluation (specified under 'dataset.files').
   split: valid
 
-  # Type of evaluation (entity_ranking, training_loss)
+  # Type of evaluation job (see respective configuration key). LibKGE ships with
+  # the following jobs: entity_ranking, training_loss
   type: entity_ranking
 
   # Batch size used during evaluation
@@ -490,6 +535,8 @@ valid:
 
 # specific configuration options for entity ranking
 entity_ranking:
+  class_name: EntityRankingJob
+
   # Splits used to filter for filtered metrics. The split using for evaluation
   # (as set above) will be added automatically if not present.
   filter_splits: [ 'train', 'valid' ]
@@ -549,6 +596,9 @@ entity_ranking:
     argument_frequency: False     # 25%, 50%, 75%, top quantiles per argument
 
 
+# specific configuration options for evaluation via training loss
+training_loss:
+  class_name: TrainingLossEvaluationJob
 
 ## EVALUATION ##################################################################
 
@@ -557,9 +607,9 @@ entity_ranking:
 
 # Options of hyperparameter search jobs (job.type=="search").
 search:
-  # The type of search to run (see descriptions below). Possible values: manual,
-  # grid, ax
-  type: ax
+  # Type of search job (see respective configuration key). LibKGE ships with the
+  # following jobs: manual_search, grid_search, ax_search
+  type: ax_search
 
   # Maximum number of parallel training jobs to run during a search.
   num_workers: 1
@@ -577,6 +627,8 @@ search:
 
 # Manually specify all configurations to try
 manual_search:
+  class_name: ManualSearchJob
+
   # If false, only creates training job folders but does not run the jobs.
   run: True
 
@@ -590,6 +642,8 @@ manual_search:
 # Metajob for a grid search. Creates a manual search job with all points on the
 # grid.
 grid_search:
+  class_name: GridSearchJob
+
   # If false, only creates manual search job configuration file but does not run
   # it. This may be useful to edit the configuration (e.g., change folder names)
   # or to copy the created configurations to an existing manual search job.
@@ -604,6 +658,8 @@ grid_search:
 
 # Dynamic search job that picks configurations using ax
 ax_search:
+  class_name: AxSearchJob
+
   # Total number of trials to run. Can be increased when a search job is
   # resumed.
   num_trials: 10

@@ -40,6 +40,12 @@ def create_and_run_distributed(
     #  not
     num_keys += num_meta_keys
 
+    if config.get("job.distributed.repartition_epoch") and config.get("job.distributed.partition_type") == "2d_block_partition":
+        # with stratificaton we have a lot of open files that need to be shared
+        # between processes. Some servers don't allow that. Therefore set sharing
+        # strategy to file_system to avoid too many open files error
+        torch.multiprocessing.set_sharing_strategy('file_system')
+
     if config.get("job.distributed.machine_id") == 0:
         if config.get("job.distributed.parameter_server") == "lapse":
             p = mp.Process(

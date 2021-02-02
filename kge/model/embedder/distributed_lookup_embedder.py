@@ -34,7 +34,9 @@ class DistributedLookupEmbedder(LookupEmbedder):
         )
         self.optimizer_dim = get_optimizer_dim(config, self.dim)
         self.optimizer_values = torch.zeros(
-            (self.vocab_size, self.optimizer_dim), dtype=torch.float32
+            (self.vocab_size, self.optimizer_dim),
+            dtype=torch.float32,
+            requires_grad=False,
         )
 
         self.complete_vocab_size = complete_vocab_size
@@ -49,8 +51,11 @@ class DistributedLookupEmbedder(LookupEmbedder):
 
         # maps the local embeddings to the embeddings in lapse
         # used in optimizer
-        self.local_to_lapse_mapper = torch.full((vocab_size,), -1, dtype=torch.long)
+        self.local_to_lapse_mapper = torch.full(
+            (vocab_size,), -1, dtype=torch.long, requires_grad=False
+        )
         self.pull_dim = self.dim + self.optimizer_dim
+        self.unnecessary_dim = self.parameter_client.dim - self.pull_dim
 
         # 3 pull tensors to pre-pull up to 3 batches
         # first boolean denotes if the tensor is free
@@ -58,7 +63,8 @@ class DistributedLookupEmbedder(LookupEmbedder):
             [
                 True,
                 torch.empty(
-                    (self.vocab_size, self.dim + self.optimizer_dim),
+                    (self.vocab_size, self.parameter_client.dim),
+                    # (self.vocab_size, self.dim + self.optimizer_dim),
                     dtype=torch.float32,
                     device="cpu",
                     requires_grad=False,
@@ -67,7 +73,8 @@ class DistributedLookupEmbedder(LookupEmbedder):
             [
                 True,
                 torch.empty(
-                    (self.vocab_size, self.dim + self.optimizer_dim),
+                    (self.vocab_size, self.parameter_client.dim),
+                    # (self.vocab_size, self.dim + self.optimizer_dim),
                     dtype=torch.float32,
                     device="cpu",
                     requires_grad=False,
@@ -76,7 +83,8 @@ class DistributedLookupEmbedder(LookupEmbedder):
             [
                 True,
                 torch.empty(
-                    (self.vocab_size, self.dim + self.optimizer_dim),
+                    (self.vocab_size, self.parameter_client.dim),
+                    # (self.vocab_size, self.dim + self.optimizer_dim),
                     dtype=torch.float32,
                     device="cpu",
                     requires_grad=False,
@@ -116,7 +124,7 @@ class DistributedLookupEmbedder(LookupEmbedder):
                 (
                     pretrained_embeddings,
                     torch.zeros(
-                        (len(pretrained_embeddings), self.optimizer_dim),
+                        (len(pretrained_embeddings), self.optimizer_dim + self.unnecessary_dim),
                         dtype=pretrained_embeddings.dtype,
                     ),
                 ),
@@ -125,12 +133,28 @@ class DistributedLookupEmbedder(LookupEmbedder):
         )
 
     def push_all(self):
-        self.parameter_client.push(
-            torch.arange(self.vocab_size) + self.lapse_offset,
-            torch.cat(
+        if self.unnecessary_dim > 0:
+            # todo: this is currently just a workaround until we support parameter
+            #  of different lengths
+            push_tensor = torch.cat(
+                (
+                    self._embeddings.weight.detach().cpu(),
+                    self.optimizer_values.cpu(),
+                    torch.empty(
+                        [len(self.optimizer_values), self.unnecessary_dim],
+                        device="cpu",
+                        dtype=self.optimizer_values.dtype,
+                    ),
+                ),
+                dim=1,
+            )
+        else:
+            push_tensor = torch.cat(
                 (self._embeddings.weight.detach().cpu(), self.optimizer_values.cpu()),
                 dim=1,
-            ),
+            )
+        self.parameter_client.push(
+            torch.arange(self.vocab_size) + self.lapse_offset, push_tensor
         )
 
     def pull_all(self):
@@ -143,13 +167,23 @@ class DistributedLookupEmbedder(LookupEmbedder):
         self.set_indexes = self.pulled_ids + self.lapse_offset
         num_pulled = len(self.set_indexes)
         # move tensors to cpu before cat to reduce gpu memory usage
-        self.set_tensor = torch.cat(
-            (
-                self._embeddings.weight[:num_pulled].detach().cpu(),
-                self.optimizer_values[:num_pulled].cpu(),
-            ),
-            dim=1,
-        )
+        if self.unnecessary_dim > 0:
+            self.set_tensor = torch.cat(
+                (
+                    self._embeddings.weight[:num_pulled].detach().cpu(),
+                    self.optimizer_values[:num_pulled].cpu(),
+                    torch.empty((num_pulled, self.unnecessary_dim), device="cpu"),
+                ),
+                dim=1,
+            )
+        else:
+            self.set_tensor = torch.cat(
+                (
+                    self._embeddings.weight[:num_pulled].detach().cpu(),
+                    self.optimizer_values[:num_pulled].cpu(),
+                ),
+                dim=1,
+            )
         self.parameter_client.set(self.set_indexes, self.set_tensor, asynchronous=True)
 
     def _get_free_pull_tensor(self):
@@ -193,6 +227,8 @@ class DistributedLookupEmbedder(LookupEmbedder):
         device = self._embeddings.weight.device
         len_indexes = len(indexes)
         if len(self.pre_pulled) > 0:
+            # todo: add workaround for relations here as well
+            # todo: clean up this method
             pre_pulled = self.pre_pulled.popleft()
             self.pulled_ids = pre_pulled["indexes"]
             self.parameter_client.wait(pre_pulled["pull_future"])
@@ -217,18 +253,20 @@ class DistributedLookupEmbedder(LookupEmbedder):
         pull_time += time.time()
         cpu_gpu_time -= time.time()
         # split tensor already before moving to gpu to reduce memory footprint on gpu
-        pulled_embeddings, pulled_optim_values = torch.split(
-            pull_tensor, [self.dim, self.optimizer_dim], dim=1
+        pulled_embeddings, pulled_optim_values, _ = torch.split(
+            pull_tensor, [self.dim, self.optimizer_dim, self.unnecessary_dim], dim=1
         )
         cpu_gpu_time += time.time()
         self._embeddings.weight.data[:len_indexes].copy_(pulled_embeddings)
         self.optimizer_values[:len_indexes].copy_(pulled_optim_values)
         return pull_time, cpu_gpu_time
 
-    def localize(self, indexes: Tensor, make_unique=False):
+    def localize(self, indexes: Tensor, asynchronous=False, make_unique=False):
         if make_unique:
             indexes = torch.unique(indexes)
-        self.parameter_client.localize((indexes + self.lapse_offset).cpu())
+        self.parameter_client.localize(
+            (indexes + self.lapse_offset).cpu(), asynchronous
+        )
         # TODO: also pull the embeddings and store in a tensor on gpu
         #  this needs to be handled in the background somehow
         #  to device can be done in background, but this needs to wait for localize

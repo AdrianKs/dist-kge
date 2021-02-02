@@ -188,7 +188,7 @@ class TrainingOrEvaluationJob(Job):
 
         # defines various hooks
         # Signature: job
-        self.pre_batch_hooks: List[Callable[[Job], Any]] = []
+        self.pre_batch_hooks: List[Callable[[Job, int], Any]] = []
         self.post_batch_hooks: List[Callable[[Job], Any]] = []
         self.pre_epoch_hooks: List[Callable[[Job], Any]] = []
         self.post_epoch_hooks: List[Callable[[Job], Any]] = []

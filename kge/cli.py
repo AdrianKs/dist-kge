@@ -127,6 +127,7 @@ def main():
         config.log("Using folder: {}".format(config.folder))
 
         # determine checkpoint to resume (if any)
+        checkpoint_file = None
         if hasattr(args, "checkpoint"):
             checkpoint_file = get_checkpoint_file(config, args.checkpoint)
 
@@ -183,11 +184,11 @@ def main():
 
             checkpoint = None
             # let's go
-            if args.command == "resume":
-                if checkpoint_file is not None:
-                    checkpoint = load_checkpoint(
-                        checkpoint_file, config.get("job.device")
-                    )
+            # if args.command == "resume":
+            #     if checkpoint_file is not None:
+            #         checkpoint = load_checkpoint(
+            #             checkpoint_file, config.get("job.device")
+            #         )
                 #     job = Job.create_from(
                 #         checkpoint, new_config=config, dataset=dataset
                 #     )
@@ -198,7 +199,7 @@ def main():
                 #     )
             # else:
             if config.get("job.type") == "train" and config.get("job.distributed.num_workers") > 0:
-                create_and_run_distributed(config, dataset, checkpoint)
+                create_and_run_distributed(config, dataset, checkpoint_file)
             else:
                 job = Job.create(config, dataset)
                 job.run()

@@ -2,7 +2,6 @@ import os
 import math
 import datetime
 import time
-import concurrent.futures
 import numpy as np
 import pandas as pd
 import numba
@@ -28,6 +27,7 @@ class SCHEDULER_CMDS(IntEnum):
     SHUTDOWN = 6
     INIT_INFO = 7
     GET_INIT_WORK = 8
+    PRE_LOCALIZE_WORK = 9
 
 
 class WorkScheduler(mp.get_context("spawn").Process):
@@ -84,17 +84,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
         scheduling_order="random",
         repartition_epoch=True,
     ):
-        if partition_type == "block_partition":
-            return BlockWorkScheduler(
-                config=config,
-                world_size=world_size,
-                master_ip=master_ip,
-                master_port=master_port,
-                num_partitions=num_partitions,
-                num_clients=num_clients,
-                dataset_folder=dataset_folder,
-            )
-        elif partition_type == "random_partition":
+        if partition_type == "random":
             return RandomWorkScheduler(
                 config=config,
                 world_size=world_size,
@@ -106,7 +96,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
                 dataset_folder=dataset_folder,
                 repartition_epoch=repartition_epoch,
             )
-        elif partition_type == "relation_partition":
+        elif partition_type == "relation":
             return RelationWorkScheduler(
                 config=config,
                 world_size=world_size,
@@ -117,8 +107,8 @@ class WorkScheduler(mp.get_context("spawn").Process):
                 dataset_folder=dataset_folder,
                 dataset=dataset,
             )
-        elif partition_type == "metis_partition":
-            return MetisWorkScheduler(
+        elif partition_type == "graph-cut":
+            return GraphCutWorkScheduler(
                 config=config,
                 world_size=world_size,
                 master_ip=master_ip,
@@ -128,8 +118,8 @@ class WorkScheduler(mp.get_context("spawn").Process):
                 dataset_folder=dataset_folder,
                 dataset=dataset
             )
-        elif partition_type == "2d_block_partition":
-            return TwoDBlockWorkScheduler(
+        elif partition_type == "stratification":
+            return StratificationWorkScheduler(
                 config=config,
                 world_size=world_size,
                 master_ip=master_ip,
@@ -164,10 +154,8 @@ class WorkScheduler(mp.get_context("spawn").Process):
         epoch_time = None
         if self.repartition_epoch:
             if self.repartition_worker_pool is None:
-                self.repartition_worker_pool = concurrent.futures.ProcessPoolExecutor(
-                    max_workers=1,
-                    mp_context=torch.multiprocessing.get_context("fork"),
-                )
+                mp.Pool()
+                self.repartition_worker_pool = mp.Pool(processes=1)
             self._repartition_in_background()
 
         while True:
@@ -197,28 +185,33 @@ class WorkScheduler(mp.get_context("spawn").Process):
                 if rank in self.done_workers:
                     self.asking_workers.append(rank)
                     continue
-                self._send_work(rank, cmd_buffer)
-            if cmd == SCHEDULER_CMDS.WORK_DONE:
+                work, entities, relations, wait = self._next_work(rank)
+                self._send_work(rank, cmd_buffer, work, entities, relations, wait)
+            elif cmd == SCHEDULER_CMDS.WORK_DONE:
                 self._handle_work_done(rank)
-            if cmd == SCHEDULER_CMDS.BARRIER:
+            elif cmd == SCHEDULER_CMDS.BARRIER:
                 barrier_count += 1
                 if barrier_count == self.num_clients:
                     barrier_count = 0
                     dist.barrier()
-            if cmd == SCHEDULER_CMDS.SHUTDOWN:
+            elif cmd == SCHEDULER_CMDS.SHUTDOWN:
                 shutdown_count += 1
                 if shutdown_count == self.num_clients:
                     print("shutting down work scheduler")
                     if self.repartition_epoch:
-                        if self.repartition_future is not None:
-                            self.repartition_future.cancel()
-                    if self.repartition_worker_pool is not None:
-                        self.repartition_worker_pool.shutdown()
+                        if self.repartition_worker_pool is not None:
+                            self.repartition_worker_pool.close()
+                            self.repartition_worker_pool.terminate()
                     break
-            if cmd == SCHEDULER_CMDS.INIT_INFO:
+            elif cmd == SCHEDULER_CMDS.INIT_INFO:
                 self._handle_init_info(rank)
-            if cmd == SCHEDULER_CMDS.GET_INIT_WORK:
+            elif cmd == SCHEDULER_CMDS.GET_INIT_WORK:
                 self._handle_get_init_work(rank=rank, embedding_layer_size=cmd_buffer[1].item())
+            elif cmd == SCHEDULER_CMDS.PRE_LOCALIZE_WORK:
+                work, entities, relations, wait = self._handle_pre_localize_work(rank=rank)
+                self._send_work(rank, cmd_buffer, work, entities, relations, wait, pre_localize=True)
+            else:
+                raise ValueError(f"The work scheduler received an unknown command: {cmd}")
 
     def _next_work(
         self, rank
@@ -233,8 +226,8 @@ class WorkScheduler(mp.get_context("spawn").Process):
     def _repartition_in_background(self):
         pass
 
-    def _send_work(self, rank, cmd_buffer):
-        work, entities, relations, wait = self._next_work(rank)
+    def _send_work(self, rank, cmd_buffer, work, entities, relations, wait, pre_localize=False):
+        # work, entities, relations, wait = self._next_work(rank)
         if work is not None:
             cmd_buffer[0] = SCHEDULER_CMDS.WORK
             cmd_buffer[1] = len(work)
@@ -259,7 +252,8 @@ class WorkScheduler(mp.get_context("spawn").Process):
             cmd_buffer[1] = self.wait_time
             dist.send(cmd_buffer, dst=rank)
         else:
-            self.done_workers.append(rank)
+            if not pre_localize:
+                self.done_workers.append(rank)
             cmd_buffer[0] = SCHEDULER_CMDS.NO_WORK
             cmd_buffer[1] = 0
             dist.send(cmd_buffer, dst=rank)
@@ -292,6 +286,9 @@ class WorkScheduler(mp.get_context("spawn").Process):
         self.init_up_to_entity += embedding_layer_size
         dist.send(return_buffer, dst=rank)
 
+    def _handle_pre_localize_work(self, rank):
+        raise ValueError("The current partition scheme does not support pre-localizing")
+
     def _get_max_entities(self):
         return 0
 
@@ -305,6 +302,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
         if os.path.exists(
             os.path.join(
                 dataset_folder,
+                "partitions",
                 partition_type,
                 f"num_{num_partitions}",
                 "train_assign_partitions.del.npy",
@@ -313,6 +311,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
             partition_assignment = np.load(
                 os.path.join(
                     dataset_folder,
+                    "partitions",
                     partition_type,
                     f"num_{num_partitions}",
                     "train_assign_partitions.del.npy",
@@ -322,6 +321,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
             partition_assignment = pd.read_csv(
                 os.path.join(
                     dataset_folder,
+                    "partitions",
                     partition_type,
                     f"num_{num_partitions}",
                     "train_assign_partitions.del"
@@ -333,6 +333,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
             np.save(
                 os.path.join(
                     dataset_folder,
+                    "partitions",
                     partition_type,
                     f"num_{num_partitions}",
                     "train_assign_partitions.del.npy",
@@ -362,6 +363,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
         if os.path.exists(
             os.path.join(
                 dataset_folder,
+                "partitions",
                 partition_type,
                 f"num_{num_partitions}",
                 f"{file_name}.npy",
@@ -370,6 +372,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
             partition_assignment = np.load(
                 os.path.join(
                     dataset_folder,
+                    "partitions",
                     partition_type,
                     f"num_{num_partitions}",
                     f"{file_name}.npy",
@@ -378,7 +381,7 @@ class WorkScheduler(mp.get_context("spawn").Process):
         else:
             partition_assignment = pd.read_csv(
                 os.path.join(
-                    dataset_folder, partition_type, f"num_{num_partitions}", file_name,
+                    dataset_folder, "partitions", partition_type, f"num_{num_partitions}", file_name,
                 ),
                 header=None,
                 sep="\t",
@@ -386,57 +389,11 @@ class WorkScheduler(mp.get_context("spawn").Process):
             ).to_numpy()
             np.save(
                 os.path.join(
-                    dataset_folder, partition_type, f"num_{num_partitions}", file_name,
+                    dataset_folder, "partitions", partition_type, f"num_{num_partitions}", file_name,
                 ),
                 partition_assignment,
             )
         return partition_assignment
-
-
-class BlockWorkScheduler(WorkScheduler):
-    def __init__(
-        self,
-        config,
-        world_size,
-        master_ip,
-        master_port,
-        num_partitions,
-        num_clients,
-        dataset_folder,
-    ):
-        self.partition_type = "block_partition"
-        super(BlockWorkScheduler, self).__init__(
-            config,
-            world_size,
-            master_ip,
-            master_port,
-            num_partitions,
-            num_clients,
-            dataset_folder,
-        )
-
-    def _next_work(
-        self, rank
-    ) -> Tuple[
-        Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor], bool
-    ]:
-        """add work/partitions to the list of work to do"""
-        try:
-            return self.partitions[self.work_to_do.pop()], None, None, False
-        except IndexError:
-            return None, None, None, False
-
-    def _load_partitions(self, dataset_folder, num_partitions):
-        partition_assignment = self._load_partition_file(
-            self.partition_type, dataset_folder, num_partitions
-        )
-        # todo: let the partitions start at zero, then we do not need this unique
-        partition_indexes = np.unique(partition_assignment)
-        partitions = [
-            torch.from_numpy(np.where(partition_assignment == i)[0])
-            for i in partition_indexes
-        ]
-        return partitions
 
 
 class RandomWorkScheduler(WorkScheduler):
@@ -452,7 +409,7 @@ class RandomWorkScheduler(WorkScheduler):
         dataset_folder,
         repartition_epoch,
     ):
-        self.partition_type = "random_partition"
+        self.partition_type = "random"
         self.dataset = dataset
         super(RandomWorkScheduler, self).__init__(
             config=config,
@@ -479,7 +436,7 @@ class RandomWorkScheduler(WorkScheduler):
 
     def _load_partitions(self, dataset_folder, num_partitions):
         num_triples = len(self.dataset.split("train"))
-        permuted_triple_index = torch.randperm(num_triples)
+        permuted_triple_index = torch.from_numpy(np.random.permutation(num_triples))
         partitions = list(torch.chunk(permuted_triple_index, num_partitions))
         partitions = [p.clone() for p in partitions]
         return partitions
@@ -502,7 +459,7 @@ class RelationWorkScheduler(WorkScheduler):
         dataset_folder,
         dataset,
     ):
-        self.partition_type = "relation_partition"
+        self.partition_type = "relation"
         super(RelationWorkScheduler, self).__init__(
             config=config,
             world_size=world_size,
@@ -556,7 +513,7 @@ class RelationWorkScheduler(WorkScheduler):
         return relations_in_partition
 
 
-class MetisWorkScheduler(WorkScheduler):
+class GraphCutWorkScheduler(WorkScheduler):
     def __init__(
         self,
         config,
@@ -568,8 +525,8 @@ class MetisWorkScheduler(WorkScheduler):
         dataset_folder,
         dataset,
     ):
-        self.partition_type = "metis_partition"
-        super(MetisWorkScheduler, self).__init__(
+        self.partition_type = "graph-cut"
+        super(GraphCutWorkScheduler, self).__init__(
             config=config,
             world_size=world_size,
             master_ip=master_ip,
@@ -581,14 +538,14 @@ class MetisWorkScheduler(WorkScheduler):
         )
 
     def _init_in_started_process(self):
-        super(MetisWorkScheduler, self)._init_in_started_process()
+        super(GraphCutWorkScheduler, self)._init_in_started_process()
         self.entities_to_partition = self._load_entities_to_partitions_file(
             self.partition_type, self.dataset.folder, self.num_partitions
         )
         self.entities_to_partition = self._get_entities_in_partition()
 
     def _config_check(self, config):
-        super(MetisWorkScheduler, self)._config_check(config)
+        super(GraphCutWorkScheduler, self)._config_check(config)
         if config.get("job.distributed.entity_sync_level") == "partition":
             raise ValueError("Metis partitioning does not support entity sync level 'parititon'. "
                              "Triples still have outside partition accesses.")
@@ -614,7 +571,7 @@ class MetisWorkScheduler(WorkScheduler):
         # todo: let the partitions start at zero, then we do not need this unique
         partition_indexes = np.unique(partition_assignment)
         partitions = [
-            torch.from_numpy(np.where(partition_assignment == i)[0])
+            torch.from_numpy(np.where(partition_assignment == i)[0]).contiguous()
             for i in partition_indexes
         ]
         return partitions
@@ -624,14 +581,14 @@ class MetisWorkScheduler(WorkScheduler):
         for partition in range(self.num_partitions):
             entities_in_partition[partition] = torch.from_numpy(
                 np.where((self.entities_to_partition == partition),)[0]
-            )
+            ).contiguous()
         return entities_in_partition
 
     def _get_max_entities(self):
         return max([len(i) for i in self.entities_to_partition.values()])
 
 
-class TwoDBlockWorkScheduler(WorkScheduler):
+class StratificationWorkScheduler(WorkScheduler):
     """
     Lets look at the PBG scheduling here to make it correct
     """
@@ -649,7 +606,7 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         scheduling_order="random",
         repartition_epoch=True,
     ):
-        self.partition_type = "2d_block_partition"
+        self.partition_type = "stratification"
         self.combine_mirror_blocks = config.get("job.distributed.combine_mirror_blocks")
         self.schedule_creator = TwoDBlockScheduleCreator(
             num_partitions=num_partitions,
@@ -659,7 +616,7 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         )
         #self.fixed_schedule = [item for sublist in self.schedule_creator.create_schedule() for item in sublist]
         self.fixed_schedule = self.schedule_creator.create_schedule()
-        super(TwoDBlockWorkScheduler, self).__init__(
+        super(StratificationWorkScheduler, self).__init__(
             config=config,
             world_size=world_size,
             master_ip=master_ip,
@@ -677,7 +634,7 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         self.num_max_entities = 0
         
     def _init_in_started_process(self):
-        super(TwoDBlockWorkScheduler, self)._init_in_started_process()
+        super(StratificationWorkScheduler, self)._init_in_started_process()
         # dictionary: key=worker_rank, value=block
         self.running_blocks: Dict[int, Tuple[int, int]] = {}
         # self.work_to_do = deepcopy(self.partitions)
@@ -695,6 +652,7 @@ class TwoDBlockWorkScheduler(WorkScheduler):
             deepcopy(self.partitions)
         )
         self.current_iteration = set()
+        self._pre_localized_strata: Dict[int, Tuple[int, int]] = {}
 
     def _order_by_schedule(
         self, partitions: Dict[Tuple[int, int], torch.Tensor]
@@ -795,29 +753,29 @@ class TwoDBlockWorkScheduler(WorkScheduler):
 
         mapped_data, mapped_entities = random_map_entities()
         print("repartition s")
-        s_block = TwoDBlockWorkScheduler._get_partition(
+        s_block = StratificationWorkScheduler._get_partition(
             mapped_data[:, 0],
             num_entities,
             num_partitions,
         )
         print("repartition o")
-        o_block = TwoDBlockWorkScheduler._get_partition(
+        o_block = StratificationWorkScheduler._get_partition(
             mapped_data[:, 2],
             num_entities,
             num_partitions,
         )
         print("map entity ids to partition")
-        entity_to_partition = TwoDBlockWorkScheduler._get_partition(
+        entity_to_partition = StratificationWorkScheduler._get_partition(
             mapped_entities,
             num_entities,
             num_partitions,
         )
         triple_partition_assignment = np.stack([s_block, o_block], axis=1)
-        partitions = TwoDBlockWorkScheduler._construct_partitions(
+        partitions = StratificationWorkScheduler._construct_partitions(
             triple_partition_assignment,
             num_partitions
         )
-        entities_in_bucket = TwoDBlockWorkScheduler._get_entities_in_bucket(
+        entities_in_bucket = StratificationWorkScheduler._get_entities_in_bucket(
             entity_to_partition,
             partitions,
             data.numpy(),
@@ -856,10 +814,12 @@ class TwoDBlockWorkScheduler(WorkScheduler):
             num_entities_in_strata = [len(i) for i in self._entities_in_bucket.values()]
             len_std = np.std(num_entities_in_strata).item()
             if self.combine_mirror_blocks:
-                self.num_max_entities = self._get_mirrored_max_entities(
+                max_num_entities, std_num_entities = self._get_mirrored_max_entities(
                     self.num_partitions,
-                    list(self._entities_in_bucket.values())
-                ) + 2*(round(len_std))
+                    list(self._entities_in_bucket.values()),
+                    return_std=True
+                )
+                self.num_max_entities = max_num_entities + 2*(round(std_num_entities))
             else:
                 self.num_max_entities = max(num_entities_in_strata) + 5*round(len_std)
         else:
@@ -869,7 +829,7 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         return self.num_max_entities
 
     @staticmethod
-    def _get_mirrored_max_entities(num_partitions, strata_entities):
+    def _get_mirrored_max_entities(num_partitions, strata_entities, return_std=False):
         """
         Calculate how many entities occur at most if we combine mirrored blocks
         Combining blocks (0,1) and (1,0)
@@ -884,6 +844,7 @@ class TwoDBlockWorkScheduler(WorkScheduler):
 
         """
         max_value = 0
+        all_num_entities = []
         for i in range(num_partitions):
             for j in range(i, num_partitions):
                 num_entities = 0
@@ -900,9 +861,15 @@ class TwoDBlockWorkScheduler(WorkScheduler):
                         (strata_entities[i*num_partitions+j],
                          strata_entities[j*num_partitions+i]))
                     ))
+                all_num_entities.append(num_entities)
                 if num_entities > max_value:
                     # this will lead to a race condition if we do this in parallel
                     max_value = num_entities
+        all_num_entities = np.array(all_num_entities)
+        max_value = all_num_entities.max()
+        if return_std:
+            std = all_num_entities.std()
+            return max_value, std
         print("max entities", max_value)
         return max_value
 
@@ -915,20 +882,27 @@ class TwoDBlockWorkScheduler(WorkScheduler):
             return self._acquire_bucket_by_fixed_schedule(rank)
         return self._acquire_bucket(rank)
 
-    def _acquire_bucket_by_fixed_schedule(self, rank):
+    def _handle_pre_localize_work(self, rank):
+        return self._acquire_bucket_by_fixed_schedule(rank, pre_localize=True)
+
+    def _acquire_bucket_by_fixed_schedule(self, rank, pre_localize=False):
         try:
-            if len(self.current_iteration) == 0:
-                self.current_iteration = set(self.fixed_schedule.pop())
             locked_entity_strata = set()
-            for strata in self.running_blocks.values():
-                locked_entity_strata.add(strata[0])
-                locked_entity_strata.add(strata[1])
-            for strata in self.current_iteration:
-                if strata[0] in locked_entity_strata:
-                    continue
-                if strata[1] in locked_entity_strata:
-                    continue
-                self.current_iteration.remove(strata)
+            for locked_dict in [self.running_blocks, self._pre_localized_strata]:
+                for running_rank, strata in locked_dict.items():
+                    if rank == running_rank:
+                        continue
+                    locked_entity_strata.add(strata[0])
+                    locked_entity_strata.add(strata[1])
+
+            def _strata_locked(strata):
+                return strata[0] in locked_entity_strata or strata[1] in locked_entity_strata
+
+            def _acquire(strata, acquire_pre_localized=False):
+                if acquire_pre_localized:
+                    del self._pre_localized_strata[rank]
+                else:
+                    self.current_iteration.remove(strata)
                 strata_data = self.partitions[strata]
                 entities_in_strata = self._entities_in_bucket.get(strata)
                 if self.combine_mirror_blocks:
@@ -948,8 +922,29 @@ class TwoDBlockWorkScheduler(WorkScheduler):
                     strata_data = torch.cat(
                         (strata_data, self.partitions[mirror_strata])
                     )
-                self.running_blocks[rank] = strata
+                if not pre_localize:
+                    self.running_blocks[rank] = strata
+                else:
+                    self._pre_localized_strata[rank] = strata
                 return strata_data, entities_in_strata, None, False
+
+            # only use pre localized strata, if we are not about to pre-localize a new
+            # one --> not pre_localize
+            if not pre_localize and self._pre_localized_strata.get(rank, None) is not None:
+                strata = self._pre_localized_strata[rank]
+                if _strata_locked(strata):
+                    # we are waiting until the localized strata is free
+                    return None, None, None, True
+                return _acquire(strata, acquire_pre_localized=True)
+
+            if len(self.current_iteration) == 0:
+                self.current_iteration = set(self.fixed_schedule.pop())
+
+            for strata in self.current_iteration:
+                if _strata_locked(strata):
+                    continue
+                return _acquire(strata)
+
             # return wait here
             return None, None, None, True
         except IndexError:
@@ -1023,17 +1018,17 @@ class TwoDBlockWorkScheduler(WorkScheduler):
         del self.running_blocks[rank]
 
     def _repartition_in_background(self):
-        self.repartition_future = self.repartition_worker_pool.submit(
+        self.repartition_future = self.repartition_worker_pool.apply_async(
             self._repartition,
-            self.dataset.split("train"),
-            self.dataset.num_entities(),
-            self.num_partitions,
-            self.entities_needed_only
+            (self.dataset.split("train"),
+             self.dataset.num_entities(),
+             self.num_partitions,
+             self.entities_needed_only)
         )
 
     def _refill_work(self):
         if self.repartition_epoch:
-            self.partitions, self._entities_in_bucket = self.repartition_future.result()
+            self.partitions, self._entities_in_bucket = self.repartition_future.get()
             self._repartition_in_background()
         #self.fixed_schedule = [item for sublist in self.schedule_creator.create_schedule() for item in sublist]
         self.fixed_schedule = self.schedule_creator.create_schedule()
@@ -1050,7 +1045,7 @@ class TwoDBlockWorkScheduler(WorkScheduler):
 
     @staticmethod
     def _construct_partitions(partition_assignment, num_partitions):
-        partition_indexes, partition_data = TwoDBlockWorkScheduler._numba_construct_partitions(np.ascontiguousarray(partition_assignment), num_partitions)
+        partition_indexes, partition_data = StratificationWorkScheduler._numba_construct_partitions(np.ascontiguousarray(partition_assignment), num_partitions)
         partition_indexes = [(i, j) for i in range(num_partitions) for j in range(num_partitions)]
         partition_data = [torch.from_numpy(data).long().contiguous() for data in partition_data]
         partitions = dict(zip(partition_indexes, partition_data))
@@ -1071,7 +1066,7 @@ class TwoDBlockWorkScheduler(WorkScheduler):
             partition_lengths[i] = 0
             partition_data.append(
                 np.empty(
-                    int(len(partition_assignment)/((num_partitions*num_partitions)/2)),
+                    int(len(partition_assignment)/num_partitions),
                     dtype=np.int64
                 )
             )
@@ -1105,36 +1100,51 @@ class SchedulerClient:
         max_relations = info_buffer[1]
         return max_entities, max_relations
 
+    def _receive_work(self, cmd):
+        work_buffer = torch.empty((cmd[1].item(),), dtype=torch.long)
+        dist.recv(work_buffer, src=self.scheduler_rank)
+        # get partition entities
+        dist.recv(cmd, src=self.scheduler_rank)
+        num_entities = cmd[1].item()
+        entity_buffer = None
+        if num_entities != 0:
+            entity_buffer = torch.empty((num_entities,), dtype=torch.long)
+            dist.recv(entity_buffer, src=self.scheduler_rank)
+        # get partition relations
+        dist.recv(cmd, src=self.scheduler_rank)
+        num_relations = cmd[1].item()
+        relation_buffer = None
+        if num_relations != 0:
+            relation_buffer = torch.empty((num_relations,), dtype=torch.long)
+            dist.recv(relation_buffer, src=self.scheduler_rank)
+        return work_buffer, entity_buffer, relation_buffer
+
     def get_work(
-        self,
+            self,
     ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
         while True:
             cmd = torch.LongTensor([SCHEDULER_CMDS.GET_WORK, 0])
             dist.send(cmd, dst=self.scheduler_rank)
             dist.recv(cmd, src=self.scheduler_rank)
             if cmd[0] == SCHEDULER_CMDS.WORK:
-                work_buffer = torch.empty((cmd[1].item(),), dtype=torch.long)
-                dist.recv(work_buffer, src=self.scheduler_rank)
-                # get partition entities
-                dist.recv(cmd, src=self.scheduler_rank)
-                num_entities = cmd[1].item()
-                entity_buffer = None
-                if num_entities != 0:
-                    entity_buffer = torch.empty((num_entities,), dtype=torch.long)
-                    dist.recv(entity_buffer, src=self.scheduler_rank)
-                # get partition relations
-                dist.recv(cmd, src=self.scheduler_rank)
-                num_relations = cmd[1].item()
-                relation_buffer = None
-                if num_relations != 0:
-                    relation_buffer = torch.empty((num_relations,), dtype=torch.long)
-                    dist.recv(relation_buffer, src=self.scheduler_rank)
-                return work_buffer, entity_buffer, relation_buffer
+                return self._receive_work(cmd)
             elif cmd[0] == SCHEDULER_CMDS.WAIT:
                 # print("waiting for a block")
                 time.sleep(cmd[1].item())
             else:
                 return None, None, None
+
+    def get_pre_localize_work(self):
+        cmd = torch.LongTensor([SCHEDULER_CMDS.PRE_LOCALIZE_WORK, 0])
+        dist.send(cmd, dst=self.scheduler_rank)
+        dist.recv(cmd, src=self.scheduler_rank)
+        if cmd[0] == SCHEDULER_CMDS.WORK:
+            work, entities, relations = self._receive_work(cmd)
+            return work, entities, relations, False
+        elif cmd[0] == SCHEDULER_CMDS.WAIT:
+            return None, None, None, True
+        else:
+            return None, None, None, False
 
     def get_init_work(self, entity_embedder_size):
         """
