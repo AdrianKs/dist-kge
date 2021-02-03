@@ -50,6 +50,7 @@ class KgeParameterClient:
                 server_id,
                 rank=client_id,
                 lapse_server=server,  # in lapse we need to provide the actual server
+                dim=embedding_dim,
                 num_meta_keys=num_meta_keys,
                 worker_group=worker_group,
             )
@@ -80,6 +81,7 @@ class LapseParameterClient(lapse.Worker, KgeParameterClient):
         customer_id: int,
         rank: int,
         lapse_server: lapse.Server,
+        dim,
         num_meta_keys,
         worker_group,
     ):
@@ -87,6 +89,7 @@ class LapseParameterClient(lapse.Worker, KgeParameterClient):
         self.worker_group = worker_group
         self.rank = rank
         self.num_meta_keys = num_meta_keys
+        self.dim = dim
         self._stop_key = torch.LongTensor([self.num_keys - self.num_meta_keys])
         self._optim_entity_step_key = torch.LongTensor(
             [self.num_keys - self.num_meta_keys + 1]
