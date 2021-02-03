@@ -211,16 +211,16 @@ class TrainingJob(TrainingOrEvaluationJob):
                             f(self)
                         break
 
-            # should we stop?
-            if self.epoch >= self.config.get("train.max_epochs"):
-                self.config.log("Maximum number of epochs reached.")
-                break
-
             # check additional stop conditions
             done = False
             for f in self.early_stop_conditions:
                 done = done or f(self)
             if done:
+                break
+
+            # should we stop?
+            if self.epoch >= self.config.get("train.max_epochs"):
+                self.config.log("Maximum number of epochs reached.")
                 break
 
             # start a new epoch
