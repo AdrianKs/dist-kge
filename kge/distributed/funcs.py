@@ -1,5 +1,7 @@
 import os
 import time
+import logging
+import psutil
 from typing import Dict, Optional
 from kge import Config, Dataset
 from kge.distributed.parameter_server import init_torch_server, init_lapse_scheduler
@@ -9,6 +11,24 @@ from kge.distributed.misc import get_optimizer_dim, get_min_rank
 
 import torch
 from torch import multiprocessing as mp
+
+
+def monitor_hardware(folder, interval=1):
+    def bytes_to_mb(bytes_amount):
+        return round(bytes_amount / 1024 / 1024, 2)
+    logger = logging.getLogger('hardware_monitor')
+    logger.setLevel(logging.DEBUG)
+    # create file handler which logs even debug messages
+    fh = logging.FileHandler(os.path.join(folder, 'hardware_monitor.log'))
+    fh.setLevel(logging.DEBUG)
+    logger.addHandler(fh)
+
+    while True:
+        time.sleep(interval)
+        cpu_percentage = psutil.cpu_percent()
+        memory_percentage = psutil.virtual_memory().percent
+        network_info = psutil.net_io_counters()
+        logger.info(msg=f"{cpu_percentage};{memory_percentage};{bytes_to_mb(network_info.bytes_sent)};{bytes_to_mb(network_info.bytes_recv)}")
 
 
 def create_and_run_distributed(
@@ -45,6 +65,13 @@ def create_and_run_distributed(
         # between processes. Some servers don't allow that. Therefore set sharing
         # strategy to file_system to avoid too many open files error
         torch.multiprocessing.set_sharing_strategy('file_system')
+
+    # start hardware monitoring
+    p = mp.Process(
+        target=monitor_hardware, args=(config.folder, 0.5), daemon=True
+    )
+    p.start()
+    processes.append(p)
 
     if config.get("job.distributed.machine_id") == 0:
         if config.get("job.distributed.parameter_server") == "lapse":
