@@ -226,35 +226,8 @@ class DistAdagrad(Optimizer):
                         # p.add_(make_sparse(update_value))
                     # p.add_(make_sparse(grad_values / std_values), alpha=-clr)
                 else:
-                    # pull the current internal optimizer parameters
-                    update_mask = group["local_to_lapse_mapper"] != -1
-                    update_tensor = torch.zeros(
-                        (torch.sum(update_mask).item(), p.shape[1]), dtype=torch.float32
-                    )
-                    keys_optim = (
-                        group["local_to_lapse_mapper"]
-                        + self.lapse_optimizer_index_offset
-                    )[update_mask]
-                    self.parameter_client.pull(keys_optim, update_tensor)
-                    state["sum"][update_mask] = update_tensor.to(state["sum"].device)
-
-                    # push the updated internal optimizer parameters to lapse
-                    # state['sum'].addcmul_(grad, grad, value=1)
-                    sum_update = grad * grad
-                    self.parameter_client.push(
-                        keys_optim, sum_update.cpu()[update_mask], asynchronous=True,
-                    )
-                    state["sum"].add_(sum_update)
-                    std = state["sum"].sqrt().add_(group["eps"])
-
-                    # we do not update the model parameters anymore, but push the
-                    # updates to lapse
-                    # p.addcdiv_(grad, std, value=-clr)
-                    update_value = -clr * grad / std
-                    self.parameter_client.push(
-                        group["local_to_lapse_mapper"][update_mask].astype(np.uint64),
-                        update_value.cpu()[update_mask],
-                        asynchronous=True,
+                    raise ValueError(
+                        "Currently only sparse parameters supported with dist_adagrad and dist_rowadagrad"
                     )
 
         return loss
