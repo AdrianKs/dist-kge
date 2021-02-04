@@ -85,6 +85,7 @@ class EntityRankingJob(EvaluationJob):
                 "with_replacement": False,
                 "sampling_type": "uniform",
                 "implementation": "batch",
+                "combined": False,
             }
         }
         sampler_config = Config()
