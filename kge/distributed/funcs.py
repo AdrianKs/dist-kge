@@ -67,11 +67,10 @@ def create_and_run_distributed(
         torch.multiprocessing.set_sharing_strategy('file_system')
 
     # start hardware monitoring
-    p = mp.Process(
+    monitor_process = mp.Process(
         target=monitor_hardware, args=(config.folder, 0.5), daemon=True
     )
-    p.start()
-    processes.append(p)
+    monitor_process.start()
 
     if config.get("job.distributed.machine_id") == 0:
         if config.get("job.distributed.parameter_server") == "lapse":
@@ -151,4 +150,5 @@ def create_and_run_distributed(
     valid_trace = worker_process_pool.join()
     for p in processes:
         p.join()
+    monitor_process.terminate()
     return valid_trace
