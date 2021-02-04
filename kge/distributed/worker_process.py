@@ -87,7 +87,7 @@ class WorkerProcess(mp.get_context("spawn").Process):
         result_pipe=None,
     ):
         # rank = rank + 1
-        daemon = config.get("train.num_workers") <= 0
+        daemon = config.get("train.num_workers") <= 0 and config.get("eval.num_workers") <= 0
         super().__init__(daemon=daemon, name=f"Worker #{rank}")
         self.rank = rank
         self.num_total_workers = num_total_workers
@@ -175,6 +175,7 @@ class WorkerProcess(mp.get_context("spawn").Process):
 
         # all done, clean up
         print("shut down everything")
+        parameter_client.barrier()
         job.work_scheduler_client.shutdown()
         parameter_client.shutdown()
         # delete all occurrences of the parameter client to properly shutdown lapse
