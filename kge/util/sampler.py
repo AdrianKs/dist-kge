@@ -642,6 +642,10 @@ class CombinedSharedBatchNegativeSample(BatchNegativeSample):
             unique_samples_2 = self.batch_negative_sample_2.unique_samples(
                 indexes, return_inverse, remove_dropped
             )
+            if unique_samples_1.numel() == 0:
+                return unique_samples_2
+            elif unique_samples_2.numel() == 0:
+                return unique_samples_1
             return torch.unique(torch.cat([unique_samples_1, unique_samples_2]))
 
     def map_samples(self, mapper):
@@ -651,11 +655,20 @@ class CombinedSharedBatchNegativeSample(BatchNegativeSample):
     def samples(self, indexes=None) -> torch.Tensor:
         samples_1 = self.batch_negative_sample_1.samples(indexes)
         samples_2 = self.batch_negative_sample_2.samples(indexes)
+        if samples_1.numel() == 0:
+            return samples_2
+        elif samples_2.numel() == 0:
+            return samples_1
         return torch.cat((samples_1, samples_2), dim=1)
 
     def score(self, model, indexes=None) -> torch.Tensor:
         scores_1 = self.batch_negative_sample_1.score(model, indexes)
         scores_2 = self.batch_negative_sample_2.score(model, indexes)
+        # don't concat empty tensors due to pytorch bug
+        if scores_1.numel() == 0:
+            return scores_2
+        elif scores_2.numel() == 0:
+            return scores_1
         return torch.cat((scores_1, scores_2), dim=1)
 
     def to(self, device) -> "CombinedSharedBatchNegativeSample":
