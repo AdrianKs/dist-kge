@@ -17,10 +17,11 @@ from torch import multiprocessing as mp
 def monitor_hardware(folder, interval=1):
     def bytes_to_mb(bytes_amount):
         return round(bytes_amount / 1024 / 1024, 2)
-    logger = logging.getLogger('hardware_monitor')
+
+    logger = logging.getLogger("hardware_monitor")
     logger.setLevel(logging.DEBUG)
     # create file handler which logs even debug messages
-    fh = logging.FileHandler(os.path.join(folder, 'hardware_monitor.log'))
+    fh = logging.FileHandler(os.path.join(folder, "hardware_monitor.log"))
     fh.setLevel(logging.DEBUG)
     logger.addHandler(fh)
 
@@ -30,7 +31,9 @@ def monitor_hardware(folder, interval=1):
         memory_percentage = psutil.virtual_memory().percent
         network_info = psutil.net_io_counters()
         # timestamp;cpu%;mem%;net_sent;net_recv
-        logger.info(msg=f"{time.time()};{cpu_percentage};{memory_percentage};{bytes_to_mb(network_info.bytes_sent)};{bytes_to_mb(network_info.bytes_recv)}")
+        logger.info(
+            msg=f"{time.time()};{cpu_percentage};{memory_percentage};{bytes_to_mb(network_info.bytes_sent)};{bytes_to_mb(network_info.bytes_recv)}"
+        )
 
 
 def monitor_gpus(folder, interval=1):
@@ -38,10 +41,10 @@ def monitor_gpus(folder, interval=1):
     device_count = nvmlDeviceGetCount()
     if device_count == 0:
         return
-    logger = logging.getLogger('gpu_monitor')
+    logger = logging.getLogger("gpu_monitor")
     logger.setLevel(logging.DEBUG)
     # create file handler which logs even debug messages
-    fh = logging.FileHandler(os.path.join(folder, 'gpu_monitor.log'))
+    fh = logging.FileHandler(os.path.join(folder, "gpu_monitor.log"))
     fh.setLevel(logging.DEBUG)
     logger.addHandler(fh)
     while True:
@@ -49,11 +52,15 @@ def monitor_gpus(folder, interval=1):
         for i in range(device_count):
             handle = nvmlDeviceGetHandleByIndex(i)
             proc_res = nvmlDeviceGetComputeRunningProcesses(handle)
-            mem_per_process = list(map(lambda obj: (obj.pid, obj.usedGpuMemory), proc_res))
+            mem_per_process = list(
+                map(lambda obj: (obj.pid, obj.usedGpuMemory), proc_res)
+            )
             res = nvmlDeviceGetUtilizationRates(handle)
             mem_res = nvmlDeviceGetMemoryInfo(handle)
             # timestamp;device_id;gpu_util;gpu_mem_util;gpu_temp;mem_per_process
-            logger.info(f"{time.time()};{i};{res.gpu};{round((mem_res.used/mem_res.total)*100)};{mem_per_process}")
+            logger.info(
+                f"{time.time()};{i};{res.gpu};{round((mem_res.used/mem_res.total)*100)};{mem_per_process}"
+            )
 
 
 def create_and_run_distributed(
@@ -85,11 +92,14 @@ def create_and_run_distributed(
     #  not
     num_keys += num_meta_keys
 
-    if config.get("job.distributed.repartition_epoch") and config.get("job.distributed.partition_type") == "2d_block_partition":
+    if (
+        config.get("job.distributed.repartition_epoch")
+        and config.get("job.distributed.partition_type") == "2d_block_partition"
+    ):
         # with stratificaton we have a lot of open files that need to be shared
         # between processes. Some servers don't allow that. Therefore set sharing
         # strategy to file_system to avoid too many open files error
-        torch.multiprocessing.set_sharing_strategy('file_system')
+        torch.multiprocessing.set_sharing_strategy("file_system")
 
     # start hardware monitoring
     monitor_process = mp.Process(
