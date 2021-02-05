@@ -2,6 +2,7 @@ import os
 import time
 import logging
 import psutil
+from py3nvml.py3nvml import *
 from typing import Dict, Optional
 from kge import Config, Dataset
 from kge.distributed.parameter_server import init_torch_server, init_lapse_scheduler
@@ -28,7 +29,31 @@ def monitor_hardware(folder, interval=1):
         cpu_percentage = psutil.cpu_percent()
         memory_percentage = psutil.virtual_memory().percent
         network_info = psutil.net_io_counters()
-        logger.info(msg=f"{cpu_percentage};{memory_percentage};{bytes_to_mb(network_info.bytes_sent)};{bytes_to_mb(network_info.bytes_recv)}")
+        # timestamp;cpu%;mem%;net_sent;net_recv
+        logger.info(msg=f"{time.time()};{cpu_percentage};{memory_percentage};{bytes_to_mb(network_info.bytes_sent)};{bytes_to_mb(network_info.bytes_recv)}")
+
+
+def monitor_gpus(folder, interval=1):
+    nvmlInit()
+    device_count = nvmlDeviceGetCount()
+    if device_count == 0:
+        return
+    logger = logging.getLogger('gpu_monitor')
+    logger.setLevel(logging.DEBUG)
+    # create file handler which logs even debug messages
+    fh = logging.FileHandler(os.path.join(folder, 'gpu_monitor.log'))
+    fh.setLevel(logging.DEBUG)
+    logger.addHandler(fh)
+    while True:
+        time.sleep(interval)
+        for i in range(device_count):
+            handle = nvmlDeviceGetHandleByIndex(i)
+            proc_res = nvmlDeviceGetComputeRunningProcesses(handle)
+            mem_per_process = list(map(lambda obj: (obj.pid, obj.usedGpuMemory), proc_res))
+            res = nvmlDeviceGetUtilizationRates(handle)
+            mem_res = nvmlDeviceGetMemoryInfo(handle)
+            # timestamp;device_id;gpu_util;gpu_mem_util;gpu_temp;mem_per_process
+            logger.info(f"{time.time()};{i};{res.gpu};{round((mem_res.used/mem_res.total)*100)};{mem_per_process}")
 
 
 def create_and_run_distributed(
@@ -71,6 +96,10 @@ def create_and_run_distributed(
         target=monitor_hardware, args=(config.folder, 0.5), daemon=True
     )
     monitor_process.start()
+    gpu_monitor_process = mp.Process(
+        target=monitor_gpus, args=(config.folder, 1), daemon=True
+    )
+    gpu_monitor_process.start()
 
     if config.get("job.distributed.machine_id") == 0:
         if config.get("job.distributed.parameter_server") == "lapse":
@@ -151,4 +180,5 @@ def create_and_run_distributed(
     for p in processes:
         p.join()
     monitor_process.terminate()
+    gpu_monitor_process.terminate()
     return valid_trace
