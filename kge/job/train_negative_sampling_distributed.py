@@ -406,8 +406,9 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
     def handle_validation(self, metric_name):
         # move all models to cpu and store as tmp model
         tmp_model = self.model.cpu()
-        self.valid_job.model = tmp_model
+        #self.valid_job.model = tmp_model
         del self.model
+        del self.valid_job.model
         gc.collect()
         torch.cuda.empty_cache()
         self.parameter_client.barrier()
