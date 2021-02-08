@@ -488,7 +488,7 @@ class RelationWorkScheduler(WorkScheduler):
             partition = self.work_to_do.pop()
             partition_data = self.partitions[partition]
             relations = self.relations_to_partition[partition]
-            return partition_data, None, relations, False
+            return partition_data.contiguous(), None, relations.contiguous(), False
         except IndexError:
             return None, None, None, False
 
