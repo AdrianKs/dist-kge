@@ -632,7 +632,7 @@ class StratificationWorkScheduler(WorkScheduler):
         )
         self.scheduling_order = scheduling_order
         self.num_max_entities = 0
-        
+
     def _init_in_started_process(self):
         super(StratificationWorkScheduler, self)._init_in_started_process()
         # dictionary: key=worker_rank, value=block
@@ -646,7 +646,8 @@ class StratificationWorkScheduler(WorkScheduler):
             entities_to_partition,
             self.partitions,
             self.dataset.split("train"),
-            self.entities_needed_only
+            self.entities_needed_only,
+            self.combine_mirror_blocks,
         )
         self.work_to_do: Dict[Tuple[int, int], torch.Tensor] = self._order_by_schedule(
             deepcopy(self.partitions)
@@ -725,7 +726,7 @@ class StratificationWorkScheduler(WorkScheduler):
             )
 
     @staticmethod
-    def _repartition(data, num_entities, num_partitions, entities_needed_only=True):
+    def _repartition(data, num_entities, num_partitions, entities_needed_only=True, combine_mirror_blocks=True):
         """
         This needs to be a static method so that we can pickle and run in background
         Args:
@@ -779,31 +780,59 @@ class StratificationWorkScheduler(WorkScheduler):
             entity_to_partition,
             partitions,
             data.numpy(),
-            entities_needed_only
+            entities_needed_only,
+            combine_mirror_blocks,
         )
         print("repartitioning done")
         print("repartition_time", start+time.time())
         return partitions, entities_in_bucket
 
     @staticmethod
-    def _get_entities_in_bucket(entities_to_partition, partitions, data, entities_needed_only):
+    def _get_entities_in_bucket(entities_to_partition, partitions, data, entities_needed_only, combine_mirror_blocks):
         entities_in_bucket = dict()
         if entities_needed_only:
             for strata, strata_data in partitions.items():
-                # np.unique is slightly faster than torch.unique
-                entities_in_bucket[strata] = torch.from_numpy(
-                    np.unique(data[strata_data][:, [0, 2]]).astype(np.long)
-                ).contiguous()
+                if combine_mirror_blocks:
+                    if strata in entities_in_bucket:
+                        continue
+                    if strata[0] == strata[1]:
+                        if strata[0] % 2 == 0:
+                            continue
+                        mirror_strata = (strata[0]-1, strata[1]-1)
+                    else:
+                        mirror_strata = (strata[1], strata[0])
+                    mirror_data = partitions[mirror_strata]
+                    combined_strata_data = torch.cat((strata_data, mirror_data))
+                    unique_entities = torch.from_numpy(
+                        np.unique(data[combined_strata_data][:, [0, 2]]).astype(np.long)
+                    ).contiguous()
+                    entities_in_bucket[strata] = unique_entities
+                    entities_in_bucket[mirror_strata] = unique_entities
+                else:
+                    # np.unique is slightly faster than torch.unique
+                    entities_in_bucket[strata] = torch.from_numpy(
+                        np.unique(data[strata_data][:, [0, 2]]).astype(np.long)
+                    ).contiguous()
         else:
-            for partition in partitions:
-                entities_in_bucket[partition] = torch.from_numpy(
+            for strata in partitions.keys():
+                if strata in entities_in_bucket:
+                    continue
+                mirror_strata = (strata[1], strata[0])
+                if combine_mirror_blocks:
+                    if strata[0] == strata[1]:
+                        if strata[0] % 2 == 0:
+                            continue
+                        mirror_strata = (strata[0] - 1, strata[1] - 1)
+                entities = torch.from_numpy(
                     np.where(
                         np.ma.mask_or(
-                            (entities_to_partition == partition[0]),
-                            (entities_to_partition == partition[1]),
+                            (entities_to_partition == strata[0]),
+                            (entities_to_partition == mirror_strata[0]),
                         )
                     )[0]
                 ).contiguous()
+                entities_in_bucket[strata] = entities
+                entities_in_bucket[mirror_strata] = entities
         return entities_in_bucket
 
     def _get_max_entities(self):
@@ -908,17 +937,8 @@ class StratificationWorkScheduler(WorkScheduler):
                 if self.combine_mirror_blocks:
                     if strata[0] == strata[1]:
                         mirror_strata = (strata[0]-1, strata[1]-1)
-                        entities_in_strata = torch.cat(
-                            (entities_in_strata,
-                             self._entities_in_bucket.get(mirror_strata))
-                        )
                     else:
                         mirror_strata = (strata[1], strata[0])
-                        if self.entities_needed_only:
-                            entities_in_strata = torch.unique(torch.cat(
-                                (entities_in_strata,
-                                 self._entities_in_bucket.get(mirror_strata))
-                            ))
                     strata_data = torch.cat(
                         (strata_data, self.partitions[mirror_strata])
                     )
@@ -1023,7 +1043,8 @@ class StratificationWorkScheduler(WorkScheduler):
             (self.dataset.split("train"),
              self.dataset.num_entities(),
              self.num_partitions,
-             self.entities_needed_only)
+             self.entities_needed_only,
+             self.combine_mirror_blocks)
         )
 
     def _refill_work(self):
