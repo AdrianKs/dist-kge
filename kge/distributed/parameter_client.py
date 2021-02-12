@@ -90,6 +90,7 @@ class LapseParameterClient(lapse.Worker, KgeParameterClient):
         self.rank = rank
         self.num_meta_keys = num_meta_keys
         self.dim = dim
+        self.key_size = self.get_key_size()
         self._stop_key = torch.LongTensor([self.num_keys - self.num_meta_keys])
         self._optim_entity_step_key = torch.LongTensor(
             [self.num_keys - self.num_meta_keys + 1]
