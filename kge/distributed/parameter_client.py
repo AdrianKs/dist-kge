@@ -299,12 +299,14 @@ class SharedParameterClient(KgeParameterClient):
 
     @torch.no_grad()
     def pull(self, keys, pull_tensor, asynchronous=False):
-        pull_tensor[:, :] = self.parameters.index_select(0, keys).detach()
+        pull_tensor[:, :] = self.parameters[keys, :]#.index_select(0, keys)
 
     @torch.no_grad()
     def push(self, keys, push_tensor, asynchronous=False):
-        self.parameters.index_add_(0, keys, push_tensor)
+        self.parameters[keys, :] += push_tensor
+        #self.parameters.index_add_(0, keys, push_tensor)
 
+    @torch.no_grad()
     def set(self, keys, set_tensor, asynchronous=False):
         self.parameters[keys, :] = set_tensor
 

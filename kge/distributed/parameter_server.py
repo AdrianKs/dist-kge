@@ -112,17 +112,17 @@ class TorchParameterServer:
 
     @staticmethod
     def _receive_keys(rank, key_len):
-        keys = torch.zeros((key_len,), dtype=torch.long)
+        keys = torch.empty((key_len,), dtype=torch.long)
         dist.recv(keys, src=rank)
         return keys
 
     def _handle_push(self, rank, keys):
-        push_data = torch.zeros((len(keys), self.dim), dtype=self.data_type)
+        push_data = torch.empty((len(keys), self.dim), dtype=self.data_type)
         dist.recv(push_data, src=rank)
         self.data[keys, :] += push_data
 
     def _handle_set(self, rank, keys):
-        set_data = torch.zeros((len(keys), self.dim), dtype=self.data_type)
+        set_data = torch.empty((len(keys), self.dim), dtype=self.data_type)
         dist.recv(set_data, src=rank)
         self.data[keys, :] = set_data
 
