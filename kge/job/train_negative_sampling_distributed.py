@@ -816,8 +816,10 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
     def _delete_checkpoint(self, filename):
         super(TrainingJobNegativeSamplingDistributed, self)._delete_checkpoint(filename)
         file, file_ending = filename.rsplit(".", 1)
-        shutil.rmtree(f"{file}_entities")
-        os.remove(f"{file}_relations.{file_ending}")
+        if os.path.exists(f"{file}_entities"):
+            shutil.rmtree(f"{file}_entities")
+        if os.path.exists(f"{file}_relations.{file_ending}"):
+            os.remove(f"{file}_relations.{file_ending}")
 
     def save(self, filename) -> None:
         if self.parameter_client.rank == get_min_rank(self.config):
