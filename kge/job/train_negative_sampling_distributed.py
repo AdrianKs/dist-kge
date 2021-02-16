@@ -408,7 +408,8 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
         tmp_model = self.model.cpu()
         #self.valid_job.model = tmp_model
         del self.model
-        del self.valid_job.model
+        if hasattr(self.valid_job, "model"):
+            del self.valid_job.model
         gc.collect()
         torch.cuda.empty_cache()
         self.parameter_client.barrier()
