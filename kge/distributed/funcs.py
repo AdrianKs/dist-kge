@@ -2,6 +2,7 @@ import os
 import time
 import logging
 import psutil
+from signal import signal, SIGINT
 from py3nvml.py3nvml import *
 from typing import Dict, Optional
 from kge import Config, Dataset
@@ -101,14 +102,32 @@ def create_and_run_distributed(
         # strategy to file_system to avoid too many open files error
         torch.multiprocessing.set_sharing_strategy("file_system")
 
+    # catch interrupt (to shut down lapse and other processes)
+    processes = []
+    monitoring_processes = []
+    worker_process_pool = None
+
+    def kill_processes(signal_received, frame):
+        print("\nSIGINT or CTRL-C detected. Shutting down all processes and exiting...")
+        for process in processes:
+            process.kill()
+        for process in monitoring_processes:
+            process.kill()
+        if worker_process_pool is not None:
+            worker_process_pool.kill()
+        exit(0)
+    signal(SIGINT, kill_processes)
+
     # start hardware monitoring
     monitor_process = mp.Process(
         target=monitor_hardware, args=(config.folder, 0.5), daemon=True
     )
+    monitoring_processes.append(monitor_process)
     monitor_process.start()
     gpu_monitor_process = mp.Process(
         target=monitor_gpus, args=(config.folder, 1), daemon=True
     )
+    monitoring_processes.append(gpu_monitor_process)
     gpu_monitor_process.start()
 
     if config.get("job.distributed.machine_id") == 0:
@@ -126,8 +145,8 @@ def create_and_run_distributed(
                 ),
                 daemon=True,
             )
-            p.start()
             processes.append(p)
+            p.start()
         elif config.get("job.distributed.parameter_server") == "torch":
             p = mp.Process(
                 target=init_torch_server,
@@ -141,8 +160,8 @@ def create_and_run_distributed(
                 ),
                 daemon=True,
             )
-            p.start()
             processes.append(p)
+            p.start()
 
         # create a work scheduler
         partition_type = config.get("job.distributed.partition_type")
@@ -164,8 +183,8 @@ def create_and_run_distributed(
         config.log(f"scheduler initialized after: {time.time()-scheduler_init_time}")
         print("start scheduler")
         scheduler_start_time = time.time()
-        scheduler.start()
         processes.append(scheduler)
+        scheduler.start()
         config.log(f"scheduler start took: {time.time()-scheduler_start_time}")
 
     # create all train-workers in a worker pool

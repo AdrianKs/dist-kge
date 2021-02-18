@@ -69,6 +69,16 @@ class WorkerProcessPool:
             worker.join()
         return valid_trace
 
+    def terminate(self):
+        print("terminating worker process pool")
+        for worker in self.workers:
+            worker.terminate()
+
+    def kill(self):
+        print("killing worker process pool")
+        for worker in self.workers:
+            worker.kill()
+
 
 class WorkerProcess(mp.get_context("spawn").Process):
     """Train worker"""
