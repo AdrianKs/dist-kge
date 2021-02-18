@@ -9,13 +9,15 @@ class TwoDBlockScheduleCreator:
     can only handle num partitions of base 2
     num partitions needs to be 2*num_workers
     """
-    def __init__(self, num_partitions, num_workers, randomize_iterations=False, combine_mirror_blocks=False):
+    def __init__(self, num_partitions, num_workers, randomize_iterations=False, combine_mirror_blocks=False, i_offset=0, j_offset=0):
         self.num_partitions = num_partitions
         self.num_workers = num_workers
         self.randomize_iterations = randomize_iterations
         self.combine_mirror_blocks = combine_mirror_blocks
+        self.i_offset = i_offset
+        self.j_offset = j_offset
         if self.num_workers*2 > self.num_partitions:
-            raise ValueError("Can not create strafied schedule for num_workers > num_partitions/2")
+            raise ValueError(f"Can not create strafied schedule for num_workers > num_partitions/2, num_workers={self.num_workers}, num_partitions={self.num_partitions}")
 
     def create_schedule(self) -> List[List[Tuple[int, int]]]:
         """
@@ -75,7 +77,7 @@ class TwoDBlockScheduleCreator:
         if not self.combine_mirror_blocks:
             for i in range(2):
                 for j in range(2):
-                    schedule.append([(i + offset, j + offset)])
+                    schedule.append([(i + offset+self.i_offset, j + offset+self.j_offset)])
         else:
             # in combine mirror we only take the upper right block which will be
             #  mirrored later on
@@ -86,14 +88,14 @@ class TwoDBlockScheduleCreator:
         random.shuffle(schedule)
         return schedule
 
-    @staticmethod
-    def _handle_anti_diagonal(n_p, x_offset=0, y_offset=0):
+    # @staticmethod
+    def _handle_anti_diagonal(self, n_p, x_offset=0, y_offset=0):
         permutation_matrix = np.random.permutation(np.diag(np.ones(n_p, dtype=np.int)))
         schedule = []
         for i in range(int(n_p)):
             iteration = list(zip(*permutation_matrix.nonzero()))
             for j, block in enumerate(iteration):
-                block = ((block[0] + i) % (int(n_p)) + x_offset, block[1] + y_offset)
+                block = ((block[0] + i) % (int(n_p)) + x_offset + self.i_offset, block[1] + y_offset + self.j_offset)
                 iteration[j] = block
             schedule.append(iteration)
         return schedule
