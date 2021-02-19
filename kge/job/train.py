@@ -63,10 +63,11 @@ class TrainingJob(TrainingOrEvaluationJob):
         model=None,
         optimizer=None,
         forward_only=False,
+        parameter_client=None,
     ) -> None:
         from kge.job import EvaluationJob
 
-        super().__init__(config, dataset, parent_job)
+        super().__init__(config, dataset, parent_job, parameter_client=parameter_client)
 
         if model is None:
             self.model: KgeModel = KgeModel.create(

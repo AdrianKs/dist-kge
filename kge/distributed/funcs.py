@@ -95,7 +95,7 @@ def create_and_run_distributed(
 
     if (
         config.get("job.distributed.repartition_epoch")
-        and config.get("job.distributed.partition_type") == "2d_block_partition"
+        and config.get("job.distributed.partition_type") == "stratification"
     ):
         # with stratificaton we have a lot of open files that need to be shared
         # between processes. Some servers don't allow that. Therefore set sharing
@@ -129,6 +129,14 @@ def create_and_run_distributed(
     )
     monitoring_processes.append(gpu_monitor_process)
     gpu_monitor_process.start()
+
+    # specific settings for valid only jobs
+    if config.get("job.type") in ["valid", "test", "eval"]:
+        config.set("job.distributed.parameter_server", "shared")
+        config.set("job.distributed.num_workers", 1)
+        config.set("job.distributed.num_workers_machine", 1)
+        config.set("job.distributed.num_machines", 1)
+        config.set(f"{config.get('model')}.create_eval", True)
 
     if config.get("job.distributed.machine_id") == 0:
         if config.get("job.distributed.parameter_server") == "lapse":
@@ -164,28 +172,29 @@ def create_and_run_distributed(
             p.start()
 
         # create a work scheduler
-        partition_type = config.get("job.distributed.partition_type")
-        print("init scheduler")
-        scheduler_init_time = time.time()
-        scheduler = WorkScheduler.create(
-            config=config,
-            partition_type=partition_type,
-            world_size=num_workers + min_rank,
-            master_ip=master_ip,
-            master_port=master_port,
-            num_partitions=num_partitions,
-            num_clients=num_workers,
-            dataset=dataset,
-            dataset_folder=dataset.folder,
-            scheduling_order=config.get("job.distributed.scheduling_order"),
-            repartition_epoch=config.get("job.distributed.repartition_epoch"),
-        )
-        config.log(f"scheduler initialized after: {time.time()-scheduler_init_time}")
-        print("start scheduler")
-        scheduler_start_time = time.time()
-        processes.append(scheduler)
-        scheduler.start()
-        config.log(f"scheduler start took: {time.time()-scheduler_start_time}")
+        if config.get("job.type") == "train":
+            partition_type = config.get("job.distributed.partition_type")
+            print("init scheduler")
+            scheduler_init_time = time.time()
+            scheduler = WorkScheduler.create(
+                config=config,
+                partition_type=partition_type,
+                world_size=num_workers + min_rank,
+                master_ip=master_ip,
+                master_port=master_port,
+                num_partitions=num_partitions,
+                num_clients=num_workers,
+                dataset=dataset,
+                dataset_folder=dataset.folder,
+                scheduling_order=config.get("job.distributed.scheduling_order"),
+                repartition_epoch=config.get("job.distributed.repartition_epoch"),
+            )
+            config.log(f"scheduler initialized after: {time.time()-scheduler_init_time}")
+            print("start scheduler")
+            scheduler_start_time = time.time()
+            processes.append(scheduler)
+            scheduler.start()
+            config.log(f"scheduler start took: {time.time()-scheduler_start_time}")
 
     # create all train-workers in a worker pool
     num_workers = config.get("job.distributed.num_workers")

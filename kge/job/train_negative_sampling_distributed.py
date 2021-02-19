@@ -119,6 +119,7 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             model=model,
             optimizer=optimizer,
             forward_only=forward_only,
+            parameter_client=parameter_client,
         )
         self.type_str = "negative_sampling"
         self.load_batch = self.config.get("job.distributed.load_batch")
@@ -852,33 +853,3 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             self.parameter_client.pull(relation_ids + lapse_offset, pull_tensor)
             torch.save(pull_tensor, f"{file}_relations.{file_ending}")
 
-    def load_distributed(self, checkpoint_name):
-        """
-        Separate function for loading distributed checkpoints.
-        The main worker iterates over all checkpoints in the dir loads all of them and
-        pushes them to the parameter server.
-        Args:
-            checkpoint_name: Path to the checkpoint
-
-        Returns:
-            None
-        """
-        self.parameter_client.barrier()
-        if self.parameter_client.rank == self.min_rank:
-            checkpoint_name, file_ending = checkpoint_name.rsplit(".", 1)
-            entities_dir = checkpoint_name + "_entities"
-            entities_ps_offset = self.model.get_s_embedder().lapse_offset
-            for file in os.listdir(entities_dir):
-                entity_start, entity_end = (
-                    os.path.basename(file).split(".")[0].split("-")
-                )
-                push_tensor = torch.load(os.path.join(entities_dir, file))
-                entity_ids = torch.arange(
-                    int(entity_start), int(entity_end), dtype=torch.long
-                )
-                self.parameter_client.push(entity_ids + entities_ps_offset, push_tensor)
-            relations_ps_offset = self.model.get_p_embedder().lapse_offset
-            push_tensor = torch.load(f"{checkpoint_name}_relations.{file_ending}")
-            relation_ids = torch.arange(self.dataset.num_relations(), dtype=torch.long)
-            self.parameter_client.push(relation_ids + relations_ps_offset, push_tensor)
-        self.parameter_client.barrier()

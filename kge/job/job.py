@@ -3,6 +3,7 @@ from __future__ import annotations
 from kge import Config, Dataset
 from kge.util import load_checkpoint
 import uuid
+import torch
 
 from kge.misc import get_git_revision_short_hash
 import os
@@ -86,7 +87,7 @@ class Job:
             return SearchJob.create(config, dataset, parent_job=parent_job)
         elif job_type == "eval":
             return EvaluationJob.create(
-                config, dataset, parent_job=parent_job, model=model
+                config, dataset, parent_job=parent_job, model=model, parameter_client=parameter_client
             )
         else:
             raise ValueError("unknown job type")
@@ -183,7 +184,7 @@ class Job:
 class TrainingOrEvaluationJob(Job):
     """Abstract superclass for training and eval jobs."""
 
-    def __init__(self, config: Config, dataset: Dataset, parent_job: "Job" = None):
+    def __init__(self, config: Config, dataset: Dataset, parent_job: "Job" = None, parameter_client=None):
         super().__init__(config, dataset, parent_job)
 
         # defines various hooks
@@ -198,3 +199,42 @@ class TrainingOrEvaluationJob(Job):
         # modified by the hooks defined above. The traces are logged only after the
         # corresponding hooks have been executed. The traces are then cleared.
         self.current_trace: Dict[str, Dict[str, Any]] = {"batch": None, "epoch": None}
+        self.parameter_client = parameter_client
+
+    def load_distributed(self, checkpoint_name):
+        """
+        Separate function for loading distributed checkpoints.
+        The main worker iterates over all checkpoints in the dir loads all of them and
+        pushes them to the parameter server.
+        Args:
+            checkpoint_name: Path to the checkpoint
+
+        Returns:
+            None
+        """
+        from kge.distributed.misc import get_min_rank
+        self.parameter_client.barrier()
+        if self.parameter_client.rank == get_min_rank(self.config):
+            if self.model is None:
+                from kge.model import KgeModel
+                self.model = KgeModel.create(
+                    config=self.config, dataset=self.dataset,
+                    parameter_client=self.parameter_client
+                )
+            checkpoint_name, file_ending = checkpoint_name.rsplit(".", 1)
+            entities_dir = checkpoint_name + "_entities"
+            entities_ps_offset = self.model.get_s_embedder().lapse_offset
+            for file in os.listdir(entities_dir):
+                entity_start, entity_end = (
+                    os.path.basename(file).split(".")[0].split("-")
+                )
+                push_tensor = torch.load(os.path.join(entities_dir, file))
+                entity_ids = torch.arange(
+                    int(entity_start), int(entity_end), dtype=torch.long
+                )
+                self.parameter_client.push(entity_ids + entities_ps_offset, push_tensor)
+            relations_ps_offset = self.model.get_p_embedder().lapse_offset
+            push_tensor = torch.load(f"{checkpoint_name}_relations.{file_ending}")
+            relation_ids = torch.arange(self.dataset.num_relations(), dtype=torch.long)
+            self.parameter_client.push(relation_ids + relations_ps_offset, push_tensor)
+        self.parameter_client.barrier()

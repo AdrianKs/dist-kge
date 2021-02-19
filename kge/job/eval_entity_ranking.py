@@ -14,8 +14,8 @@ from typing import Union
 class EntityRankingJob(EvaluationJob):
     """ Entity ranking evaluation protocol """
 
-    def __init__(self, config: Config, dataset: Dataset, parent_job, model):
-        super().__init__(config, dataset, parent_job, model)
+    def __init__(self, config: Config, dataset: Dataset, parent_job, model, parameter_client=None):
+        super().__init__(config, dataset, parent_job, model, parameter_client=parameter_client)
         self.config.check(
             "entity_ranking.tie_handling",
             ["rounded_mean_rank", "best_rank", "worst_rank"],

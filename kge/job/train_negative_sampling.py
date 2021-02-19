@@ -20,6 +20,7 @@ class TrainingJobNegativeSampling(TrainingJob):
         model=None,
         optimizer=None,
         forward_only=False,
+        parameter_client=None,
     ):
         super().__init__(
             config,
@@ -28,6 +29,7 @@ class TrainingJobNegativeSampling(TrainingJob):
             model=model,
             optimizer=optimizer,
             forward_only=forward_only,
+            parameter_client=parameter_client,
         )
         self._sampler = KgeSampler.create(config, "negative_sampling", dataset)
         self._implementation = self.config.check(
