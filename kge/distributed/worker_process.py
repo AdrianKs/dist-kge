@@ -195,11 +195,16 @@ class WorkerProcess(mp.get_context("spawn").Process):
         del job.model.get_s_embedder().parameter_client
         del job.model.get_p_embedder().parameter_client
         del job.model
-        del job.optimizer
+        if hasattr(job, "optimizer"):
+            del job.optimizer
         del parameter_client
         gc.collect()  # make sure lapse-worker destructor is called
         # shutdown server
         if server is not None and type(server) != torch.Tensor:
             server.shutdown()
         if self.result_pipe is not None:
-            self.result_pipe.send(job.valid_trace)
+            if hasattr(job, "valid_trace"):
+                # if we valid from checkpoint there is no valid trace
+                self.result_pipe.send(job.valid_trace)
+            else:
+                self.result_pipe.send(None)
