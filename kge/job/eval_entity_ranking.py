@@ -121,14 +121,14 @@ class EntityRankingJob(EvaluationJob):
     def _collate(self, batch):
         "Looks up true triples for each triple in the batch"
         negatives = None
-        negatives_numpy = None
+        negatives_set = None
         if self.rank_against > 0:
             negatives = self.sampler.sample(
                 torch.empty((self.batch_size, 3), dtype=torch.long),
                 slot=0,
                 num_samples=self.rank_against,
             ).unique_samples()
-            negatives_numpy = negatives.numpy()
+            negatives_set = set(negatives.numpy().astype(np.int).flat)
 
         label_coords = []
         batch = torch.cat(batch).reshape((-1, 3))
@@ -138,7 +138,7 @@ class EntityRankingJob(EvaluationJob):
                 self.dataset.num_entities(),
                 self.dataset.index(f"{split}_sp_to_o"),
                 self.dataset.index(f"{split}_po_to_s"),
-                targets=negatives_numpy
+                targets=negatives_set
             )
             label_coords.append(split_label_coords)
         label_coords = torch.cat(label_coords)
@@ -149,7 +149,7 @@ class EntityRankingJob(EvaluationJob):
                 self.dataset.num_entities(),
                 self.dataset.index("test_sp_to_o"),
                 self.dataset.index("test_po_to_s"),
-                targets=negatives_numpy
+                targets=negatives_set
             )
         else:
             test_label_coords = torch.zeros([0, 2], dtype=torch.long)

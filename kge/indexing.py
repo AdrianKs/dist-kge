@@ -1,7 +1,7 @@
 import torch
 import numba
 import numpy as np
-from typing import Iterator, List, Tuple, Dict
+from typing import Iterator, List, Tuple, Dict, Optional
 
 
 class KvsAllIndex:
@@ -99,7 +99,8 @@ class KvsAllIndex:
             keys: np.ndarray,
             index_of_key: Dict[Tuple[int, int], int],
             values: np.ndarray,
-            values_offset: np.ndarray
+            values_offset: np.ndarray,
+            targets: Optional[np.array],
     ):
         """
         Looks up all values corresponding to keys and outputs them in a single tensor
@@ -130,11 +131,20 @@ class KvsAllIndex:
             if key_index[i].item() < 0:
                 continue
             res = (values[values_offset[key_index[i]]:values_offset[key_index[i]+1]])
+            if targets is not None:
+                filtered_res = np.empty((len(res)), dtype=np.int32)
+                current_filter_index = 0
+                for j in range(len(res)):
+                    if res[j] in targets:
+                        filtered_res[current_filter_index] = res[j]
+                        current_filter_index += 1
+                    res = filtered_res[:current_filter_index]
+                #res = res[res in targets]
             len_res = len(res)
             result[current_index: current_index+len_res, 0] = i
             result[current_index: current_index + len_res, 1] = res
             current_index += len_res
-        return result
+        return result[:current_index]
 
     def __len__(self):
         return len(self._keys)
@@ -142,13 +152,13 @@ class KvsAllIndex:
     def get(self, key, default_return_value=None) -> torch.Tensor:
         return self.__getitem__(key, default_return_value)
 
-    def get_all(self, keys):
+    def get_all(self, keys, targets: Optional[set]):
         # keys need to be int32 otherwise numba won't find any matches in the dict
         keys = keys.int()
         return torch.from_numpy(
             self._get_all_impl(
                 keys.numpy(), self._index_of_key,
-                self._values.numpy(), self._values_offset.numpy()
+                self._values.numpy(), self._values_offset.numpy(), targets
             )
         )
 
