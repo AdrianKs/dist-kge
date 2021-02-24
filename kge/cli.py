@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 import datetime
+import argparse
 import os
 import sys
 import traceback
@@ -16,8 +17,130 @@ from kge.misc import get_git_revision_short_hash, kge_base_dir, is_number
 from kge.util.dump import add_dump_parsers, dump
 from kge.util.io import get_checkpoint_file, load_checkpoint
 from kge.util.package import package_model, add_package_parser
-from kge.normal_cli import create_parser, process_meta_command, argparse_bool_type
 from kge.distributed.funcs import create_and_run_distributed
+from kge.util.seed import seed_from_config
+
+
+def argparse_bool_type(v):
+    "Type for argparse that correctly treats Boolean values"
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ("yes", "true", "t", "y", "1"):
+        return True
+    elif v.lower() in ("no", "false", "f", "n", "0"):
+        return False
+    else:
+        raise argparse.ArgumentTypeError("Boolean value expected.")
+
+
+def process_meta_command(args, meta_command, fixed_args):
+    """Process&update program arguments for meta commands.
+
+    `meta_command` is the name of a special command, which fixes all key-value arguments
+    given in `fixed_args` to the specified value. `fxied_args` should contain key
+    `command` (for the actual command being run).
+
+    """
+    if args.command == meta_command:
+        for k, v in fixed_args.items():
+            if k != "command" and vars(args)[k] and vars(args)[k] != v:
+                raise ValueError(
+                    "invalid argument for '{}' command: --{} {}".format(
+                        meta_command, k, v
+                    )
+                )
+            vars(args)[k] = v
+
+
+def create_parser(config, additional_args=[]):
+    # define short option names
+    short_options = {
+        "dataset.name": "-d",
+        "job.type": "-j",
+        "train.max_epochs": "-e",
+        "model": "-m",
+    }
+
+    # create parser for config
+    parser_conf = argparse.ArgumentParser(add_help=False)
+    for key, value in Config.flatten(config.options).items():
+        short = short_options.get(key)
+        argtype = type(value)
+        if argtype == bool:
+            argtype = argparse_bool_type
+        if short:
+            parser_conf.add_argument("--" + key, short, type=argtype)
+        else:
+            parser_conf.add_argument("--" + key, type=argtype)
+
+    # add additional arguments
+    for key in additional_args:
+        parser_conf.add_argument(key)
+
+    # add argument to abort on outdated data
+    parser_conf.add_argument(
+        "--abort-when-cache-outdated",
+        action="store_const",
+        const=True,
+        default=False,
+        help="Abort processing when an outdated cached dataset file is found "
+        "(see description of `dataset.pickle` configuration key). "
+        "Default is to recompute such cache files.",
+    )
+
+    # create main parsers and subparsers
+    parser = argparse.ArgumentParser("kge")
+    subparsers = parser.add_subparsers(title="command", dest="command")
+    subparsers.required = True
+
+    # start and its meta-commands
+    parser_start = subparsers.add_parser(
+        "start", help="Start a new job (create and run it)", parents=[parser_conf]
+    )
+    parser_create = subparsers.add_parser(
+        "create", help="Create a new job (but do not run it)", parents=[parser_conf]
+    )
+    for p in [parser_start, parser_create]:
+        p.add_argument("config", type=str, nargs="?")
+        p.add_argument("--folder", "-f", type=str, help="Output folder to use")
+        p.add_argument(
+            "--run",
+            default=p is parser_start,
+            type=argparse_bool_type,
+            help="Whether to immediately run the created job",
+        )
+
+    # resume and its meta-commands
+    parser_resume = subparsers.add_parser(
+        "resume", help="Resume a prior job", parents=[parser_conf]
+    )
+    parser_eval = subparsers.add_parser(
+        "eval", help="Evaluate the result of a prior job", parents=[parser_conf]
+    )
+    parser_valid = subparsers.add_parser(
+        "valid",
+        help="Evaluate the result of a prior job using validation data",
+        parents=[parser_conf],
+    )
+    parser_test = subparsers.add_parser(
+        "test",
+        help="Evaluate the result of a prior job using test data",
+        parents=[parser_conf],
+    )
+    for p in [parser_resume, parser_eval, parser_valid, parser_test]:
+        p.add_argument("config", type=str)
+        p.add_argument(
+            "--checkpoint",
+            type=str,
+            help=(
+                "Which checkpoint to use: 'default', 'last', 'best', a number "
+                "or a file name"
+            ),
+            default="default",
+        )
+    add_dump_parsers(subparsers)
+    add_package_parser(subparsers)
+    return parser
 
 
 def main():
@@ -140,40 +263,7 @@ def main():
         config.log("git commit: {}".format(get_git_revision_short_hash()), prefix="  ")
 
         # set random seeds
-        def get_seed(what):
-            seed = config.get(f"random_seed.{what}")
-            if seed < 0 and config.get(f"random_seed.default") >= 0:
-                import hashlib
-
-                # we add an md5 hash to the default seed so that different PRNGs get a
-                # different seed
-                seed = (
-                    config.get(f"random_seed.default")
-                    + int(hashlib.md5(what.encode()).hexdigest(), 16)
-                ) % 0xFFFF  # stay 32-bit
-
-            return seed
-
-        if get_seed("python") > -1:
-            import random
-
-            random.seed(get_seed("python"))
-        if get_seed("torch") > -1:
-            import torch
-
-            torch.manual_seed(get_seed("torch"))
-        if get_seed("numpy") > -1:
-            import numpy.random
-
-            numpy.random.seed(get_seed("numpy"))
-        if get_seed("numba") > -1:
-            import numpy as np, numba
-
-            @numba.njit
-            def seed_numba(seed):
-                np.random.seed(seed)
-
-            seed_numba(get_seed("numba"))
+        seed_from_config(config)
 
         # let's go
         if args.command == "start" and not args.run:

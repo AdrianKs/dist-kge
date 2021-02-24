@@ -1,11 +1,10 @@
-import numpy as np
 import torch
 from torch import Tensor
-from kge.indexing import intersection
+from typing import List, Union
 
 
 def get_sp_po_coords_from_spo_batch(
-    batch: Tensor, num_entities: int, sp_index: dict, po_index: dict, targets: np.array
+    batch: Union[Tensor, List[Tensor]], num_entities: int, sp_index: dict, po_index: dict, targets: np.array
 ) -> torch.Tensor:
     """Given a set of triples , lookup matches for (s,p,?) and (?,p,o).
 
@@ -15,44 +14,19 @@ def get_sp_po_coords_from_spo_batch(
     half for (?,p,o).
 
     """
-    num_ones = 0
-    NOTHING = torch.zeros([0], dtype=torch.long)
-    if targets is None:
-        for i, triple in enumerate(batch):
-            s, p, o = triple[0].item(), triple[1].item(), triple[2].item()
-            num_ones += len(sp_index.get((s, p), NOTHING))
-            num_ones += len(po_index.get((p, o), NOTHING))
+    if type(batch) is list:
+        batch = torch.cat(batch).reshape((-1, 3)).int()
+    sp_coords = sp_index.get_all(batch[:, [0, 1]])
+    po_coords = po_index.get_all(batch[:, [1, 2]])
+    po_coords[:, 1] += num_entities
+    coords = torch.cat(
+        (
+            sp_coords,
+            po_coords
+        )
+    )
 
-        coords = torch.empty([num_ones, 2], dtype=torch.long)
-    else:
-        coords = torch.empty([len(batch) * len(targets), 2], dtype=torch.long)
-    current_index = 0
-    for i, triple in enumerate(batch):
-        s, p, o = triple[0].item(), triple[1].item(), triple[2].item()
-
-        objects = sp_index.get((s, p), NOTHING)
-        subjects = po_index.get((p, o), NOTHING)
-        if targets is None:
-            relevant_objects = objects
-            relevant_subjects = subjects + num_entities
-        else:
-            relevant_objects = torch.from_numpy(intersection(objects.numpy(), targets))
-            relevant_subjects = torch.from_numpy(
-                intersection(subjects.numpy(), targets)
-            ) + num_entities
-        coords[current_index : (current_index + len(relevant_objects)), 0] = i
-        coords[
-            current_index : (current_index + len(relevant_objects)), 1
-        ] = relevant_objects
-        current_index += len(relevant_objects)
-
-        coords[current_index : (current_index + len(relevant_subjects)), 0] = i
-        coords[
-            current_index : (current_index + len(relevant_subjects)), 1
-        ] = relevant_subjects
-        current_index += len(relevant_subjects)
-
-    return coords[:current_index]
+    return coords
 
 
 def coord_to_sparse_tensor(

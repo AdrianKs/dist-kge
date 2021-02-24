@@ -299,6 +299,11 @@ train:
     # kge dump checkpoint checkpoint_file.pt | grep parameter_names
     +++: +++
 
+  # If >0, linearly increase learning rate over this many epochs to
+  # optimizer.<group>.args.lr for each group. Only then use the specified
+  # learning rate scheduler.
+  lr_warmup: 0                # disabled
+
   # Learning rate scheduler to use. Any scheduler from torch.optim.lr_scheduler
   # can be used (e.g., ReduceLROnPlateau). When left empty, no LR scheduler is
   # used.
@@ -320,6 +325,10 @@ train:
 
     # Keep this many most recent additional checkpoints.
     keep: 3
+
+    # Whether to always keep checkpoint containing initialized model
+    # ('checkpoint_00000.pt') for reproducibility.
+    keep_init: True
 
   # When set, LibKGE automatically corrects certain invalid configuration
   # options. Each such change is logged. When not set and the configuration is
@@ -441,19 +450,19 @@ negative_sampling:
     shared_type: naive
 
   # Implementation to use for the negative sampling job. Possible values are:
-  # - triple: Scores every positive and negative triple in the batch
+  # - triple: Scores every positive and negative triple in the batch separately.
   # - all   : Scores against all possible targets and filters relevant scores
   #           out of the resulting score matrix
   # - batch : Scores against all targets contained in batch (or chunk) and
   #           filters relevant scores out of the resulting score matrix.
-  # - auto  : Chooses best implementation based on num_samples.
-  #           'batch' if shared sampling is activated or max(num_samples.s,
-  #           num_samples.p, num_samples.o) > 30. 'triple' otherwise.
+  # - auto  : Chooses best implementation heuristically. The heuristic may
+  #           change in the future.
   #
-  # 'batch' or 'auto' is recommended (faster) for models which have efficient
+  # 'batch' is recommended (faster) for models which have efficient
   # implementations to score many targets at once. For all other models, use
-  # 'triple' (e.g., for TransE or RotatE in the current implementation).
-  implementation: triple
+  # 'triple' (e.g., for TransE or RotatE in the current implementation). 'auto'
+  # tries to do just this heuristically.
+  implementation: auto
 
 distributed_negative_sampling:
   class_name: TrainingJobNegativeSamplingDistributed

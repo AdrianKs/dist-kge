@@ -100,6 +100,9 @@ class TrainingJob(TrainingOrEvaluationJob):
             else:
                 self.optimizer = optimizer
             self.kge_lr_scheduler = KgeLRScheduler(config, self.optimizer)
+            self._lr_warmup = self.config.get("train.lr_warmup")
+            for group in self.optimizer.param_groups:
+                group["initial_lr"]=group["lr"]
 
             self.valid_trace: List[Dict[str, Any]] = []
             valid_conf = config.clone()
@@ -163,6 +166,8 @@ class TrainingJob(TrainingOrEvaluationJob):
             raise Exception(
                 f"{self.__class__.__name__} was initialized for forward only. You can only call run_epoch()"
             )
+        if self.epoch == 0:
+            self.save(self.config.checkpoint_file(0))
 
         self.config.log("Starting training...")
         checkpoint_every = self.config.get("train.checkpoint.every")
@@ -224,6 +229,11 @@ class TrainingJob(TrainingOrEvaluationJob):
                 self.config.log("Maximum number of epochs reached.")
                 break
 
+            # update learning rate if warmup is used
+            if self.epoch < self._lr_warmup:
+                for group in self.optimizer.param_groups:
+                    group["lr"] = group["initial_lr"] * (self.epoch+1) / self._lr_warmup
+
             # start a new epoch
             self.epoch += 1
             self.config.log("Starting epoch {}...".format(self.epoch))
@@ -236,14 +246,15 @@ class TrainingJob(TrainingOrEvaluationJob):
             self.model.meta["train_config"] = self.config
             self.model.meta["train_trace_entry"] = trace_entry
 
-            # validate and update learning rate
+            # validate
+            lr_metric = None
             if (
                 self.config.get("valid.every") > 0
                 and self.epoch % self.config.get("valid.every") == 0
             ):
                 self.handle_validation(metric_name)
             else:
-                self.kge_lr_scheduler.step()
+                self.kge_lr_scheduler.step(lr_metric)
 
             self.handle_running_checkpoint(checkpoint_every, checkpoint_keep)
 
@@ -256,9 +267,13 @@ class TrainingJob(TrainingOrEvaluationJob):
         for f in self.post_valid_hooks:
             f(self)
         self.model.meta["valid_trace_entry"] = trace_entry
+        lr_metric = trace_entry[metric_name]
 
-        # metric-based scheduler step
-        self.kge_lr_scheduler.step(trace_entry[metric_name])
+        # update learning rate after warmup
+        if self.epoch >= self._lr_warmup:
+            # note: lr_metric is None if no validation has been performed in this
+            # epoch. This is handled by the optimizers
+            self.kge_lr_scheduler.step(lr_metric)
 
     def handle_running_checkpoint(self, checkpoint_every, checkpoint_keep):
         # create checkpoint and delete old one, if necessary
@@ -275,19 +290,28 @@ class TrainingJob(TrainingOrEvaluationJob):
                 # keep a maximum number of checkpoint_keep checkpoints
                 delete_checkpoint_epoch = (
                         self.epoch - 1 - checkpoint_every * checkpoint_keep
-                )
-            if delete_checkpoint_epoch > 0:
-                self._delete_checkpoint(
-                    self.config.checkpoint_file(delete_checkpoint_epoch)
-                )
+                    )
+            if delete_checkpoint_epoch >= 0:
+                if delete_checkpoint_epoch != 0 or not self.config.get(
+                    "train.checkpoint.keep_init"
+                ):
+                    self._delete_checkpoint(delete_checkpoint_epoch)
 
-    def _delete_checkpoint(self, filename):
-        if os.path.exists(filename):
-            self.config.log(f"Removing old checkpoint {filename}...")
-            os.remove(filename)
+
+    def _delete_checkpoint(self, checkpoint_id):
+        """Try to delete checkpoint specified by id"""
+        if os.path.exists(self.config.checkpoint_file(checkpoint_id)):
+            self.config.log(
+                "Removing old checkpoint {}...".format(
+                    self.config.checkpoint_file(checkpoint_id)
+                )
+            )
+            os.remove(self.config.checkpoint_file(checkpoint_id))
         else:
             self.config.log(
-                f"Could not delete old checkpoint {filename}, does not exist."
+                "Could not delete old checkpoint {}, does not exist.".format(
+                    self.config.checkpoint_file(checkpoint_id)
+                )
             )
 
     def save(self, filename) -> None:

@@ -58,11 +58,15 @@ kge start examples/toy-complex-train.yaml --job.device cpu
  - **Training**
    - Training types: negative sampling, 1vsAll, KvsAll
    - Losses: binary cross entropy (BCE), Kullback-Leibler divergence (KL),
-     margin ranking (MR)
-   - All optimizers and learning rate schedulers of PyTorch supported
+     margin ranking (MR), squared error (SE)
+   - All optimizers and learning rate schedulers of PyTorch supported and can be
+     chosen individually for different parameters (e.g., different for entity
+     and for relation embeddings)
+   - Learning rate warmup
    - Early stopping
    - Checkpointing
    - Stop (e.g., via `Ctrl-C`) and resume at any time
+   - Automatic memory management to support large batch sizes (see config key `train.subbatch_auto_tune`)
  - **Hyperparameter tuning**
    - Grid search, manual search, quasi-random search (using
      [Ax](https://ax.dev/)), Bayesian optimization (using [Ax](https://ax.dev/))
@@ -71,13 +75,16 @@ kge start examples/toy-complex-train.yaml --job.device cpu
  - **Evaluation**
    - Entity ranking metrics: Mean Reciprocal Rank (MRR), HITS@k with/without filtering
    - Drill-down by: relation type, relation frequency, head or tail
- - **Extensive logging**
-   - Logging for training, hyper-parameter tuning and evaluation in machine
-     readable formats to facilitate analysis
+ - **Extensive logging and tracing**
+   - Detailed progress information about training, hyper-parameter tuning, and evaluation 
+     is recorded in machine readable formats
+   - Quick export of all/selected parts of the traced data into CSV or YAML files to 
+     facilitate analysis
  - **KGE models**
    - All models can be used with or without reciprocal relations
    - [RESCAL](http://www.icml-2011.org/papers/438_icmlpaper.pdf) ([code](kge/model/rescal.py), [config](kge/model/rescal.yaml))
    - [TransE](https://papers.nips.cc/paper/5071-translating-embeddings-for-modeling-multi-relational-data) ([code](kge/model/transe.py), [config](kge/model/transe.yaml))
+   - [TransH](https://ojs.aaai.org/index.php/AAAI/article/view/8870) ([code](kge/model/transh.py), [config](kge/model/transh.yaml))
    - [DistMult](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/ICLR2015_updated.pdf) ([code](kge/model/distmult.py), [config](kge/model/distmult.yaml))
    - [ComplEx](http://proceedings.mlr.press/v48/trouillon16.pdf) ([code](kge/model/complex.py), [config](kge/model/complex.yaml))
    - [ConvE](https://arxiv.org/abs/1707.01476)  ([code](kge/model/conve.py), [config](kge/model/conve.yaml))
@@ -85,6 +92,7 @@ kge start examples/toy-complex-train.yaml --job.device cpu
    - [CP](https://arxiv.org/abs/1806.07297) ([code](kge/model/cp.py), [config](kge/model/cp.yaml))
    - [SimplE](https://arxiv.org/abs/1802.04868) ([code](kge/model/simple.py), [config](kge/model/simple.yaml))
    - [RotatE](https://arxiv.org/abs/1902.10197) ([code](kge/model/rotate.py), [config](kge/model/rotate.yaml))
+   - [Transformer ("No context" model)](https://arxiv.org/abs/2008.12813) ([code](kge/model/transformer.py), [config](kge/model/transformer.yaml))
  - **Embedders**
    - Lookup embedder ([code](kge/model/embedder/lookup_embedder.py), [config](kge/model/embedder/lookup_embedder.yaml))
    - Projection embedder ([code](kge/model/embedder/projection_embedder.py), [config](kge/model/embedder/projection_embedder.yaml))
@@ -426,18 +434,7 @@ For other scoring functions (score_sp, score_po, score_so, score_spo), see [KgeM
 
 ## Currently supported KGE models
 
-LibKGE currently implements the following KGE models:
-
-- [RESCAL](http://www.icml-2011.org/papers/438_icmlpaper.pdf) ([code](kge/model/rescal.py), [config](kge/model/rescal.yaml))
-- [TransE](https://papers.nips.cc/paper/5071-translating-embeddings-for-modeling-multi-relational-data) ([code](kge/model/transe.py), [config](kge/model/transe.yaml))
-- [DistMult](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/ICLR2015_updated.pdf) ([code](kge/model/distmult.py), [config](kge/model/distmult.yaml))
-- [ComplEx](http://proceedings.mlr.press/v48/trouillon16.pdf) ([code](kge/model/complex.py), [config](kge/model/complex.yaml))
-- [ConvE](https://arxiv.org/abs/1707.01476)  ([code](kge/model/conve.py), [config](kge/model/conve.yaml))
-- [RelationalTucker3](https://arxiv.org/abs/1902.00898) ([code](kge/model/relational_tucker3.py), [config](kge/model/relational_tucker3.yaml))
-- [CP](https://arxiv.org/abs/1806.07297) ([code](kge/model/cp.py), [config](kge/model/cp.yaml))
-- [SimplE](https://arxiv.org/abs/1802.04868) ([code](kge/model/simple.py), [config](kge/model/simple.yaml))
-- [RelationalTucker3](https://arxiv.org/abs/1902.00898)/[TuckER](https://arxiv.org/abs/1901.09590) ([code](kge/model/relational_tucker3.py), [config](kge/model/relational_tucker3.yaml))
-- [RotatE](https://arxiv.org/abs/1902.10197) ([code](kge/model/rotate.py), [config](kge/model/rotate.yaml))
+LibKGE currently implements the KGE models listed in [features](#features).
 
 The [examples](examples) folder contains some configuration files as examples of how to train these models.
 
@@ -482,7 +479,7 @@ implementation `MyClass`, you need to:
    description of those keys. For example, in `myexp_config.yaml`, add:
 
    ```yaml
-   modules: [ kge.model, kge.model.embedder, mymodule ]
+   modules: [ kge.job, kge.model, kge.model.embedder, mymodule ]
    import: [ mycomp ]
    ```
 
@@ -500,6 +497,7 @@ Other KGE frameworks:
  - [AmpliGraph](https://github.com/Accenture/AmpliGraph)
  - [OpenKE](https://github.com/thunlp/OpenKE)
  - [PyKEEN](https://github.com/SmartDataAnalytics/PyKEEN)
+ - [Pykg2vec](https://github.com/Sujit-O/pykg2vec)
 
 KGE projects for publications that also implement a few models:
  - [ConvE](https://github.com/TimDettmers/ConvE)
@@ -528,7 +526,7 @@ If you use LibKGE, please cite the following publication:
 @inproceedings{
   libkge,
   title="{L}ib{KGE} - {A} Knowledge Graph Embedding Library for Reproducible Research",
-  author={Samuel Broscheit and Daniel Ruffinelli and Adrian Kochsiek and Patrick Betz and Rainer Gemulla}",
+  author={Samuel Broscheit and Daniel Ruffinelli and Adrian Kochsiek and Patrick Betz and Rainer Gemulla},
   booktitle={Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing: System Demonstrations},
   year={2020},
   url={https://www.aclweb.org/anthology/2020.emnlp-demos.22},
