@@ -98,12 +98,15 @@ class EntityRankingJob(EvaluationJob):
 
         # create data and precompute indexes
         self.triples = self.dataset.split(self.config.get("eval.split"))
+        load_index_time = -time.time()
         for split in self.filter_splits:
             self.dataset.index(f"{split}_sp_to_o")
             self.dataset.index(f"{split}_po_to_s")
         if "test" not in self.filter_splits and self.filter_with_test:
             self.dataset.index("test_sp_to_o")
             self.dataset.index("test_po_to_s")
+        load_index_time += time.time()
+        print("load_index_time", load_index_time)
 
         # and data loader
         mp_context = torch.multiprocessing.get_context("fork") if self.config.get(
