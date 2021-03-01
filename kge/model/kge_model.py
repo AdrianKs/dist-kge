@@ -460,7 +460,7 @@ class KgeModel(KgeBase):
                             f"{pretrained_filename}"
                         )
                         checkpoint = load_checkpoint(pretrained_filename)
-                        return KgeModel.create_from(checkpoint)
+                        return KgeModel.create_from(checkpoint, parameter_client=parameter_client)
                     return None
 
                 pretrained_entities_model = load_pretrained_model(
