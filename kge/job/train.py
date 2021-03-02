@@ -246,6 +246,7 @@ class TrainingJob(TrainingOrEvaluationJob):
             self.model.meta["train_config"] = self.config
             self.model.meta["train_trace_entry"] = trace_entry
 
+            self.handle_running_checkpoint(checkpoint_every, checkpoint_keep)
             # validate
             lr_metric = None
             if (
@@ -256,7 +257,6 @@ class TrainingJob(TrainingOrEvaluationJob):
             else:
                 self.kge_lr_scheduler.step(lr_metric)
 
-            self.handle_running_checkpoint(checkpoint_every, checkpoint_keep)
 
         self.trace(event="train_completed")
 
