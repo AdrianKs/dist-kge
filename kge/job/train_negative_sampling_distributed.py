@@ -412,7 +412,8 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
         if hasattr(self.valid_job, "model"):
             del self.valid_job.model
         gc.collect()
-        torch.cuda.empty_cache()
+        with torch.cuda.device(self.device):
+            torch.cuda.empty_cache()
         self.parameter_client.barrier()
         if self.parameter_client.rank == self.min_rank:
             # create a model for validation with entity embedder size
@@ -439,7 +440,8 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             del self.model
             del self.valid_job.model
             gc.collect()
-            torch.cuda.empty_cache()
+            with torch.cuda.device(self.device):
+                torch.cuda.empty_cache()
         else:
             self.kge_lr_scheduler.step()
         self.parameter_client.barrier()
@@ -451,12 +453,8 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
         # since it is rather expensive to handle checkpoints in every epoch we only
         # do it every time we are evaluating now
         valid_every = self.config.get("valid.every")
-        if (
-            valid_every > 0
-            and self.epoch % valid_every == 0
-            and self.epoch > 0
-            and self.parameter_client.rank == self.min_rank
-        ):
+        self.parameter_client.barrier()
+        if self.parameter_client.rank == self.min_rank:
             self.save(self.config.checkpoint_file(self.epoch))
             delete_checkpoint_epoch = 0
             if checkpoint_every == 0:
@@ -534,10 +532,11 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
                 if work_entities is not None:
                     entity_pull_time -= time.time()
                     self.model.get_s_embedder()._pull_embeddings(work_entities)
-                    self.model.get_s_embedder().global_to_local_mapper[
+                    actual_entity_pull_time, entity_cpu_gpu_time = self.model.get_s_embedder().global_to_local_mapper[
                         work_entities
                     ] = torch.arange(len(work_entities), dtype=torch.long, device="cpu")
                     entity_pull_time += time.time()
+                    cpu_gpu_time += entity_cpu_gpu_time
                 else:
                     raise ValueError(
                         "the used work-scheduler seems not to support "
@@ -578,8 +577,8 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             while not epoch_done:
                 try:
                     if batch is None and len(pre_load_batches) < num_prepulls:
-                        pre_load_batches.append(next(iter_dataloader))
                         prepare_time -= time.time()
+                        pre_load_batches.append(next(iter_dataloader))
                         pre_pull_time -= time.time()
                         self._prepare_batch_ahead(pre_load_batches)
                         pre_pull_time += time.time()
@@ -587,8 +586,8 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
                         continue
                     else:
                         batch = pre_load_batches.popleft()
-                    pre_load_batches.append(next(iter_dataloader))
                     prepare_time -= time.time()
+                    pre_load_batches.append(next(iter_dataloader))
                     pre_pull_time -= time.time()
                     self._prepare_batch_ahead(pre_load_batches)
                     pre_pull_time += time.time()
@@ -654,14 +653,15 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
                 # print memory stats
                 if self.epoch == 1 and batch_index == 0:
                     if self.device.startswith("cuda"):
-                        self.config.log(
-                            "CUDA memory after first batch: allocated={:14,} "
-                            "reserved={:14,} max_allocated={:14,}".format(
-                                torch.cuda.memory_allocated(self.device),
-                                torch.cuda.memory_reserved(self.device),
-                                torch.cuda.max_memory_allocated(self.device),
+                        with torch.cuda.device(self.device):
+                            self.config.log(
+                                "CUDA memory after first batch: allocated={:14,} "
+                                "reserved={:14,} max_allocated={:14,}".format(
+                                    torch.cuda.memory_allocated(self.device),
+                                    torch.cuda.memory_reserved(self.device),
+                                    torch.cuda.max_memory_allocated(self.device),
+                                )
                             )
-                        )
 
                 # update parameters
                 batch_optimizer_time = -time.time()
