@@ -256,9 +256,9 @@ class DistributedLookupEmbedder(LookupEmbedder):
         pulled_embeddings, pulled_optim_values, _ = torch.split(
             pull_tensor, [self.dim, self.optimizer_dim, self.unnecessary_dim], dim=1
         )
+        self._embeddings.weight.data[:len_indexes].copy_(pulled_embeddings, non_blocking=True)
+        self.optimizer_values[:len_indexes].copy_(pulled_optim_values, non_blocking=True)
         cpu_gpu_time += time.time()
-        self._embeddings.weight.data[:len_indexes].copy_(pulled_embeddings)
-        self.optimizer_values[:len_indexes].copy_(pulled_optim_values)
         return pull_time, cpu_gpu_time
 
     def localize(self, indexes: Tensor, asynchronous=False, make_unique=False):
