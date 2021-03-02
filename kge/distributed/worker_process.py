@@ -112,6 +112,10 @@ class WorkerProcess(mp.get_context("spawn").Process):
         self.result_pipe = result_pipe
 
     def run(self):
+        torch_device = self.config.get("job.device")
+        if self.config.get("job.device") == "cuda":
+            torch_device = "cuda:0"
+        torch.cuda.set_device(torch_device)
         # seeds need to be set in every process
         set_seeds(self.config, self.rank)
 
