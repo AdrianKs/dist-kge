@@ -468,7 +468,7 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
                 )
             if delete_checkpoint_epoch > 0:
                 self._delete_checkpoint(
-                    self.config.checkpoint_file(delete_checkpoint_epoch)
+                    delete_checkpoint_epoch
                 )
         self.parameter_client.barrier()
 
@@ -814,8 +814,11 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
         self.current_trace["epoch"] = None
         return trace_entry
 
-    def _delete_checkpoint(self, filename):
-        super(TrainingJobNegativeSamplingDistributed, self)._delete_checkpoint(filename)
+    def _delete_checkpoint(self, checkpoint_id):
+        filename = self.config.checkpoint_file(checkpoint_id)
+        super(TrainingJobNegativeSamplingDistributed, self)._delete_checkpoint(
+            checkpoint_id
+        )
         file, file_ending = filename.rsplit(".", 1)
         if os.path.exists(f"{file}_entities"):
             shutil.rmtree(f"{file}_entities")
