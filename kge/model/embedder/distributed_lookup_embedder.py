@@ -94,8 +94,9 @@ class DistributedLookupEmbedder(LookupEmbedder):
         if "cuda" in config.get("job.device"):
             # only pin tensors if we are using gpu
             # otherwise gpu memory will be allocated for no reason
-            for i in range(len(self.pull_tensors)):
-                self.pull_tensors[i][1] = self.pull_tensors[i][1].pin_memory()
+            with torch.cuda.device(config.get("job.device")):
+                for i in range(len(self.pull_tensors)):
+                    self.pull_tensors[i][1] = self.pull_tensors[i][1].pin_memory()
 
         self.num_pulled = 0
         self.mapping_time = 0.0
