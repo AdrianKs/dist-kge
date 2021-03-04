@@ -531,8 +531,8 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             if self.entity_sync_level == "partition":
                 if work_entities is not None:
                     entity_pull_time -= time.time()
-                    self.model.get_s_embedder()._pull_embeddings(work_entities)
-                    actual_entity_pull_time, entity_cpu_gpu_time = self.model.get_s_embedder().global_to_local_mapper[
+                    actual_entity_pull_time, entity_cpu_gpu_time = self.model.get_s_embedder()._pull_embeddings(work_entities)
+                    self.model.get_s_embedder().global_to_local_mapper[
                         work_entities
                     ] = torch.arange(len(work_entities), dtype=torch.long, device="cpu")
                     entity_pull_time += time.time()
@@ -545,13 +545,14 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             if self.relation_sync_level == "partition":
                 if work_relations is not None:
                     relation_pull_time -= time.time()
-                    self.model.get_p_embedder()._pull_embeddings(work_relations)
+                    actual_relation_pull_time, relation_cpu_gpu_time = self.model.get_p_embedder()._pull_embeddings(work_relations)
                     self.model.get_p_embedder().global_to_local_mapper[
                         work_relations
                     ] = torch.arange(
                         len(work_relations), dtype=torch.long, device="cpu"
                     )
                     relation_pull_time += time.time()
+                    cpu_gpu_time += relation_cpu_gpu_time
                 else:
                     raise ValueError(
                         "the used work-scheduler seems not to support "
