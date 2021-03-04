@@ -132,7 +132,7 @@ class WorkerProcess(mp.get_context("spawn").Process):
             timeout=datetime.timedelta(hours=6),
         )
         worker_ranks = list(range(min_rank, self.num_total_workers+min_rank))
-        worker_group = dist.new_group(worker_ranks)
+        worker_group = dist.new_group(worker_ranks, timeout=datetime.timedelta(hours=6))
 
         # create parameter server
         server = None

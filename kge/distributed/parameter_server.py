@@ -136,10 +136,11 @@ def init_lapse_scheduler(
     os.environ["MASTER_PORT"] = master_port
     dist.init_process_group(
         backend="gloo", init_method="env://", world_size=dist_world_size, rank=0,
+        timeout=datetime.timedelta(hours=6),
     )
     # process groups need to be initialized in every process
     worker_ranks = list(range(min_rank, servers + min_rank))
-    worker_group = dist.new_group(worker_ranks)
+    worker_group = dist.new_group(worker_ranks, timeout=datetime.timedelta(hours=6))
     os.environ["DMLC_NUM_WORKER"] = "0"
     os.environ["DMLC_NUM_SERVER"] = str(servers)
     os.environ["DMLC_ROLE"] = "scheduler"
@@ -159,5 +160,5 @@ def init_torch_server(num_clients, num_keys, dim, master_ip, master_port, min_ra
     )
     # process groups need to be initialized in every process
     worker_ranks = list(range(min_rank, num_clients + min_rank))
-    worker_group = dist.new_group(worker_ranks)
+    worker_group = dist.new_group(worker_ranks, timeout=datetime.timedelta(hours=6))
     TorchParameterServer(world_size, num_keys, dim)
