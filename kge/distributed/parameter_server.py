@@ -1,4 +1,5 @@
 import os
+import datetime
 import torch
 import lapse
 from enum import IntEnum
@@ -154,6 +155,7 @@ def init_torch_server(num_clients, num_keys, dim, master_ip, master_port, min_ra
     os.environ["MASTER_PORT"] = master_port
     dist.init_process_group(
         backend="gloo", init_method="env://", world_size=world_size, rank=0,
+        timeout=datetime.timedelta(hours=6),
     )
     # process groups need to be initialized in every process
     worker_ranks = list(range(min_rank, num_clients + min_rank))

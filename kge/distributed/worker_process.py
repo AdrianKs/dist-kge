@@ -1,5 +1,6 @@
 import os
 import gc
+import datetime
 import torch  # import torch before lapse
 import lapse
 from typing import Optional, Dict
@@ -128,6 +129,7 @@ class WorkerProcess(mp.get_context("spawn").Process):
             init_method="env://",
             world_size=self.num_total_workers + min_rank,
             rank=self.rank + min_rank,
+            timeout=datetime.timedelta(hours=6),
         )
         worker_ranks = list(range(min_rank, self.num_total_workers+min_rank))
         worker_group = dist.new_group(worker_ranks)
