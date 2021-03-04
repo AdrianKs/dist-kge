@@ -115,6 +115,10 @@ class KvsAllIndex:
             the corresponding input position of the key in [:, 0]
 
         """
+        if targets is not None:
+            targets_set = set()
+            for i in range(len(targets)):
+                targets_set.add(targets[i])
         key_index = np.empty((len(keys)), dtype=np.int32)
         total_length = 0
         for i in range(len(keys)):
@@ -135,11 +139,10 @@ class KvsAllIndex:
                 filtered_res = np.empty((len(res)), dtype=np.int32)
                 current_filter_index = 0
                 for j in range(len(res)):
-                    if res[j] in targets:
+                    if res[j] in targets_set:
                         filtered_res[current_filter_index] = res[j]
                         current_filter_index += 1
-                    res = filtered_res[:current_filter_index]
-                #res = res[res in targets]
+                res = filtered_res[:current_filter_index]
             len_res = len(res)
             result[current_index: current_index+len_res, 0] = i
             result[current_index: current_index + len_res, 1] = res
@@ -152,7 +155,7 @@ class KvsAllIndex:
     def get(self, key, default_return_value=None) -> torch.Tensor:
         return self.__getitem__(key, default_return_value)
 
-    def get_all(self, keys, targets: Optional[set]):
+    def get_all(self, keys, targets: Optional[np.array]):
         # keys need to be int32 otherwise numba won't find any matches in the dict
         keys = keys.int()
         return torch.from_numpy(
