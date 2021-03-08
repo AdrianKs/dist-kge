@@ -448,6 +448,8 @@ negative_sampling:
     negatives_percentage: 0.5
     # Type of shared sampling implementation
     shared_type: naive
+    # Whether sampling should be performed with replacement
+    with_replacement: True
 
   # Implementation to use for the negative sampling job. Possible values are:
   # - triple: Scores every positive and negative triple in the batch separately.
