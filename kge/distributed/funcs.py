@@ -110,9 +110,11 @@ def create_and_run_distributed(
     def kill_processes(signal_received, frame):
         print("\nSIGINT or CTRL-C detected. Shutting down all processes and exiting...")
         for process in processes:
-            process.kill()
+            if process is not None:
+                process.kill()
         for process in monitoring_processes:
-            process.kill()
+            if process is not None:
+                process.kill()
         if worker_process_pool is not None:
             worker_process_pool.kill()
         exit(0)
