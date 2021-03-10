@@ -65,7 +65,10 @@ class WorkerProcessPool:
 
     def join(self):
         """Wait for all workers"""
-        valid_trace = self.recv_end.recv()
+        try:
+            valid_trace = self.recv_end.recv()
+        except:
+            valid_trace = None
         for worker in self.workers:
             worker.join()
         return valid_trace
@@ -116,7 +119,8 @@ class WorkerProcess(mp.get_context("spawn").Process):
         torch_device = self.config.get("job.device")
         if self.config.get("job.device") == "cuda":
             torch_device = "cuda:0"
-        torch.cuda.set_device(torch_device)
+        if torch_device != "cpu":
+            torch.cuda.set_device(torch_device)
         # seeds need to be set in every process
         set_seeds(self.config, self.rank)
 
