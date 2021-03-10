@@ -594,7 +594,6 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
                     pre_pull_time += time.time()
                     prepare_time += time.time()
                 except StopIteration:
-                    pre_pull_time += time.time()
                     prepare_time += time.time()
                     if len(pre_load_batches) == 0:
                         epoch_done = True
