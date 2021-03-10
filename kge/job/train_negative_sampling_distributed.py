@@ -797,6 +797,7 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
                     embedding_mapping_time=self.model.get_s_embedder().mapping_time
                     + self.model.get_p_embedder().mapping_time,
                     event="epoch_completed",
+                    batches=len(self.loader)
                 )
             )
             self.model.get_p_embedder().mapping_time = 0.0
