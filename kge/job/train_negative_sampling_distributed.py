@@ -512,6 +512,7 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             cpu_gpu_time = 0.0
             ps_wait_time = 0.0
             ps_set_time = 0.0
+            dataloader_time = 0.0
             scheduler_time = -time.time()
 
             # load new work package
@@ -579,7 +580,9 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
                 try:
                     if batch is None and len(pre_load_batches) < num_prepulls:
                         prepare_time -= time.time()
+                        dataloader_time -= time.time()
                         pre_load_batches.append(next(iter_dataloader))
+                        dataloader_time += time.time()
                         pre_pull_time -= time.time()
                         self._prepare_batch_ahead(pre_load_batches)
                         pre_pull_time += time.time()
@@ -588,12 +591,15 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
                     else:
                         batch = pre_load_batches.popleft()
                     prepare_time -= time.time()
+                    dataloader_time -= time.time()
                     pre_load_batches.append(next(iter_dataloader))
+                    dataloader_time += time.time()
                     pre_pull_time -= time.time()
                     self._prepare_batch_ahead(pre_load_batches)
                     pre_pull_time += time.time()
                     prepare_time += time.time()
                 except StopIteration:
+                    dataloader_time += time.time()
                     prepare_time += time.time()
                     if len(pre_load_batches) == 0:
                         epoch_done = True
@@ -797,7 +803,8 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
                     embedding_mapping_time=self.model.get_s_embedder().mapping_time
                     + self.model.get_p_embedder().mapping_time,
                     event="epoch_completed",
-                    batches=len(self.loader)
+                    batches=len(self.loader),
+                    dataloader_time=dataloader_time,
                 )
             )
             self.model.get_p_embedder().mapping_time = 0.0
