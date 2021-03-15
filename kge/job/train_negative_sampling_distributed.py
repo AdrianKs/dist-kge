@@ -139,6 +139,9 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
         )
         self.entity_pre_pull = self.config.get("job.distributed.entity_pre_pull")
         self.relation_pre_pull = self.config.get("job.distributed.relation_pre_pull")
+        self.pre_localize_batch = int(
+            self.config.get("job.distributed.pre_localize_batch")
+        )
         self.entity_mapper_tensors = deque()
         for i in range(self.config.get("train.num_workers") + 1):
             self.entity_mapper_tensors.append(
@@ -339,6 +342,11 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
         if self.relation_sync_level == "batch" and self.relation_pre_pull > 0:
             self.model.get_p_embedder().pre_pull(batches[-1]["unique_relations"])
             self.model.get_p_embedder().pre_pulled_to_device()
+        if self.pre_localize_batch > 0:
+            self.model.get_s_embedder().localize(
+                batches[-1]["unique_entities"],
+                asynchronous=True
+            )
 
     def _prepare_batch(
         self, batch_index, batch, result: TrainingJob._ProcessBatchResult
@@ -574,7 +582,7 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             epoch_done = False
             iter_dataloader = iter(self.loader)
             batch_index = 0
-            num_prepulls = max(self.entity_pre_pull, self.relation_pre_pull, 1)
+            num_prepulls = max(self.entity_pre_pull, self.relation_pre_pull, self.pre_localize_batch, 1)
             # for batch_index, batch in enumerate(self.loader):
             while not epoch_done:
                 try:

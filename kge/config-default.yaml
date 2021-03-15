@@ -55,6 +55,7 @@ job:
     repartition_epoch: True  # currently only works with stratification and random
     scheduling_order: 'random'  # block ordering for stratification: random, sequential
     pre_localize_partition: False
+    pre_localize_batch: False # pre localize entities in batch one batch ahead
 
     # combine mirrored strata to reduce number of partitions
     #  e.g.: (1,2) and (2,1)
