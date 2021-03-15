@@ -840,7 +840,9 @@ class StratificationWorkScheduler(WorkScheduler):
                     else:
                         mirror_strata = (strata[1], strata[0])
                     mirror_data = partitions[mirror_strata]
-                    combined_strata_data = torch.cat((strata_data, mirror_data))
+                    # for some reason torch.cat hangs on some machines on larger
+                    # datasets when run in background, use numpy instead
+                    combined_strata_data = np.concatenate((strata_data, mirror_data))
                     unique_entities = torch.from_numpy(
                         np.unique(data[combined_strata_data][:, [0, 2]]).astype(np.long)
                     ).contiguous()
