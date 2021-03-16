@@ -1353,15 +1353,18 @@ class RandomStratificationWorkScheduler(StratificationWorkScheduler):
             )
             if work_package.partition_data is None:
                 return work_package
-            self.work_to_do_per_machine[machine_id] = list(torch.chunk(
+            partition_data_chunks = torch.chunk(
                 work_package.partition_data[
                     torch.randperm(len(work_package.partition_data))
                 ],
                 self.num_workers_per_machine[machine_id]
-            ))
-        work_package = WorkPackage()
-        work_package.partition_data = self.work_to_do_per_machine[machine_id].pop()
-        return work_package
+            )
+            for partition_data in partition_data_chunks:
+                wp = WorkPackage()
+                wp.partition_data = partition_data
+                wp.entities_in_partition = work_package.entities_in_partition
+                self.work_to_do_per_machine[machine_id].append(wp)
+        return self.work_to_do_per_machine[machine_id].pop()
 
     def _handle_work_done(self, rank):
         # handled in next work
