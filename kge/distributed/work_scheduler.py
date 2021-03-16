@@ -154,6 +154,18 @@ class WorkScheduler(mp.get_context("fork").Process):
                 scheduling_order=scheduling_order,
                 repartition_epoch=repartition_epoch,
             )
+        elif partition_type == "random-stratification":
+            return RandomStratificationWorkScheduler(
+                config=config,
+                world_size=world_size,
+                master_ip=master_ip,
+                master_port=master_port,
+                num_partitions=num_partitions,
+                num_clients=num_clients,
+                dataset=dataset,
+                scheduling_order=scheduling_order,
+                repartition_epoch=repartition_epoch,
+            )
         else:
             raise NotImplementedError()
 
@@ -950,9 +962,7 @@ class StratificationWorkScheduler(WorkScheduler):
 
     def _next_work(
         self, rank, machine_id
-    ) -> Tuple[
-        Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor], bool
-    ]:
+    ) -> WorkPackage:
         if self.fixed_schedule is not None:
             return self._acquire_strata(rank, machine_id)
         return self._acquire_bucket(rank)
@@ -1286,6 +1296,76 @@ class SuperStratificationWorkScheduler(StratificationWorkScheduler):
         super(SuperStratificationWorkScheduler, self)._refill_work()
         self.super_stratification_scheduler.fixed_schedule = self.super_stratification_scheduler.schedule_creator.create_schedule()
         self._create_schedule_per_super_strata()
+
+
+class RandomStratificationWorkScheduler(StratificationWorkScheduler):
+    def __init__(
+            self,
+            config,
+            world_size,
+            master_ip,
+            master_port,
+            num_partitions,
+            num_clients,
+            dataset,
+            scheduling_order="random",
+            repartition_epoch=True,
+    ):
+        # num_partitions = self.config.get("job.distributed.num_machines")*2
+        # num_clients = self.config.get("job.distributed.num_machines")
+        super(RandomStratificationWorkScheduler, self).__init__(
+            config,
+            world_size,
+            master_ip,
+            master_port,
+            num_partitions,
+            num_clients,
+            dataset,
+            scheduling_order=scheduling_order,
+            repartition_epoch=repartition_epoch,
+        )
+        self.num_machines = self.config.get("job.distributed.num_machines")
+        self.num_partitions = self.num_machines * 4
+        # override the schedule creator
+        self.schedule_creator = TwoDBlockScheduleCreator(
+            num_partitions=self.num_partitions,
+            num_workers=self.num_machines,
+            randomize_iterations=True,
+            combine_mirror_blocks=self.combine_mirror_blocks,
+        )
+        self.fixed_schedule = self.schedule_creator.create_schedule()
+        self.work_to_do_per_machine = defaultdict(list)
+        # todo: find out how many worker we have per machine
+        #  for now assume the same amount of worker per machine
+        num_workers_machine = self.config.get("job.distributed.num_workers_machine")
+        if num_workers_machine < 1:
+            num_workers_machine = self.config.get("job.distributed.num_workers")
+        self.num_workers_per_machine = defaultdict(lambda: num_workers_machine)
+
+    def _next_work(
+        self, rank, machine_id
+    ) -> WorkPackage:
+        if len(self.work_to_do_per_machine[machine_id]) == 0:
+            if machine_id in self.running_blocks:
+                del self.running_blocks[machine_id]
+            work_package = super(RandomStratificationWorkScheduler, self)._next_work(
+                rank=machine_id, machine_id=machine_id
+            )
+            if work_package.partition_data is None:
+                return work_package
+            self.work_to_do_per_machine[machine_id] = list(torch.chunk(
+                work_package.partition_data[
+                    torch.randperm(len(work_package.partition_data))
+                ],
+                self.num_workers_per_machine[machine_id]
+            ))
+        work_package = WorkPackage()
+        work_package.partition_data = self.work_to_do_per_machine[machine_id].pop()
+        return work_package
+
+    def _handle_work_done(self, rank):
+        # handled in next work
+        return
 
 
 class SchedulerClient:
