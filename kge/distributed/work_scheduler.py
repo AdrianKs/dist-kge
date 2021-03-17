@@ -67,6 +67,7 @@ class WorkScheduler(mp.get_context("fork").Process):
         self.wait_time = 0.4
         self.repartition_epoch = repartition_epoch
         self.init_up_to_entity = -1
+        self.num_processed_partitions = 0
         if self.repartition_epoch:
             self.repartition_future = None
             self.repartition_worker_pool = None
@@ -202,6 +203,7 @@ class WorkScheduler(mp.get_context("fork").Process):
                 epoch_time += time.time()
                 self.config.log(f"complete_epoch_time: {epoch_time}")
                 epoch_time = None
+                self.num_processed_partitions = 0
                 self._refill_work()
                 for worker in self.asking_workers:
                     self._send_work(worker, cmd_buffer)
@@ -304,7 +306,8 @@ class WorkScheduler(mp.get_context("fork").Process):
             dist.send(cmd_buffer, dst=rank)
 
     def _handle_work_done(self, rank):
-        pass
+        self.num_processed_partitions += 1
+        print(f"trainer {rank} done with partition {self.num_processed_partitions}")
 
     def _handle_init_info(self, rank):
         max_entities = self._get_max_entities()
@@ -1112,6 +1115,7 @@ class StratificationWorkScheduler(WorkScheduler):
         )
 
     def _handle_work_done(self, rank):
+        super(StratificationWorkScheduler, self)._handle_work_done(rank)
         del self.running_blocks[rank]
 
     def _repartition_in_background(self):

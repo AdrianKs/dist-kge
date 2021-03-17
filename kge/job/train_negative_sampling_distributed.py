@@ -767,7 +767,6 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
                 - scheduler_time
             )
 
-            print("work done", self.parameter_client.rank)
             if self.entity_sync_level == "partition":
                 ps_set_time -= time.time()
                 self.model.get_s_embedder().set_embeddings()
