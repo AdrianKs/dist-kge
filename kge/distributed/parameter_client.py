@@ -1,5 +1,8 @@
 import torch
-import lapse
+try:
+    import lapse
+except ImportError:
+    pass
 import numpy as np
 from typing import Optional
 from torch import distributed as dist

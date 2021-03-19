@@ -1,7 +1,10 @@
 import os
 import datetime
 import torch
-import lapse
+try:
+    import lapse
+except ImportError:
+    pass
 from enum import IntEnum
 from torch import distributed as dist
 

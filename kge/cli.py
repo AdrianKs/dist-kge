@@ -6,9 +6,13 @@ import sys
 import traceback
 import yaml
 import time
+import warnings
 
 import torch
-import lapse
+try:
+    import lapse
+except ImportError:
+    warnings.warn("Lapse could not be imported. Only parallel training possible.")
 
 from kge import Dataset
 from kge import Config

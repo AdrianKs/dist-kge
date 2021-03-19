@@ -2,7 +2,10 @@ import os
 import gc
 import datetime
 import torch  # import torch before lapse
-import lapse
+try:
+    import lapse
+except ImportError:
+    pass
 from typing import Optional, Dict
 from copy import deepcopy
 from torch import multiprocessing as mp
