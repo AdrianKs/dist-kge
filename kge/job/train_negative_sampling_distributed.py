@@ -847,19 +847,23 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             # todo: we do not need to store the weights of the emebdders and optim here
             super(TrainingJobNegativeSamplingDistributed, self).save(filename)
             local_model_size = self.model.get_s_embedder().vocab_size
+            entity_dim = self.model.get_s_embedder().dim
+            optimizer_dim = self.model.get_s_embedder().optimizer_dim
+            chunk_size = max(1000000, local_model_size)
+            empty_pull_tensor = torch.empty(
+                [chunk_size, entity_dim + optimizer_dim], device="cpu"
+            )
             num_entities = self.dataset.num_entities()
             file, file_ending = filename.rsplit(".", 1)
             entities_dir = f"{file}_entities"
             if not os.path.exists(entities_dir):
                 os.mkdir(entities_dir)
-            for chunk_number in range(math.ceil(num_entities / local_model_size)):
-                chunk_start = local_model_size * chunk_number
-                chunk_end = min(local_model_size * (chunk_number + 1), num_entities)
+            for chunk_number in range(math.ceil(num_entities / chunk_size)):
+                chunk_start = chunk_size * chunk_number
+                chunk_end = min(chunk_size * (chunk_number + 1), num_entities)
                 entity_ids = torch.arange(chunk_start, chunk_end, dtype=torch.long)
                 lapse_offset = self.model.get_s_embedder().lapse_offset
-                pull_tensor = self.model.get_s_embedder().pull_tensors[0][1][
-                    : len(entity_ids)
-                ]
+                pull_tensor = empty_pull_tensor[: len(entity_ids)]
                 self.parameter_client.pull(entity_ids + lapse_offset, pull_tensor)
                 torch.save(
                     pull_tensor,
