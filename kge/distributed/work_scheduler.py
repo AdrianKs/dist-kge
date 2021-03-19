@@ -1371,6 +1371,8 @@ class RandomStratificationWorkScheduler(StratificationWorkScheduler):
         return self.work_to_do_per_machine[machine_id].pop()
 
     def _handle_work_done(self, rank):
+        self.num_processed_partitions += 1
+        print(f"trainer {rank} done with partition {self.num_processed_partitions}")
         # handled in next work
         return
 
