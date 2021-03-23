@@ -288,7 +288,7 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
               in order S,P,O)
             """
 
-            if batch[0] is None:
+            if batch[0] is None or len(batch[0]) == 0:
                 # this can happen due to keeping the dataloader alive
                 return None
             triples = self.dataset.split(self.train_split)[batch[0], :].long()
@@ -316,34 +316,6 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             )
             unique_time += time.time()
 
-            # map ids to local ids
-            if self.entity_sync_level == "partition":
-                entity_mapper = self.model.get_s_embedder().global_to_local_mapper
-            else:
-                # entity_mapper = torch.full((self.dataset.num_entities(),), -1, dtype=torch.long)
-                entity_mapper = self.entity_mapper_tensors.popleft()
-                entity_mapper[unique_entities] = torch.arange(
-                    len(unique_entities), dtype=torch.long
-                )
-            if self.relation_sync_level == "partition":
-                relation_mapper = self.model.get_p_embedder().global_to_local_mapper
-            else:
-                relation_mapper = torch.full(
-                    (self.dataset.num_relations(),), -1, dtype=torch.long
-                )
-                relation_mapper[unique_relations] = torch.arange(
-                    len(unique_relations), dtype=torch.long
-                )
-            triples[:, S] = entity_mapper[triples[:, S]]
-            triples[:, P] = relation_mapper[triples[:, P]]
-            triples[:, O] = entity_mapper[triples[:, O]]
-            negative_samples[S].map_samples(entity_mapper)
-            negative_samples[P].map_samples(relation_mapper)
-            negative_samples[O].map_samples(entity_mapper)
-
-            # for debugging reset the entity mapper to -1
-            # entity_mapper[:] = -1
-            self.entity_mapper_tensors.append(entity_mapper)
             return {
                 "triples": triples,
                 "negative_samples": negative_samples,
@@ -353,6 +325,38 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             }
 
         return collate
+
+    def _map_ids_to_local(self, batch):
+
+        # map ids to local ids
+        if self.entity_sync_level == "partition":
+            entity_mapper = self.model.get_s_embedder().global_to_local_mapper
+        else:
+            # entity_mapper = torch.full((self.dataset.num_entities(),), -1, dtype=torch.long)
+            entity_mapper = self.entity_mapper_tensors.popleft()
+            entity_mapper[batch["unique_entities"]] = torch.arange(
+                len(batch["unique_entities"]), dtype=torch.long
+            )
+        if self.relation_sync_level == "partition":
+            relation_mapper = self.model.get_p_embedder().global_to_local_mapper
+        else:
+            relation_mapper = torch.full(
+                (self.dataset.num_relations(),), -1, dtype=torch.long
+            )
+            relation_mapper[batch["unique_relations"]] = torch.arange(
+                len(batch["unique_relations"]), dtype=torch.long
+            )
+        batch["triples"][:, S] = entity_mapper[batch["triples"][:, S]]
+        batch["triples"][:, P] = relation_mapper[batch["triples"][:, P]]
+        batch["triples"][:, O] = entity_mapper[batch["triples"][:, O]]
+        batch["negative_samples"][S].map_samples(entity_mapper)
+        batch["negative_samples"][P].map_samples(relation_mapper)
+        batch["negative_samples"][O].map_samples(entity_mapper)
+
+        # for debugging reset the entity mapper to -1
+        # entity_mapper[:] = -1
+        self.entity_mapper_tensors.append(entity_mapper)
+        return batch
 
     def _prepare_batch_ahead(self, batches: deque):
         if self.entity_pre_pull > 1 or self.relation_pre_pull > 1:
@@ -574,9 +578,6 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             if work is None:
                 break
             self.work_pre_localized = False
-            self.dataloader_dataset.set_samples(work)
-            if self.loader is None:
-                self._init_dataloader()
             if work_entities is not None and self.entity_localize:
                 self.model.get_s_embedder().localize(work_entities)
                 self.entity_partition_localized = True
@@ -620,6 +621,9 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             ):
                 self._sampler.set_pool(work_entities, S)
                 self._sampler.set_pool(work_entities, O)
+            self.dataloader_dataset.set_samples(work)
+            if self.loader is None:
+                self._init_dataloader()
             scheduler_time += time.time()
 
             # process each batch
@@ -635,10 +639,16 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
                     if batch is None and len(pre_load_batches) < num_prepulls:
                         prepare_time -= time.time()
                         dataloader_time -= time.time()
-                        pre_load_batches.append(next(iter_dataloader))
+                        next_batch = next(iter_dataloader)
+                        if next_batch is not None:
+                            next_batch = self._map_ids_to_local(next_batch)
+                            pre_load_batches.append(next_batch)
+                        elif len(pre_load_batches) == 0:
+                            epoch_done = True
                         dataloader_time += time.time()
                         pre_pull_time -= time.time()
-                        self._prepare_batch_ahead(pre_load_batches)
+                        if next_batch is not None:
+                            self._prepare_batch_ahead(pre_load_batches)
                         pre_pull_time += time.time()
                         prepare_time += time.time()
                         continue
@@ -646,10 +656,16 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
                         batch = pre_load_batches.popleft()
                     prepare_time -= time.time()
                     dataloader_time -= time.time()
-                    pre_load_batches.append(next(iter_dataloader))
+                    next_batch = next(iter_dataloader)
+                    if next_batch is not None:
+                        next_batch = self._map_ids_to_local(next_batch)
+                        pre_load_batches.append(next_batch)
+                    elif len(pre_load_batches) == 0:
+                        epoch_done = True
                     dataloader_time += time.time()
                     pre_pull_time -= time.time()
-                    self._prepare_batch_ahead(pre_load_batches)
+                    if next_batch is not None:
+                        self._prepare_batch_ahead(pre_load_batches)
                     pre_pull_time += time.time()
                     prepare_time += time.time()
                 except StopIteration:
