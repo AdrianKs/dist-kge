@@ -533,7 +533,7 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             scope="epoch",
             epoch=self.epoch,
             split=self.train_split,
-            batches=len(self.loader),
+            batches=len(self.dataloader_dataset),
             size=self.num_examples,
         )
         if not self.is_forward_only:
@@ -893,9 +893,10 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             # todo: we do not need to store the weights of the emebdders and optim here
             super(TrainingJobNegativeSamplingDistributed, self).save(filename)
             local_model_size = self.model.get_s_embedder().vocab_size
+            global_model_size = self.model.get_s_embedder().complete_vocab_size
             entity_dim = self.model.get_s_embedder().dim
             optimizer_dim = self.model.get_s_embedder().optimizer_dim
-            chunk_size = max(1000000, local_model_size)
+            chunk_size = min(max(1000000, local_model_size), global_model_size)
             empty_pull_tensor = torch.empty(
                 [chunk_size, entity_dim + optimizer_dim], device="cpu"
             )
