@@ -40,33 +40,69 @@ class NumberDataset(torch.utils.data.Dataset):
         self.samples = samples
 
 
+class _RepeatSampler(object):
+    """ Sampler that repeats forever.
+
+    Args:
+        sampler (Sampler)
+    """
+
+    def __init__(self, sampler):
+        self.sampler = sampler
+
+    def __iter__(self):
+        while True:
+            yield from iter(self.sampler)
+
+
+class FastDataLoader(torch.utils.data.dataloader.DataLoader):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        object.__setattr__(self, 'batch_sampler', _RepeatSampler(self.batch_sampler))
+        self.iterator = super().__iter__()
+
+    def __len__(self):
+        return len(self.batch_sampler.sampler)
+
+    def __iter__(self):
+        for i in range(len(self)):
+            yield next(self.iterator)
+
+
 class BatchDataset(torch.utils.data.Dataset):
     def __init__(self, triples, batch_size, shuffle=True):
         self.triples = triples
-        self.samples = None
+        # work around for now to have a working shared tensor
+        self.samples = torch.empty([100000000, ], dtype=torch.int).share_memory_()
         self.batch_size = batch_size
         self.shuffle = shuffle
+        self.num_samples = torch.full([1, ], -1, dtype=torch.int).share_memory_()
 
     def __len__(self):
-        if self.samples is None:
-            return 0
-        return math.ceil(len(self.samples) / self.batch_size)
+        if self.num_samples.item() <= 0:
+            # with 0 it would not initialize properly with fast data-loader
+            return 1
+        return math.ceil(self.num_samples.item() / self.batch_size)
 
     def __getitem__(self, idx):
         """Gets a complete batch based on an idx"""
+        if self.num_samples.item() < 0:
+            return None
         return self.samples[
             idx
-            * self.batch_size : min((idx + 1) * (self.batch_size), len(self.samples))
+            * self.batch_size : min((idx + 1) * (self.batch_size), self.num_samples.item())
         ].long()
 
     def set_samples(self, samples: torch.Tensor):
         if self.shuffle:
             samples = samples.numpy()
             np.random.shuffle(samples)
-            self.samples = torch.from_numpy(samples)
-            # self.samples = samples[torch.randperm(len(samples))]
+            self.samples[:len(samples)] = torch.from_numpy(samples)
+            self.num_samples[0] = len(samples)
         else:
-            self.samples = samples
+            self.samples[:len(samples)] = samples
+            self.num_samples[0] = len(samples)
 
 
 class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
@@ -239,21 +275,8 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             batch_size=self.batch_size,
             shuffle=True,
         )
-        mp_context = (
-            torch.multiprocessing.get_context("fork")
-            if self.config.get("train.num_workers") > 0
-            else None
-        )
-        self.loader = torch.utils.data.DataLoader(
-            self.dataloader_dataset,
-            collate_fn=self._get_collate_fun(),
-            shuffle=False,  # shuffle needs to be False, since it is handled in the dataset object
-            # batch_size=self.batch_size,  # batch size needs to be 1 since it is handled in the dataset object
-            num_workers=self.config.get("train.num_workers"),
-            worker_init_fn=_generate_worker_init_fn(self.config),
-            pin_memory=self.config.get("train.pin_memory"),
-            multiprocessing_context=mp_context,
-        )
+        # initializing dataloader as soon as we got the triples from work scheduler
+        self.loader = None
 
     def _get_collate_fun(self):
         # create the collate function
@@ -265,6 +288,9 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
               in order S,P,O)
             """
 
+            if batch[0] is None:
+                # this can happen due to keeping the dataloader alive
+                return None
             triples = self.dataset.split(self.train_split)[batch[0], :].long()
 
             negative_samples = list()
@@ -480,6 +506,24 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
                 )
         self.parameter_client.barrier()
 
+    def _init_dataloader(self):
+        mp_context = (
+            torch.multiprocessing.get_context("fork")
+            if self.config.get("train.num_workers") > 0
+            else None
+        )
+        self.loader = FastDataLoader(
+            self.dataloader_dataset,
+            collate_fn=self._get_collate_fun(),
+            shuffle=False,
+            # shuffle needs to be False, since it is handled in the dataset object
+            # batch_size=self.batch_size,  # batch size needs to be 1 since it is handled in the dataset object
+            num_workers=self.config.get("train.num_workers"),
+            worker_init_fn=_generate_worker_init_fn(self.config),
+            pin_memory=self.config.get("train.pin_memory"),
+            multiprocessing_context=mp_context,
+        )
+
     def run_epoch(self) -> Dict[str, Any]:
         """ Runs an epoch and returns its trace entry. """
 
@@ -531,6 +575,8 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
                 break
             self.work_pre_localized = False
             self.dataloader_dataset.set_samples(work)
+            if self.loader is None:
+                self._init_dataloader()
             if work_entities is not None and self.entity_localize:
                 self.model.get_s_embedder().localize(work_entities)
                 self.entity_partition_localized = True
