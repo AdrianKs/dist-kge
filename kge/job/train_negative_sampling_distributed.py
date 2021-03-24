@@ -91,7 +91,7 @@ class BatchDataset(torch.utils.data.Dataset):
             samples = samples.numpy()
             np.random.shuffle(samples)
             samples = torch.from_numpy(samples)
-        self.samples[:len(samples)] = torch.from_numpy(samples)
+        self.samples[:len(samples)] = samples
         self.num_samples[0] = len(samples)
         self.epoch[0] = epoch
         self.partition_id[0] = partition_id
