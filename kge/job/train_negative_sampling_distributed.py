@@ -6,6 +6,7 @@ import numpy as np
 import math
 import gc
 import os
+import itertools
 
 from collections import defaultdict, deque
 from typing import Dict, Any
@@ -40,69 +41,60 @@ class NumberDataset(torch.utils.data.Dataset):
         self.samples = samples
 
 
-class _RepeatSampler(object):
-    """ Sampler that repeats forever.
-
-    Args:
-        sampler (Sampler)
-    """
-
-    def __init__(self, sampler):
-        self.sampler = sampler
+class InfiniteSequentialSampler(torch.utils.data.Sampler):
+    def __init__(self, data_source):
+        super(InfiniteSequentialSampler, self).__init__(data_source)
+        self.data_source = data_source
 
     def __iter__(self):
-        while True:
-            yield from iter(self.sampler)
-
-
-class FastDataLoader(torch.utils.data.dataloader.DataLoader):
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        object.__setattr__(self, 'batch_sampler', _RepeatSampler(self.batch_sampler))
-        self.iterator = super().__iter__()
+        return itertools.count(start=0, step=1)
 
     def __len__(self):
-        return len(self.batch_sampler.sampler)
-
-    def __iter__(self):
-        for i in range(len(self)):
-            yield next(self.iterator)
+        return len(self.data_source)
 
 
 class BatchDataset(torch.utils.data.Dataset):
     def __init__(self, triples, batch_size, shuffle=True):
         self.triples = triples
         # work around for now to have a working shared tensor
-        self.samples = torch.empty([100000000, ], dtype=torch.int).share_memory_()
+        self.samples = torch.empty([len(triples), ], dtype=torch.int).share_memory_()
         self.batch_size = batch_size
         self.shuffle = shuffle
         self.num_samples = torch.full([1, ], -1, dtype=torch.int).share_memory_()
+        self.epoch = torch.full([1, ], -1, dtype=torch.int).share_memory_()
+        self.partition_id = torch.full([1, ], -1, dtype=torch.int).share_memory_()
 
     def __len__(self):
         if self.num_samples.item() <= 0:
-            # with 0 it would not initialize properly with fast data-loader
-            return 1
+            return 0
+        return math.ceil(self.num_samples.item() / self.batch_size)
+
+    def get_real_len(self):
         return math.ceil(self.num_samples.item() / self.batch_size)
 
     def __getitem__(self, idx):
         """Gets a complete batch based on an idx"""
-        if self.num_samples.item() < 0:
+        # we are iterating with a infinite sampler. Get the actual batch index
+        # with modulo
+        actual_idx = idx % len(self)
+        start = actual_idx * self.batch_size
+        stop = min((actual_idx + 1) * (self.batch_size), self.num_samples.item())
+        if start >= stop:
+            print(idx, self.num_samples.item(), start, stop, len(self))
             return None
-        return self.samples[
-            idx
-            * self.batch_size : min((idx + 1) * (self.batch_size), self.num_samples.item())
-        ].long()
+        return (self.samples[
+            start: stop
+        ].long(), self.epoch.item(), self.partition_id.item())
 
-    def set_samples(self, samples: torch.Tensor):
+    def set_samples(self, samples: torch.Tensor, epoch, partition_id):
         if self.shuffle:
             samples = samples.numpy()
             np.random.shuffle(samples)
-            self.samples[:len(samples)] = torch.from_numpy(samples)
-            self.num_samples[0] = len(samples)
-        else:
-            self.samples[:len(samples)] = samples
-            self.num_samples[0] = len(samples)
+            samples = torch.from_numpy(samples)
+        self.samples[:len(samples)] = torch.from_numpy(samples)
+        self.num_samples[0] = len(samples)
+        self.epoch[0] = epoch
+        self.partition_id[0] = partition_id
 
 
 class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
@@ -288,10 +280,13 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
               in order S,P,O)
             """
 
-            if batch[0] is None or len(batch[0]) == 0:
+            if batch[0] is None:
                 # this can happen due to keeping the dataloader alive
                 return None
-            triples = self.dataset.split(self.train_split)[batch[0], :].long()
+            triple_ids = batch[0][0]
+            epoch = batch[0][1]
+            local_partition_id = batch[0][2]
+            triples = self.dataset.split(self.train_split)[triple_ids, :].long()
 
             negative_samples = list()
             for slot in [S, P, O]:
@@ -322,6 +317,8 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
                 "unique_entities": unique_entities,
                 "unique_relations": unique_relations,
                 "unique_time": unique_time,
+                "epoch": epoch,
+                "local_partition_id": local_partition_id,
             }
 
         return collate
@@ -516,8 +513,9 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             if self.config.get("train.num_workers") > 0
             else None
         )
-        self.loader = FastDataLoader(
+        self.loader = torch.utils.data.DataLoader(
             self.dataloader_dataset,
+            sampler=InfiniteSequentialSampler(self.dataloader_dataset),
             collate_fn=self._get_collate_fun(),
             shuffle=False,
             # shuffle needs to be False, since it is handled in the dataset object
@@ -537,7 +535,6 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             scope="epoch",
             epoch=self.epoch,
             split=self.train_split,
-            batches=len(self.dataloader_dataset),
             size=self.num_examples,
         )
         if not self.is_forward_only:
@@ -570,6 +567,7 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             ps_set_time = 0.0
             dataloader_time = 0.0
             scheduler_time = -time.time()
+            local_partition_counter = -1
 
             # load new work package
             work, work_entities, work_relations = self.work_scheduler_client.get_work()
@@ -577,6 +575,7 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             self.relation_partition_localized = False
             if work is None:
                 break
+            local_partition_counter += 1
             self.work_pre_localized = False
             if work_entities is not None and self.entity_localize:
                 self.model.get_s_embedder().localize(work_entities)
@@ -621,58 +620,41 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             ):
                 self._sampler.set_pool(work_entities, S)
                 self._sampler.set_pool(work_entities, O)
-            self.dataloader_dataset.set_samples(work)
+            self.dataloader_dataset.set_samples(
+                work, self.epoch, local_partition_counter
+            )
             if self.loader is None:
                 self._init_dataloader()
+                self.iter_dataloader = iter(self.loader)
             scheduler_time += time.time()
 
             # process each batch
             pre_load_batches = deque()
             batch = None
             epoch_done = False
-            iter_dataloader = iter(self.loader)
             batch_index = 0
             num_prepulls = max(self.entity_pre_pull, self.relation_pre_pull, self.pre_localize_batch, 1)
             # for batch_index, batch in enumerate(self.loader):
             while not epoch_done:
-                try:
-                    if batch is None and len(pre_load_batches) < num_prepulls:
+                if batch_index <= self.dataloader_dataset.get_real_len():
+                    while len(pre_load_batches) < num_prepulls + 1:
                         prepare_time -= time.time()
                         dataloader_time -= time.time()
-                        next_batch = next(iter_dataloader)
-                        if next_batch is not None:
-                            next_batch = self._map_ids_to_local(next_batch)
-                            pre_load_batches.append(next_batch)
-                        elif len(pre_load_batches) == 0:
-                            epoch_done = True
+                        next_batch = next(self.iter_dataloader)
+                        while next_batch["epoch"] != self.epoch or next_batch[
+                            "local_partition_id"] != local_partition_counter:
+                            next_batch = next(self.iter_dataloader)
+                        next_batch = self._map_ids_to_local(next_batch)
+                        pre_load_batches.append(next_batch)
                         dataloader_time += time.time()
                         pre_pull_time -= time.time()
                         if next_batch is not None:
                             self._prepare_batch_ahead(pre_load_batches)
                         pre_pull_time += time.time()
                         prepare_time += time.time()
-                        continue
-                    else:
-                        batch = pre_load_batches.popleft()
-                    prepare_time -= time.time()
-                    dataloader_time -= time.time()
-                    next_batch = next(iter_dataloader)
-                    if next_batch is not None:
-                        next_batch = self._map_ids_to_local(next_batch)
-                        pre_load_batches.append(next_batch)
-                    elif len(pre_load_batches) == 0:
-                        epoch_done = True
-                    dataloader_time += time.time()
-                    pre_pull_time -= time.time()
-                    if next_batch is not None:
-                        self._prepare_batch_ahead(pre_load_batches)
-                    pre_pull_time += time.time()
-                    prepare_time += time.time()
-                except StopIteration:
-                    dataloader_time += time.time()
-                    prepare_time += time.time()
-                    if len(pre_load_batches) == 0:
-                        epoch_done = True
+                else:
+                    epoch_done = True
+                batch = pre_load_batches.popleft()
 
                 # create initial batch trace (yet incomplete)
                 self.current_trace["batch"] = {
@@ -703,7 +685,7 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
                 penalties_torch = self.model.penalty(
                     epoch=self.epoch,
                     batch_index=batch_index,
-                    num_batches=len(self.loader),
+                    num_batches=self.dataloader_dataset.get_real_len(),
                     batch=batch,
                 )
                 batch_forward_time += time.time()
@@ -782,14 +764,14 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
                     (
                         "\r"  # go back
                         + "{}  batch{: "
-                        + str(1 + int(math.ceil(math.log10(len(self.loader)))))
+                        + str(1 + int(math.ceil(math.log10(self.dataloader_dataset.get_real_len()))))
                         + "d}/{}"
                         + ", avg_loss {:.4E}, penalty {:.4E}, cost {:.4E}, time {:6.2f}s"
                         + "\033[K"  # clear to right
                     ).format(
                         self.config.log_prefix,
                         batch_index,
-                        len(self.loader) - 1,
+                        self.dataloader_dataset.get_real_len() - 1,
                         batch_result.avg_loss,
                         penalty,
                         cost_value,
@@ -848,12 +830,12 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             self.current_trace["epoch"].update(
                 dict(
                     avg_loss=sum_loss / self.num_examples,
-                    avg_penalty=sum_penalty / len(self.loader),
+                    avg_penalty=sum_penalty / self.dataloader_dataset.get_real_len(),
                     avg_penalties={
-                        k: p / len(self.loader) for k, p in sum_penalties.items()
+                        k: p / self.dataloader_dataset.get_real_len() for k, p in sum_penalties.items()
                     },
                     avg_cost=sum_loss / self.num_examples
-                    + sum_penalty / len(self.loader),
+                    + sum_penalty / self.dataloader_dataset.get_real_len(),
                     epoch_time=epoch_time,
                     prepare_time=prepare_time,
                     ps_wait_time=ps_wait_time,
