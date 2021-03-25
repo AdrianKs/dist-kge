@@ -57,12 +57,12 @@ class BatchDataset(torch.utils.data.Dataset):
     def __init__(self, triples, batch_size, shuffle=True):
         self.triples = triples
         # work around for now to have a working shared tensor
-        self.samples = torch.empty([len(triples), ], dtype=torch.int).share_memory_()
+        self.samples = torch.empty([len(triples), ], dtype=torch.int, requires_grad=False).share_memory_()
         self.batch_size = batch_size
         self.shuffle = shuffle
-        self.num_samples = torch.full([1, ], -1, dtype=torch.int).share_memory_()
-        self.epoch = torch.full([1, ], -1, dtype=torch.int).share_memory_()
-        self.partition_id = torch.full([1, ], -1, dtype=torch.int).share_memory_()
+        self.num_samples = torch.full([1, ], -1, dtype=torch.int, requires_grad=False).share_memory_()
+        self.epoch = torch.full([1, ], -1, dtype=torch.int, requires_grad=False).share_memory_()
+        self.partition_id = torch.full([1, ], -1, dtype=torch.int, requires_grad=False).share_memory_()
 
     def __len__(self):
         if self.num_samples.item() <= 0:
@@ -84,7 +84,7 @@ class BatchDataset(torch.utils.data.Dataset):
             return None
         return (self.samples[
             start: stop
-        ].long(), self.epoch.item(), self.partition_id.item())
+        ].clone().long(), self.epoch.item(), self.partition_id.item())
 
     def set_samples(self, samples: torch.Tensor, epoch, partition_id):
         if self.shuffle:
@@ -547,6 +547,7 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             f(self)
 
         trace_entry = None
+        local_partition_counter = -1
         while True:
             # variables that record various statitics
             sum_loss = 0.0
@@ -567,7 +568,6 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             ps_set_time = 0.0
             dataloader_time = 0.0
             scheduler_time = -time.time()
-            local_partition_counter = -1
 
             # load new work package
             work, work_entities, work_relations = self.work_scheduler_client.get_work()
@@ -626,34 +626,32 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             if self.loader is None:
                 self._init_dataloader()
                 self.iter_dataloader = iter(self.loader)
+            object.__setattr__(self.loader, "sampler",
+                               InfiniteSequentialSampler(self.dataloader_dataset))
+            object.__setattr__(self.iter_dataloader, "_sampler_iter",
+                               iter(self.iter_dataloader._index_sampler))
             scheduler_time += time.time()
 
             # process each batch
             pre_load_batches = deque()
-            batch = None
-            epoch_done = False
             batch_index = 0
             num_prepulls = max(self.entity_pre_pull, self.relation_pre_pull, self.pre_localize_batch, 1)
-            # for batch_index, batch in enumerate(self.loader):
-            while not epoch_done:
-                if batch_index <= self.dataloader_dataset.get_real_len():
-                    while len(pre_load_batches) < num_prepulls + 1:
-                        prepare_time -= time.time()
-                        dataloader_time -= time.time()
+            while batch_index < len(self.dataloader_dataset):
+                while len(pre_load_batches) < num_prepulls + 1:
+                    prepare_time -= time.time()
+                    dataloader_time -= time.time()
+                    next_batch = next(self.iter_dataloader)
+                    while next_batch["epoch"] != self.epoch or next_batch[
+                        "local_partition_id"] != local_partition_counter:
                         next_batch = next(self.iter_dataloader)
-                        while next_batch["epoch"] != self.epoch or next_batch[
-                            "local_partition_id"] != local_partition_counter:
-                            next_batch = next(self.iter_dataloader)
-                        next_batch = self._map_ids_to_local(next_batch)
-                        pre_load_batches.append(next_batch)
-                        dataloader_time += time.time()
-                        pre_pull_time -= time.time()
-                        if next_batch is not None:
-                            self._prepare_batch_ahead(pre_load_batches)
-                        pre_pull_time += time.time()
-                        prepare_time += time.time()
-                else:
-                    epoch_done = True
+                    next_batch = self._map_ids_to_local(next_batch)
+                    pre_load_batches.append(next_batch)
+                    dataloader_time += time.time()
+                    pre_pull_time -= time.time()
+                    if next_batch is not None:
+                        self._prepare_batch_ahead(pre_load_batches)
+                    pre_pull_time += time.time()
+                    prepare_time += time.time()
                 batch = pre_load_batches.popleft()
 
                 # create initial batch trace (yet incomplete)
