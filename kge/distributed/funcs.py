@@ -111,7 +111,10 @@ def create_and_run_distributed(
         print("\nSIGINT or CTRL-C detected. Shutting down all processes and exiting...")
         for process in processes:
             if process is not None:
-                process.kill()
+                try:
+                    process.kill()
+                except AttributeError:
+                    print("process already killed")
         for process in monitoring_processes:
             if process is not None:
                 process.kill()
