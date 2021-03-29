@@ -591,6 +591,7 @@ class GraphCutWorkScheduler(WorkScheduler):
             self.partition_type, self.dataset.folder, self.num_partitions
         )
         self.entities_to_partition = self._get_entities_in_partition()
+        self.previous_partition_per_worker = defaultdict(lambda: None)
 
     def _config_check(self, config):
         super(GraphCutWorkScheduler, self)._config_check(config)
@@ -606,7 +607,12 @@ class GraphCutWorkScheduler(WorkScheduler):
         """add work/partitions to the list of work to do"""
         try:
             work_package = WorkPackage()
-            work_package.partition_id = self.work_to_do.pop()
+            prev_work_id = self.previous_partition_per_worker[rank]
+            if prev_work_id is not None and prev_work_id in self.work_to_do:
+                work_package.partition_id = prev_work_id
+                del self.work_to_do[self.work_to_do.index(prev_work_id)]
+            else:
+                work_package.partition_id = self.work_to_do.pop()
             work_package.partition_data = self.partitions[work_package.partition_id]
             work_package.entities_in_partition = self.entities_to_partition[work_package.partition_id]
             return work_package
