@@ -1061,17 +1061,16 @@ class KgeCombinedSampler(KgeSampler):
 class KgePooledSampler(KgeSampler):
     def __init__(self, config, configuration_key, dataset):
         super().__init__(config, configuration_key, dataset)
-        self.pool_size_s = 5000
-        self.pool_size_p = 1
-        self.pool_size_o = 5000
+        # these tensors need to be shared since we are keeping the data loader workers
+        # alive. Otherwise pools won't be updated in all workers
         self.sample_pools = dict()
-        self.sample_pools[S] = torch.randperm(self.vocabulary_size[S])[
-            : self.pool_size_s
-        ]
-        self.sample_pools[P] = torch.randperm(self.vocabulary_size[P])[
-            : self.pool_size_p
-        ]
+        self.sample_pools[S] = torch.randperm(self.vocabulary_size[S]).share_memory_()
+        self.sample_pools[P] = torch.randperm(self.vocabulary_size[P]).share_memory_()
         self.sample_pools[O] = self.sample_pools[S]
+        self.sample_pool_sizes = dict()
+        self.sample_pool_sizes[S] = torch.zeros([1, ], dtype=torch.int).share_memory_()
+        self.sample_pool_sizes[P] = torch.zeros([1, ], dtype=torch.int).share_memory_()
+        self.sample_pool_sizes[O] = self.sample_pool_sizes[S]
 
     def _sample(self, positive_triples: torch.Tensor, slot: int, num_samples: int):
         return self.sample_pools[slot][
@@ -1117,7 +1116,7 @@ class KgePooledSampler(KgeSampler):
         #     self.vocabulary_size[slot], num_unique, replace=False
         # )
         unique_samples = self.sample_pools[slot][torch.tensor(random.sample(
-            range(len(self.sample_pools[slot])),
+            range(self.sample_pool_sizes[slot].item()),
             num_unique if self.shared_type == "naive" else num_unique + 1,
         ), dtype=torch.long)]
 
@@ -1173,14 +1172,6 @@ class KgePooledSampler(KgeSampler):
             repeat_indexes,
         )
 
-    def update_pools(self):
-        self.sample_pools[S] = torch.randperm(self.vocabulary_size[S])[
-            : self.pool_size_s
-        ]
-        self.sample_pools[P] = torch.randperm(self.vocabulary_size[P])[
-            : self.pool_size_p
-        ]
-        self.sample_pools[O] = self.sample_pools[S]
-
     def set_pool(self, pool: torch.Tensor, slot: int):
-        self.sample_pools[slot] = pool
+        self.sample_pools[slot][:len(pool)] = pool
+        self.sample_pool_sizes[slot][0] = len(pool)
