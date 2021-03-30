@@ -342,7 +342,7 @@ class EntityRankingJob(EvaluationJob):
                         # if the complete label tensor is on cpu, move the needed chunk
                         #  to device
                         if self.label_device != self.device:
-                            labels_chunk = labels_chunk.to(self.device)
+                            labels_targets = labels_targets.to(self.device)
 
                         # remove current example from labels
                         labels_targets[o_in_target_mask, o_in_target] = 0
