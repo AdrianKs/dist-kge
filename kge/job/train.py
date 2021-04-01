@@ -147,17 +147,21 @@ class TrainingJob(TrainingOrEvaluationJob):
         """Factory method to create a training job."""
         train_type = config.get("train.type")
         class_name = config.get_default(f"{train_type}.class_name")
-        return init_from(
-            class_name,
-            config.modules(),
-            config,
-            dataset,
-            parent_job,
-            model=model,
-            forward_only=forward_only,
-            parameter_client=parameter_client,
-            init_for_load_only=init_for_load_only
-        )
+        job_config_object = {
+            "class_name": class_name,
+            "modules": config.modules(),
+            "config": config,
+            "dataset": dataset,
+            "parent_job": parent_job,
+            "model": model,
+            "forward_only": forward_only,
+        }
+        if "distributed" in train_type:
+            job_config_object.update({
+                "parameter_client": parameter_client,
+                "init_for_load_only": init_for_load_only
+            })
+        return init_from(**job_config_object)
 
     def _run(self) -> None:
         """Start/resume the training job and run to completion."""

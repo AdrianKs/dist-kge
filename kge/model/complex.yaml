@@ -2,8 +2,6 @@ import: [lookup_embedder]
 
 complex:
   class_name: ComplEx
-  create_complete: True
-  create_eval: False
   entity_embedder:
     type: lookup_embedder
     +++: +++

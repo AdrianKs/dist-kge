@@ -30,8 +30,7 @@ class KgeOptimizer:
             if config.get("train.lr_scheduler") != "":
                 use_lr_scheduler = True
             optimizer = DistAdagrad(
-                #model,
-                KgeOptimizer._get_parameters_and_optimizer_args(config, model),
+                KgeOptimizer._get_parameters_and_optimizer_args(config, model, distributed=True),
                 parameter_client=parameter_client,
                 lapse_indexes=lapse_indexes,
                 lapse_optimizer_index_offset=model.dataset.num_entities() + model.dataset.num_relations(),
@@ -57,7 +56,7 @@ class KgeOptimizer:
                 )
 
     @staticmethod
-    def _get_parameters_and_optimizer_args(config, model):
+    def _get_parameters_and_optimizer_args(config, model, distributed=False):
         """
         Group named parameters by regex strings provided with optimizer args.
         Constructs a list of dictionaries of the form:
@@ -103,7 +102,7 @@ class KgeOptimizer:
                 named_parameters[param] for param in params
             ]
             optimizer_settings[group_name]["args"]["name"] = group_name
-            if group_name == "entity" or group_name == "relation":
+            if distributed and (group_name == "entity" or group_name == "relation"):
                 optimizer_settings[group_name]["args"][
                     "async_write_back"] = config.get(
                     f"job.distributed.{group_name}_async_write_back")

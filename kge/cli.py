@@ -7,8 +7,8 @@ import traceback
 import yaml
 import time
 import warnings
-
 import torch
+
 try:
     import lapse
 except ImportError:
@@ -277,25 +277,29 @@ def main():
             dataset = Dataset.create(config)
 
             checkpoint = None
-            # let's go
-            # if args.command == "resume":
-            #     if checkpoint_file is not None:
-            #         checkpoint = load_checkpoint(
-            #             checkpoint_file, config.get("job.device")
-            #         )
-                #     job = Job.create_from(
-                #         checkpoint, new_config=config, dataset=dataset
-                #     )
-                # else:
-                #     job = Job.create(config, dataset)
-                #     job.config.log(
-                #         "No checkpoint found or specified, starting from scratch..."
-                #     )
-            # else:
-            if config.get("job.type") in ["train", "valid", "test", "eval"] and config.get("job.distributed.num_workers") > 0:
+
+            if (
+                config.get("job.type") in ["train", "valid", "test", "eval"]
+                and "distributed" in config.get("model")
+            ):
                 create_and_run_distributed(config, dataset, checkpoint_file)
             else:
-                job = Job.create(config, dataset)
+                # let's go
+                if args.command == "resume":
+                    if checkpoint_file is not None:
+                        checkpoint = load_checkpoint(
+                            checkpoint_file, config.get("job.device")
+                        )
+                        job = Job.create_from(
+                            checkpoint, new_config=config, dataset=dataset
+                        )
+                    else:
+                        job = Job.create(config, dataset)
+                        job.config.log(
+                            "No checkpoint found or specified, starting from scratch..."
+                        )
+                else:
+                    job = Job.create(config, dataset)
                 job.run()
 
             # job.run()

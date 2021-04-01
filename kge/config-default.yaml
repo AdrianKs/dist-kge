@@ -31,7 +31,7 @@ job:
   device: 'cuda'
   device_pool: [ ]
   distributed:
-    num_workers: 0
+    num_workers: 1
     num_workers_machine: -1  # number of workers on this machine. -1 equals num_workers
     already_init_workers: 0  # number of already initialized workers on other machines
     num_machines: 1

@@ -70,7 +70,11 @@ class Job:
 
     @staticmethod
     def create(
-        config: Config, dataset: Optional[Dataset] = None, parent_job=None, model=None, parameter_client=None, init_for_load_only=False
+        config: Config, dataset: Optional[Dataset] = None,
+        parent_job=None,
+        model=None,
+        parameter_client=None,
+        init_for_load_only=False
     ):
         "Create a new job."
         from kge.job import TrainingJob, EvaluationJob, SearchJob
@@ -81,7 +85,12 @@ class Job:
         job_type = config.get("job.type")
         if job_type == "train":
             return TrainingJob.create(
-                config, dataset, parent_job=parent_job, model=model, parameter_client=parameter_client, init_for_load_only=init_for_load_only
+                config,
+                dataset,
+                parent_job=parent_job,
+                model=model,
+                parameter_client=parameter_client,
+                init_for_load_only=init_for_load_only
             )
         elif job_type == "search":
             return SearchJob.create(config, dataset, parent_job=parent_job)

@@ -278,7 +278,7 @@ class KgeEmbedder(KgeBase):
             raise Exception("Can't find {}.type in config".format(configuration_key))
 
         try:
-            if config.get("job.distributed.num_workers") > 0:
+            if "distributed" in config.get("model"):
                 class_name = "Distributed" + class_name
                 embedder = init_from(
                     class_name,
@@ -406,6 +406,8 @@ class KgeModel(KgeBase):
         self._relation_embedder: KgeEmbedder
 
         if create_embedders:
+            self._create_embedders(init_for_load_only)
+        elif False:
             #if self.get_option("create_complete"):
             #    embedding_layer_size = dataset.num_entities()
             if config.get("job.distributed.entity_sync_level") == "partition" and max_partition_entities != 0:
@@ -499,6 +501,76 @@ class KgeModel(KgeBase):
         else:
             self._scorer = scorer
 
+    def _create_embedders(self, init_for_load_only):
+        self._entity_embedder = KgeEmbedder.create(
+            self.config,
+            self.dataset,
+            self.configuration_key + ".entity_embedder",
+            self.dataset.num_entities(),
+            init_for_load_only=init_for_load_only,
+        )
+
+        #: Embedder used for relations
+        num_relations = self.dataset.num_relations()
+        self._relation_embedder = KgeEmbedder.create(
+            self.config,
+            self.dataset,
+            self.configuration_key + ".relation_embedder",
+            num_relations,
+            init_for_load_only=init_for_load_only,
+        )
+
+        if not init_for_load_only:
+            # load pretrained embeddings
+            pretrained_entities_filename = ""
+            pretrained_relations_filename = ""
+            if self.has_option("entity_embedder.pretrain.model_filename"):
+                pretrained_entities_filename = self.get_option(
+                    "entity_embedder.pretrain.model_filename"
+                )
+            if self.has_option("relation_embedder.pretrain.model_filename"):
+                pretrained_relations_filename = self.get_option(
+                    "relation_embedder.pretrain.model_filename"
+                )
+
+            def load_pretrained_model(
+                    pretrained_filename: str,
+            ) -> Optional[KgeModel]:
+                if pretrained_filename != "":
+                    self.config.log(
+                        f"Initializing with embeddings stored in "
+                        f"{pretrained_filename}"
+                    )
+                    checkpoint = load_checkpoint(pretrained_filename)
+                    return KgeModel.create_from(checkpoint)
+                return None
+
+            pretrained_entities_model = load_pretrained_model(
+                pretrained_entities_filename
+            )
+            if pretrained_entities_filename == pretrained_relations_filename:
+                pretrained_relations_model = pretrained_entities_model
+            else:
+                pretrained_relations_model = load_pretrained_model(
+                    pretrained_relations_filename
+                )
+            if pretrained_entities_model is not None:
+                if (
+                        pretrained_entities_model.get_s_embedder()
+                        != pretrained_entities_model.get_o_embedder()
+                ):
+                    raise ValueError(
+                        "Can only initialize with pre-trained models having "
+                        "identical subject and object embeddings."
+                    )
+                self._entity_embedder.init_pretrained(
+                    pretrained_entities_model.get_s_embedder()
+                )
+            if pretrained_relations_model is not None:
+                self._relation_embedder.init_pretrained(
+                    pretrained_relations_model.get_p_embedder()
+                )
+
     @staticmethod
     def _calc_embedding_layer_size(config, dataset):
         if config.get(config.get("model") + ".create_eval"):
@@ -544,6 +616,7 @@ class KgeModel(KgeBase):
         dataset: Dataset,
         configuration_key: Optional[str] = None,
         init_for_load_only=False,
+        create_embedders=True,
         parameter_client=None,
         max_partition_entities=0,
     ) -> "KgeModel":
@@ -566,6 +639,7 @@ class KgeModel(KgeBase):
                 dataset=dataset,
                 configuration_key=configuration_key,
                 init_for_load_only=init_for_load_only,
+                create_embedders=create_embedders,
                 parameter_client=parameter_client,
                 max_partition_entities=max_partition_entities,
             )
