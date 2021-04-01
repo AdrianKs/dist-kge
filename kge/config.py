@@ -751,6 +751,10 @@ def _process_deprecated_options(options: Dict[str, Any]):
                     renamed_keys.add(key)
         return renamed_keys
 
+    # 01.04.21
+    delete_key_with_value("complex.create_complete", True)
+    delete_key_with_value("rotate.create_complete", True)
+
     # 25.01.21
     rename_value("job.distributed.partition_type", "2d_block_partition", "stratification")
     rename_value("job.distributed.partition_type", "metis_partition", "graph-cut")
