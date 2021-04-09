@@ -54,11 +54,9 @@ class DistributedModel(KgeModel):
             embedding_layer_size = self._calc_embedding_layer_size(self.config, self.base_model.dataset)
         self.config.log(f"creating entity_embedder with {embedding_layer_size} keys")
         self._entity_embedder = KgeEmbedder.create(
-            config=self.config,
+            config=self.base_model.config,
             dataset=self.base_model.dataset,
-            #configuration_key=self.configuration_key + ".entity_embedder",
             configuration_key=self.base_model_config_key + ".entity_embedder",
-            # dataset.num_entities(),
             vocab_size=embedding_layer_size,
             init_for_load_only=init_for_load_only,
             parameter_client=parameter_client,
@@ -69,9 +67,8 @@ class DistributedModel(KgeModel):
         #: Embedder used for relations
         num_relations = self.base_model.dataset.num_relations()
         self._relation_embedder = KgeEmbedder.create(
-            self.config,
+            self.base_model.config,
             self.base_model.dataset,
-            #self.configuration_key + ".relation_embedder",
             self.base_model_config_key + ".relation_embedder",
             num_relations,
             init_for_load_only=init_for_load_only,

@@ -278,7 +278,7 @@ class KgeEmbedder(KgeBase):
             raise Exception("Can't find {}.type in config".format(configuration_key))
 
         try:
-            if "distributed" in config.get("model"):
+            if "distributed" in config.get("train.type"):
                 class_name = "Distributed" + class_name
                 embedder = init_from(
                     class_name,
