@@ -1087,6 +1087,7 @@ class KgePooledSampler(KgeSampler):
         # # determine number of distinct negative samples for each positive
 
         batch_size = len(positive_triples)
+        pool_size = self.sample_pool_sizes[slot].item()
 
         if self.with_replacement:
             # Simple way to get a sample from the distribution of number of distinct
@@ -1095,7 +1096,7 @@ class KgePooledSampler(KgeSampler):
             num_unique = len(
                 np.unique(
                     np.random.choice(
-                        len(self.sample_pools[slot])
+                        pool_size
                         # if self.shared_type == "naive"
                         # else self.vocabulary_size[slot] - 1,
                         ,
@@ -1116,7 +1117,7 @@ class KgePooledSampler(KgeSampler):
         #     self.vocabulary_size[slot], num_unique, replace=False
         # )
         unique_samples = self.sample_pools[slot][torch.tensor(random.sample(
-            range(self.sample_pool_sizes[slot].item()),
+            range(pool_size),
             num_unique if self.shared_type == "naive" else num_unique + 1,
         ), dtype=torch.long)]
 
