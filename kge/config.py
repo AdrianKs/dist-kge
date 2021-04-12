@@ -751,6 +751,10 @@ def _process_deprecated_options(options: Dict[str, Any]):
                     renamed_keys.add(key)
         return renamed_keys
 
+    # 12.04.21
+    delete_key_with_value("complex.create_eval", False)
+    delete_key_with_value("rotate.create_eval", False)
+
     # 01.04.21
     delete_key_with_value("complex.create_complete", True)
     delete_key_with_value("rotate.create_complete", True)

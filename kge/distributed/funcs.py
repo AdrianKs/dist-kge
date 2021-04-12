@@ -67,6 +67,15 @@ def monitor_gpus(folder, interval=1):
 def create_and_run_distributed(
     config: Config, dataset: Optional[Dataset] = None, checkpoint: Optional[Dict] = None
 ):
+    # specific settings for valid only jobs
+    if config.get("job.type") in ["valid", "test", "eval"]:
+        config.set("job.distributed.parameter_server", "shared")
+        config.set("job.distributed.num_workers", 1)
+        config.set("job.distributed.num_workers_machine", 1)
+        config.set("job.distributed.num_machines", 1)
+        config.set("job.distributed.gloo_socket_ifname", "lo")
+        config.set("job.distributed.master_ip", "127.0.0.1")
+        config.set(f"{config.get('model')}.create_eval", True)
     os.environ["OMP_NUM_THREADS"] = str(
         config.get("job.distributed.num_threads_per_process")
     )
@@ -123,25 +132,20 @@ def create_and_run_distributed(
         exit(0)
     signal(SIGINT, kill_processes)
 
-    # start hardware monitoring
-    monitor_process = mp.Process(
-        target=monitor_hardware, args=(config.folder, 0.5), daemon=True
-    )
-    monitoring_processes.append(monitor_process)
-    monitor_process.start()
-    gpu_monitor_process = mp.Process(
-        target=monitor_gpus, args=(config.folder, 1), daemon=True
-    )
-    monitoring_processes.append(gpu_monitor_process)
-    gpu_monitor_process.start()
+    if config.get("job.type") == "train":
+        # start hardware monitoring
+        monitor_process = mp.Process(
+            target=monitor_hardware, args=(config.folder, 0.5), daemon=True
+        )
+        monitoring_processes.append(monitor_process)
+        monitor_process.start()
+        gpu_monitor_process = mp.Process(
+            target=monitor_gpus, args=(config.folder, 1), daemon=True
+        )
+        monitoring_processes.append(gpu_monitor_process)
+        gpu_monitor_process.start()
 
-    # specific settings for valid only jobs
-    if config.get("job.type") in ["valid", "test", "eval"]:
-        config.set("job.distributed.parameter_server", "shared")
-        config.set("job.distributed.num_workers", 1)
-        config.set("job.distributed.num_workers_machine", 1)
-        config.set("job.distributed.num_machines", 1)
-        config.set(f"{config.get('model')}.create_eval", True)
+
 
     if config.get("job.distributed.machine_id") == 0:
         if config.get("job.distributed.parameter_server") == "lapse":
@@ -222,6 +226,8 @@ def create_and_run_distributed(
     valid_trace = worker_process_pool.join()
     for p in processes:
         p.join()
-    monitor_process.terminate()
-    gpu_monitor_process.terminate()
+
+    if config.get("job.type") == "train":
+        monitor_process.terminate()
+        gpu_monitor_process.terminate()
     return valid_trace
