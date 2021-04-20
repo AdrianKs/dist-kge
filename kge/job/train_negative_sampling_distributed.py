@@ -404,7 +404,9 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
                     self.optimizer.entity_async_wait_values.clear()
                 result.ps_wait_time += time.time()
                 if self.entity_localize and not self.entity_partition_localized:
-                    self.model.get_s_embedder().localize(unique_entities)
+                    self.model.get_s_embedder().localize(
+                        unique_entities, asynchronous=True
+                    )
                 result.pull_and_map_time -= time.time()
                 (
                     entity_pull_time,
@@ -425,7 +427,9 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
                     self.optimizer.relation_async_wait_values.clear()
                 result.ps_wait_time += time.time()
                 if self.relation_localize and not self.relation_partition_localized:
-                    self.model.get_p_embedder().localize(unique_relations)
+                    self.model.get_p_embedder().localize(
+                        unique_relations, asynchronous=True
+                    )
                 result.pull_and_map_time -= time.time()
                 (
                     relation_pull_time,
