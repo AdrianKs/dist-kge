@@ -53,7 +53,6 @@ job:
     entity_pre_pull: 0  # number of entity batches to prepull: 1 - from ps, 2 - to gpu
     relation_pre_pull: 0  # number of relation batches to prepull: 1 - from ps, 2 - to gpu
     repartition_epoch: True  # currently only works with stratification and random
-    scheduling_order: 'random'  # block ordering for stratification: random, sequential
     pre_localize_partition: False
     pre_localize_batch: False # pre localize entities in batch one batch ahead
 

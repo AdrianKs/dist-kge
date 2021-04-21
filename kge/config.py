@@ -753,6 +753,7 @@ def _process_deprecated_options(options: Dict[str, Any]):
 
     # 21.04.21
     delete_key_with_value("num_workers", 1)
+    delete_key_with_value("job.distributed.scheduling_order", "random")
 
     # 12.04.21
     delete_key_with_value("complex.create_eval", False)

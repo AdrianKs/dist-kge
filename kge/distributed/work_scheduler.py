@@ -672,7 +672,6 @@ class StratificationWorkScheduler(WorkScheduler):
             randomize_iterations=True,
             combine_mirror_blocks=self.combine_mirror_blocks,
         )
-        # self.fixed_schedule = [item for sublist in self.schedule_creator.create_schedule() for item in sublist]
         self.fixed_schedule = self.schedule_creator.create_schedule()
         self.current_iteration = set()
         self._pre_localized_strata: Dict[int, Tuple[int, int]] = {}
@@ -690,7 +689,7 @@ class StratificationWorkScheduler(WorkScheduler):
         entities_to_partition = self._load_entities_to_partitions_file(
             self.partition_type, self.dataset.folder, self.num_partitions
         )
-        self._entities_in_bucket = self._get_entities_in_bucket(
+        self._entities_in_bucket = self._get_entities_in_strata(
             entities_to_partition,
             self.partitions,
             self.dataset.split("train"),
@@ -773,7 +772,7 @@ class StratificationWorkScheduler(WorkScheduler):
         partitions = StratificationWorkScheduler._construct_partitions(
             triple_partition_assignment, num_partitions
         )
-        entities_in_bucket = StratificationWorkScheduler._get_entities_in_bucket(
+        entities_in_bucket = StratificationWorkScheduler._get_entities_in_strata(
             entity_to_partition,
             partitions,
             data.numpy(),
@@ -785,18 +784,18 @@ class StratificationWorkScheduler(WorkScheduler):
         return partitions, entities_in_bucket
 
     @staticmethod
-    def _get_entities_in_bucket(
+    def _get_entities_in_strata(
         entities_to_partition,
         partitions,
         data,
         entities_needed_only,
         combine_mirror_blocks,
     ):
-        entities_in_bucket = dict()
+        entities_in_strata = dict()
         if entities_needed_only:
             for strata, strata_data in partitions.items():
                 if combine_mirror_blocks:
-                    if strata in entities_in_bucket:
+                    if strata in entities_in_strata:
                         continue
                     if strata[0] == strata[1]:
                         if strata[0] % 2 == 0:
@@ -811,16 +810,16 @@ class StratificationWorkScheduler(WorkScheduler):
                     unique_entities = torch.from_numpy(
                         np.unique(data[combined_strata_data][:, [0, 2]]).astype(np.long)
                     ).contiguous()
-                    entities_in_bucket[strata] = unique_entities
-                    entities_in_bucket[mirror_strata] = unique_entities
+                    entities_in_strata[strata] = unique_entities
+                    entities_in_strata[mirror_strata] = unique_entities
                 else:
                     # np.unique is slightly faster than torch.unique
-                    entities_in_bucket[strata] = torch.from_numpy(
+                    entities_in_strata[strata] = torch.from_numpy(
                         np.unique(data[strata_data][:, [0, 2]]).astype(np.long)
                     ).contiguous()
         else:
             for strata in partitions.keys():
-                if strata in entities_in_bucket:
+                if strata in entities_in_strata:
                     continue
                 mirror_strata = (strata[1], strata[0])
                 if combine_mirror_blocks:
@@ -836,9 +835,9 @@ class StratificationWorkScheduler(WorkScheduler):
                         )
                     )[0]
                 ).contiguous()
-                entities_in_bucket[strata] = entities
-                entities_in_bucket[mirror_strata] = entities
-        return entities_in_bucket
+                entities_in_strata[strata] = entities
+                entities_in_strata[mirror_strata] = entities
+        return entities_in_strata
 
     def _get_max_entities(self):
         if self.num_max_entities > 0:
@@ -916,9 +915,7 @@ class StratificationWorkScheduler(WorkScheduler):
     def _next_work(
         self, rank, machine_id
     ) -> WorkPackage:
-        if self.fixed_schedule is not None:
-            return self._acquire_strata(rank, machine_id)
-        return self._acquire_bucket(rank)
+        return self._acquire_strata(rank, machine_id)
 
     def _handle_pre_localize_work(self, rank, machine_id):
         return self._acquire_strata(rank, machine_id, pre_localize=True)
@@ -929,9 +926,11 @@ class StratificationWorkScheduler(WorkScheduler):
                 self.current_iteration = set(self.fixed_schedule.pop())
         except IndexError:
             return WorkPackage()
-        return self._acquire_bucket_by_fixed_schedule(rank, current_iteration=self.current_iteration, pre_localize=pre_localize)
+        return self._acquire_strata_by_schedule(
+            rank, current_iteration=self.current_iteration, pre_localize=pre_localize
+        )
 
-    def _acquire_bucket_by_fixed_schedule(self, rank, current_iteration, pre_localize=False):
+    def _acquire_strata_by_schedule(self, rank, current_iteration, pre_localize=False):
         work_package = WorkPackage()
         try:
             locked_entity_strata = set()
@@ -996,74 +995,6 @@ class StratificationWorkScheduler(WorkScheduler):
         except IndexError:
             return work_package
 
-    def _acquire_bucket(
-        self, rank
-    ) -> Tuple[
-        Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor], bool
-    ]:
-        """
-        Finds a (lhs, rhs) partition pair that has not already been acquired
-        this epoch, and where neither the lhs nor rhs partitions are currently
-        locked. Locks this lhs and rhs until `release_pair` is called. Will try
-        to find a pair that has the same lhs (if not, rhs) as old_bucket.
-
-        If no pair is available, returns None.
-
-        Returns:
-            pair: a (lhs, rhs) partition pair. lhs and rhs are locked until
-                  `release_pair` is called.
-                  If no pair is available, None is returned.
-            remaining: The number of pairs remaining. When this is 0 then the
-                       epoch is done.
-        """
-        work_package = WorkPackage()
-        locked_entity_blocks = {}
-        for worker_rank, bucket in self.running_blocks.items():
-            locked_entity_blocks[bucket[0]] = (bucket, worker_rank)
-            locked_entity_blocks[bucket[1]] = (bucket, worker_rank)
-
-        acquirable_entity_blocks = [
-            i
-            for i in range(self.num_partitions)
-            if i not in locked_entity_blocks.keys()
-        ]
-        acquirable_entity_blocks = set(acquirable_entity_blocks)
-
-        def _is_acquirable(bucket: Tuple[int, int]):
-            if not self._is_initialized(bucket):
-                return False
-            if not bucket[0] in acquirable_entity_blocks:
-                return False
-            if not bucket[1] in acquirable_entity_blocks:
-                return False
-            return True
-
-        for block, block_data in self.work_to_do.items():
-            if _is_acquirable(block):
-                self.running_blocks[rank] = block
-                self._initialized_entity_blocks.add(block[0])
-                self._initialized_entity_blocks.add(block[1])
-                del self.work_to_do[block]
-                work_package.partition_id = block
-                work_package.partition_data = block_data
-                work_package.entities_in_partition = self._get_entities_in_bucket.get(block)
-                return work_package
-        if len(self.work_to_do) > 0:
-            wait = True
-            work_package.wait = True
-        return work_package
-
-    def _is_initialized(self, bucket: Tuple[int, int]):
-        # at least one side of the partition block needs to be initialized to ensure
-        #  all embeddings are in the same embedding space
-        #  if nothing is initialized start with anything
-        if len(self._initialized_entity_blocks) == 0:
-            return True
-        return (
-            bucket[0] in self._initialized_entity_blocks
-            or bucket[1] in self._initialized_entity_blocks
-        )
-
     def _handle_work_done(self, rank):
         super(StratificationWorkScheduler, self)._handle_work_done(rank)
         del self.running_blocks[rank]
@@ -1084,7 +1015,6 @@ class StratificationWorkScheduler(WorkScheduler):
         if self.repartition_epoch:
             self.partitions, self._entities_in_bucket = self.repartition_future.get()
             self._repartition_in_background()
-        # self.fixed_schedule = [item for sublist in self.schedule_creator.create_schedule() for item in sublist]
         self.fixed_schedule = self.schedule_creator.create_schedule()
         if self.fixed_schedule is None:
             self.work_to_do = self._order_by_schedule(deepcopy(self.partitions))
@@ -1237,7 +1167,7 @@ class SuperStratificationWorkScheduler(StratificationWorkScheduler):
             self.super_stratification_scheduler._handle_work_done(rank=machine_id)
             return self._acquire_strata(rank, machine_id, pre_localize=pre_localize)
         # now get the actual sub-strata
-        return self._acquire_bucket_by_fixed_schedule(
+        return self._acquire_strata_by_schedule(
             rank,
             current_iteration=self.current_machine_iteration[machine_id],
             pre_localize=pre_localize
