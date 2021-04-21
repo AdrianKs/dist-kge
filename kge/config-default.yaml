@@ -185,7 +185,6 @@ import: []
 # configuration files under kge.model.
 model: ''
 
-num_workers: 1
 
 
 ## TRAINING ####################################################################
