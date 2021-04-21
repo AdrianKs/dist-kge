@@ -84,8 +84,15 @@ class EntityRankingJob(EvaluationJob):
                 "shared_type": "naive",
                 "with_replacement": False,
                 "sampling_type": "uniform",
+                "frequency.smoothing": 1,
                 "implementation": "batch",
-                "combined": False,
+                "combined": self.config.get("entity_ranking.rank_against_options.combined"),
+                "combined_options": {
+                    "sampling_type": self.config.get("entity_ranking.rank_against_options.combined_options.sampling_type"),
+                    "negatives_percentage": 0.5,
+                    "shared_type": "naive",
+                    "with_replacement": False,
+                }
             }
         }
         sampler_config = Config()

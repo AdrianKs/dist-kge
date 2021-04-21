@@ -862,12 +862,16 @@ class KgeFrequencySampler(KgeSampler):
                 )
                 + alpha
             )
-
-            self._multinomials.append(
-                torch._multinomial_alias_setup(
+            if self.with_replacement:
+                self._multinomials.append(
+                    torch._multinomial_alias_setup(
+                        torch.from_numpy(smoothed_counts / np.sum(smoothed_counts))
+                    )
+                )
+            else:
+                self._multinomials.append(
                     torch.from_numpy(smoothed_counts / np.sum(smoothed_counts))
                 )
-            )
 
     def _sample(self, positive_triples: torch.Tensor, slot: int, num_samples: int):
         if num_samples is None:
@@ -876,14 +880,73 @@ class KgeFrequencySampler(KgeSampler):
         if num_samples == 0:
             result = torch.empty([positive_triples.size(0), num_samples])
         else:
-            result = torch._multinomial_alias_draw(
-                self._multinomials[slot][1],
-                self._multinomials[slot][0],
-                positive_triples.size(0) * num_samples,
-            ).view(positive_triples.size(0), num_samples)
+            if self.with_replacement:
+                result = torch._multinomial_alias_draw(
+                            self._multinomials[slot][1],
+                            self._multinomials[slot][0],
+                            positive_triples.size(0) * num_samples,
+                        ).view(positive_triples.size(0), num_samples)
+            else:
+                result = torch.multinomial(
+                            self._multinomials[slot],
+                            positive_triples.size(0) * num_samples,
+                            replacement=False,
+                        ).view(positive_triples.size(0), num_samples)
 
         return result
 
+    def _sample_shared(
+            self, positive_triples: torch.Tensor, slot: int, num_samples: int
+    ):
+        batch_size = len(positive_triples)
+
+        # note: those are not unique. This is just a quick implementation for evaluation
+        unique_samples = self._sample(
+            positive_triples[0].view(1, -1),
+            slot,
+            num_samples if self.shared_type == "naive" else num_samples + 1,
+        ).view(-1)
+        repeat_indexes = torch.empty(0)
+
+        # for naive shared sampling, we are done
+        if self.shared_type == "naive":
+            return NaiveSharedNegativeSample(
+                self.config,
+                self.configuration_key,
+                positive_triples,
+                slot,
+                num_samples,
+                unique_samples.long(),
+                repeat_indexes,
+            )
+
+        # For default, we now filter the positives. For each row i (positive triple),
+        # select a sample to drop. For rows that contain its positive as a negative
+        # example, drop that positive. For all other rows, drop a random position. Here
+        # we start with random drop position for each row and then update the ones that
+        # contain its positive in the negative samples
+        positives = positive_triples[:, slot].numpy()
+        drop_index = np.random.choice(num_samples + 1, batch_size, replace=True)
+        # TODO can we do the following quicker?
+        unique_samples_index = {s: j for j, s in enumerate(unique_samples.tolist())}
+        for i, v in [
+            (i, unique_samples_index.get(positives[i]))
+            for i in range(batch_size)
+            if positives[i] in unique_samples_index
+        ]:
+            drop_index[i] = v
+
+        # now we are done for default
+        return DefaultSharedNegativeSample(
+            self.config,
+            self.configuration_key,
+            positive_triples,
+            slot,
+            num_samples,
+            torch.tensor(unique_samples, dtype=torch.long),
+            torch.tensor(drop_index),
+            repeat_indexes,
+        )
 
 class KgeBatchSampler(KgeSampler):
     def __init__(self, config, configuration_key, dataset):
