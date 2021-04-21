@@ -194,8 +194,6 @@ def create_and_run_distributed(
                 num_partitions=num_partitions,
                 num_clients=num_workers,
                 dataset=dataset,
-                dataset_folder=dataset.folder,
-                scheduling_order=config.get("job.distributed.scheduling_order"),
                 repartition_epoch=config.get("job.distributed.repartition_epoch"),
             )
             config.log(f"scheduler initialized after: {time.time()-scheduler_init_time}")

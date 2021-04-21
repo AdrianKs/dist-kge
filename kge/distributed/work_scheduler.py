@@ -96,8 +96,6 @@ class WorkScheduler(mp.get_context("fork").Process):
         num_partitions,
         num_clients,
         dataset,
-        dataset_folder,
-        scheduling_order="random",
         repartition_epoch=True,
     ):
         if partition_type == "random":
@@ -140,7 +138,6 @@ class WorkScheduler(mp.get_context("fork").Process):
                 num_partitions=num_partitions,
                 num_clients=num_clients,
                 dataset=dataset,
-                scheduling_order=scheduling_order,
                 repartition_epoch=repartition_epoch,
             )
         elif partition_type == "super-stratification":
@@ -152,7 +149,6 @@ class WorkScheduler(mp.get_context("fork").Process):
                 num_partitions=num_partitions,
                 num_clients=num_clients,
                 dataset=dataset,
-                scheduling_order=scheduling_order,
                 repartition_epoch=repartition_epoch,
             )
         elif partition_type == "random-stratification":
@@ -164,7 +160,6 @@ class WorkScheduler(mp.get_context("fork").Process):
                 num_partitions=num_partitions,
                 num_clients=num_clients,
                 dataset=dataset,
-                scheduling_order=scheduling_order,
                 repartition_epoch=repartition_epoch,
             )
         else:
@@ -657,7 +652,6 @@ class StratificationWorkScheduler(WorkScheduler):
         num_partitions,
         num_clients,
         dataset,
-        scheduling_order="random",
         repartition_epoch=True,
     ):
         self.partition_type = "stratification"
@@ -687,7 +681,6 @@ class StratificationWorkScheduler(WorkScheduler):
         self.entities_needed_only = self.config.get(
             "job.distributed.stratification.entities_needed_only"
         )
-        self.scheduling_order = scheduling_order
         self.num_max_entities = 0
 
     def _init_in_started_process(self):
@@ -708,55 +701,6 @@ class StratificationWorkScheduler(WorkScheduler):
             self.work_to_do: Dict[Tuple[int, int], torch.Tensor] = self._order_by_schedule(
                 deepcopy(self.partitions)
             )
-
-    def _order_by_schedule(
-        self, partitions: Dict[Tuple[int, int], torch.Tensor]
-    ) -> Dict[Tuple[int, int], torch.Tensor]:
-        sorted_partitions_keys = [0] * (len(partitions.keys()))
-        num_entity_blocks = int(math.sqrt(len(partitions)))
-        if self.scheduling_order == "sequential":
-            # 00 11 22 01 12 20 02 10 21
-            sorted_partitions_keys = []
-            for i in range(num_entity_blocks):
-                sorted_partitions_keys.append((i, i))
-            for i in range(num_entity_blocks):
-                for j in range(num_entity_blocks):
-                    object_id = (j + i + 1) % num_entity_blocks
-                    if object_id == j:
-                        continue
-                    sorted_partitions_keys.append((j, object_id))
-        elif self.scheduling_order == "sequential_old":
-            for bucket in partitions.keys():
-                if bucket[0] == bucket[1]:
-                    sorted_partitions_keys[bucket[0].item()] = bucket
-                else:
-                    position = (num_entity_blocks * (bucket[0] + 1)) + bucket[1]
-                    position -= bucket[0]
-                    if bucket[1] > bucket[0]:
-                        position -= 1
-                    sorted_partitions_keys[position.item()] = bucket
-        elif self.scheduling_order == "random":
-            positions = np.random.permutation(np.arange(len(partitions.keys())))
-            for i, bucket in zip(positions, partitions.keys()):
-                sorted_partitions_keys[i] = bucket
-        elif self.scheduling_order == "inside_out":
-            # 00 01 10 11 02 20 12 21 22
-            sorted_partitions_keys = []
-            for i in range(num_entity_blocks):
-                sorted_partitions_keys.append((i, i))
-                if i == num_entity_blocks - 1:
-                    break
-                for j in range(i):
-                    sorted_partitions_keys.append((j, i + 1))
-                    sorted_partitions_keys.append((i + 1, j))
-                sorted_partitions_keys.append((i, i + 1))
-                sorted_partitions_keys.append((i + 1, i))
-        else:
-            raise NotImplementedError()
-        sorted_partitions = OrderedDict()
-        for key in sorted_partitions_keys:
-            sorted_partitions[key] = partitions[key]
-        return sorted_partitions
 
     @staticmethod
     @numba.guvectorize(
@@ -1221,7 +1165,6 @@ class SuperStratificationWorkScheduler(StratificationWorkScheduler):
             num_partitions,
             num_clients,
             dataset,
-            scheduling_order="random",
             repartition_epoch=True,
     ):
         # create a super scheduler with num_machines*4 partitions
@@ -1235,7 +1178,6 @@ class SuperStratificationWorkScheduler(StratificationWorkScheduler):
             num_partitions=num_partitions,
             num_clients=num_clients,
             dataset=dataset,
-            scheduling_order=scheduling_order,
             repartition_epoch=repartition_epoch,
         )
 
@@ -1249,7 +1191,6 @@ class SuperStratificationWorkScheduler(StratificationWorkScheduler):
             num_partitions=self.num_super_partitions,
             num_clients=self.num_machines,
             dataset=self.dataset,
-            scheduling_order=self.scheduling_order,
             repartition_epoch=self.repartition_epoch,
         )
         self.super_stratification_scheduler.partitions = defaultdict(lambda: None)
@@ -1318,7 +1259,6 @@ class RandomStratificationWorkScheduler(StratificationWorkScheduler):
             num_partitions,
             num_clients,
             dataset,
-            scheduling_order="random",
             repartition_epoch=True,
     ):
         # num_partitions = self.config.get("job.distributed.num_machines")*2
@@ -1331,7 +1271,6 @@ class RandomStratificationWorkScheduler(StratificationWorkScheduler):
             num_partitions,
             num_clients,
             dataset,
-            scheduling_order=scheduling_order,
             repartition_epoch=repartition_epoch,
         )
         self.num_machines = self.config.get("job.distributed.num_machines")
