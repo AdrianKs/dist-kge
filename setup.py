@@ -23,6 +23,7 @@ setup(
         "numba==0.50.*",
         "psutil",
         "py3nvml",
+        "tqdm",
     ],
     # Ax 0.1.10 requires python 3.7. Numba does not yet support for Python 3.9:
     # https://github.com/numba/numba/issues/6345
