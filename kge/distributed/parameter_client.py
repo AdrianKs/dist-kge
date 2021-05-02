@@ -1,7 +1,12 @@
 import torch
 try:
     import lapse
+    import lapse.Worker as LapseWorker
+    import lapse.Server as LapseServer
 except ImportError:
+    from mock import Mock
+    LapseWorker=Mock  # just give something to inherit from
+    LapseServer=Mock  # just give something to inherit from
     pass
 import numpy as np
 from typing import Optional
@@ -78,12 +83,12 @@ class KgeParameterClient:
             raise ValueError(client_type)
 
 
-class LapseParameterClient(lapse.Worker, KgeParameterClient):
+class LapseParameterClient(LapseWorker, KgeParameterClient):
     def __init__(
         self,
         customer_id: int,
         rank: int,
-        lapse_server: lapse.Server,
+        lapse_server: LapseServer,
         dim,
         num_meta_keys,
         worker_group,
