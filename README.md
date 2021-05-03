@@ -62,19 +62,30 @@ cd ..
 ### Single Machine Multi-GPU Training
 Run following example to train on two GPUs with random partitioning (two worker per GPU):
 ````
-python -m kge start examples/parallel-complex-fb15k.yaml
+python -m kge start examples/fb15k-complex-parallel.yaml
 ````
 The most important configuration options for multi-gpu training are:
 ````yaml
+import:
+  - complex
+  - distributed_model
+model: distributed_model
+distributed_model:
+  base_model: complex
 job:
   distributed:
     num_partitions: 4
     num_workers: 4
-    partition_type: "random"
+    partition_type: random
     master_port: 8888  # change in case this port is used on your machine
   device_pool:
     - cuda:0
     - cuda:1
+train:
+  type: distributed_negative_sampling
+  optimizer:
+    default:
+      type: dist_adagrad
 ````
 
 ### Multi-GPU Multi-Machine Training
@@ -104,12 +115,12 @@ Run the following example to train on two machines with one GPU each (1@2) with 
 
 Command for machine 1
 ````
-python -m kge start examples/dist_complex_fb15k.yaml --job.distributed.machine_id 0 --job.distributed.master_ip <some_ip>
+python -m kge start examples/fb15k_complex_parallel.yaml --job.distributed.machine_id 0 --job.distributed.master_ip <some_ip>
 ````
 
 Command for machine 2
 ````
-python -m kge start examples/dist_complex_fb15k.yaml --job.distributed.machine_id 1 --job.distributed.master_ip <some_ip>
+python -m kge start examples/fb15k_complex_parallel.yaml --job.distributed.machine_id 1 --job.distributed.master_ip <some_ip>
 ````
 
 
@@ -133,22 +144,93 @@ The best hyper-parameter setting per dataset and model are
 
 dataset |   MRR |   config
 ------  |   ----:   |   ----
-FB15k   |
-Yago3-10    |   
-Wikidata    |
-Freebase (main memory)    |
+FB15k   |   0.804   |   [config](examples/experiments/fb15k/complex-fb15k-sequential.yaml)
+Yago3-10    |   0.542   |   [config](examples/experiments/yago3-10/complex-yago3-10-sequential.yaml)
+Wikidata    |   0.297   |   [config](examples/experiments/wikidata5m/complex-wikidata5m-sequential.yaml)
+Freebase (main memory)    | 0.344   |   [config](examples/experiments/freebase/complex-freebase-sequential.yaml)
 
 
 **RotatE**
 
 dataset |   MRR |   config
 ------  |   ----:   |   ----
-FB15k   |
-Yago3-10    |   
-Wikidata    |
-Freebase (main memory)    |
+FB15k   |   0.780   |   [config](examples/experiments/fb15k/rotate-fb15k-sequential.yaml)
+Yago3-10    |   0.451   |   [config](examples/experiments/yago3-10/rotate-yago3-10-sequential.yaml)
+Wikidata    |   0.258   |   [config](examples/experiments/wikidata5m/rotate-wikidata5m-sequential.yaml)
+Freebase (main memory)    | 0.571   |   [config](examples/experiments/freebase/rotate-freebase-sequential.yaml)
 
+### Multi-Machine Training
+#### FB15k
+
+**ComplEx**
+
+partition scheme    |   MRR |   config
+--------------- |   ------: |   ------
+random  |   0.800   |   [config](examples/experiments/fb15k/complex-fb15k-distributed-random.yaml)
+relation  |   0.800   |   [config](examples/experiments/fb15k/complex-fb15k-distributed-relation.yaml)
+stratification (CAR)  |   0.799   |   [config](examples/experiments/fb15k/complex-fb15k-distributed-stratification-car.yaml)
+graph-cut  |   0.601   |   [config](examples/experiments/fb15k/complex-fb15k-distributed-graph-cut.yaml)
+
+**RotatE**
+
+partition scheme    |   MRR |   config
+--------------- |   ------: |   ------
+random  |   0.774   |   [config](examples/experiments/fb15k/rotate-fb15k-distributed-random.yaml)
+relation  |   0.774   |   [config](examples/experiments/fb15k/rotate-fb15k-distributed-relation.yaml)
+stratification (CAR)  |   0.784   |   [config](examples/experiments/fb15k/rotate-fb15k-distributed-stratification-car.yaml)
+graph-cut  |   0.681   |   [config](examples/experiments/fb15k/rotate-fb15k-distributed-graph-cut.yaml)
+
+
+
+#### Yago3-10
+
+**ComplEx**
+
+partition scheme    |   MRR |   config
+--------------- |   ------: |   ------
+random  |   0.538   |   [config](examples/experiments/yago3-10/complex-yago3-10-distributed-random.yaml)
+relation  |   0.538   |   [config](examples/experiments/yago3-10/complex-yago3-10-distributed-relation.yaml)
+stratification (CAR)  |   0.531   |   [config](examples/experiments/yago3-10/complex-yago3-10-distributed-stratification-car.yaml)
+graph-cut  |   0.211   |   [config](examples/experiments/yago3-10/complex-yago3-10-distributed-graph-cut.yaml)
+
+**RotatE**
+
+partition scheme    |   MRR |   config
+--------------- |   ------: |   ------
+random  |   0.437   |   [config](examples/experiments/yago3-10/rotate-yago3-10-distributed-random.yaml)
+relation  |   0.441   |   [config](examples/experiments/yago3-10/rotate-yago3-10-distributed-relation.yaml)
+stratification (CAR)  |   0.438   |   [config](examples/experiments/yago3-10/rotate-yago3-10-distributed-stratification-car.yaml)
+graph-cut  |   0.336   |   [config](examples/experiments/yago3-10/rotate-yago3-10-distributed-graph-cut.yaml)
+
+
+#### Wikidata5m
+
+**ComplEx**
+
+partition scheme    |   MRR |   config
+--------------- |   ------: |   ------
+random  |   0.296   |   [config](examples/experiments/wikidata5m/complex-wikidata5m-distributed-random.yaml)
+relation  |   0.296   |   [config](examples/experiments/wikidata5m/complex-wikidata5m-distributed-relation.yaml)
+stratification (CAR)  |   0.308   |   [config](examples/experiments/wikidata5m/complex-wikidata5m-distributed-stratification-car.yaml)
+graph-cut  |   0.192   |   [config](examples/experiments/wikidata5m/complex-wikidata5m-distributed-graph-cut.yaml)
+
+**RotatE**
+
+partition scheme    |   MRR |   config
+--------------- |   ------: |   ------
+random  |   0.256   |   [config](examples/experiments/wikidata5m/complex-wikidata5m-distributed-random.yaml)
+relation  |   0.259   |   [config](examples/experiments/wikidata5m/complex-wikidata5m-distributed-relation.yaml)
+stratification (CAR)  |   0.264   |   [config](examples/experiments/wikidata5m/complex-wikidata5m-distributed-stratification-car.yaml)
+graph-cut  |   0.225   |   [config](examples/experiments/wikidata5m/complex-wikidata5m-distributed-graph-cut.yaml)
 
 ### Freebase multi-machine
 
 
+**ComplEx**
+
+partition scheme    |   MRR |   config
+--------------- |   ------: |   ------
+random  |   0.356   |   [config](examples/experiments/freebase/complex-freebase-distributed-random.yaml)
+relation  |   0.332   |   [config](examples/experiments/freebase/complex-freebase-distributed-relation.yaml)
+stratification (CAR)  |   0.477   |   [config](examples/experiments/freebase/complex-freebase-distributed-stratification-car.yaml)
+graph-cut  |   0.268   |   [config](examples/experiments/freebase/complex-freebase-distributed-graph-cut.yaml)
