@@ -37,14 +37,14 @@ To partition the data run the following commands (you only need to do this once)
 For random partitioning no further preparation is needed.
 
 **Relation Partitioning**
-```
+```sh
 cd data
 python partition_relation.py <dataset-name> <num-partitions>
 cd ..
 ```
 
 **Stratification**
-```
+```sh
 cd data 
 python partition_stratification.py <dataset-name> <num-partitions>
 cd ..
@@ -52,7 +52,7 @@ cd ..
 
 **Graph-Cut**
 
-````
+````sh
 cd data
 python partition_graph_cut.py <dataset-name> <num-partitions>
 cd ..
@@ -92,7 +92,7 @@ train:
 #### Parameter Server
 For multi-machine training we rely on the parameter server [Lapse](https://github.com/alexrenz/lapse-ps).
 To install Lapse and the corresponding python bindings run the following commands:
-````
+````sh
 git clone https://github.com/alexrenz/lapse-ps.git
 cd lapse-ps
 make ps KEY_TYPE=int64_t CXX11_ABI=$(python bindings/lookup_torch_abi.py) DEPS_PATH=$(pwd)/deps_bindings
@@ -106,7 +106,7 @@ In case you can not use Lapse, we provide a very inefficient parameter server (f
 #### Interface
 As we use the gloo backend to communicate between master and worker nodes you need to specify the interface connecting your machines and specify it as `--job.distributed.gloo_socket_ifname`.
 You can find out the names of your interfaces with the command
-````
+````sh
 ip address
 ````
 
@@ -114,12 +114,12 @@ ip address
 Run the following example to train on two machines with one GPU each (1@2) with random partitioning:
 
 Command for machine 1
-````
+````sh
 python -m kge start examples/fb15k_complex_parallel.yaml --job.distributed.machine_id 0 --job.distributed.master_ip <some_ip>
 ````
 
 Command for machine 2
-````
+````sh
 python -m kge start examples/fb15k_complex_parallel.yaml --job.distributed.machine_id 1 --job.distributed.master_ip <some_ip>
 ````
 
