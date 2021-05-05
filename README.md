@@ -28,6 +28,8 @@ This example will train on a toy dataset in a sequential setup on CPU
 
 
 ## Dataset preparation for parallel training
+**NOTE: Freebase already comes with multiple partition settings to safe preprocessing time**
+
 To partition the data run the following commands (you only need to do this once)
 
 **Random Partitioning**
@@ -221,7 +223,7 @@ relation  |   0.259   |   [config](examples/experiments/wikidata5m/complex-wikid
 stratification (CAR)  |   0.264   |   [config](examples/experiments/wikidata5m/complex-wikidata5m-distributed-stratification-car.yaml)
 graph-cut  |   0.225   |   [config](examples/experiments/wikidata5m/complex-wikidata5m-distributed-graph-cut.yaml)
 
-### Freebase multi-machine
+#### Freebase
 
 
 **ComplEx**
