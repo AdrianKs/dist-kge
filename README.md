@@ -27,8 +27,6 @@ kge start examples/toy-complex-train.yaml --job.device cpu
 This example will train on a toy dataset in a sequential setup on CPU
 
 
-**TODO: upload Freebase data**
-
 ## Dataset preparation for parallel training
 To partition the data run the following commands (you only need to do this once)
 
