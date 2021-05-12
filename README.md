@@ -29,7 +29,7 @@ This example will train on a toy dataset in a sequential setup on CPU
 
 
 ## Dataset preparation for parallel training
-**NOTE: Freebase already comes with multiple partition settings to safe preprocessing time**
+**NOTE: Freebase already comes with multiple partition settings to save preprocessing time**
 
 To partition the data run the following commands (you only need to do this once)
 
