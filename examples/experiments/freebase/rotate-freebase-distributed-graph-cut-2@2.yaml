@@ -7,6 +7,9 @@ dataset:
     valid_small:
       filename: valid_small.del
       type: triples
+    test_small:
+      filename: test_small.del
+      type: triples
   name: freebase
 entity_ranking:
   rank_against: 1000
@@ -25,6 +28,7 @@ job:
   - cuda:0
   - cuda:1
   distributed:
+    entity_localize: True
     gloo_socket_ifname: bond0
     master_port: 8899
     num_machines: 2

@@ -6,6 +6,7 @@
 This is the code and configuration accompanying the paper "Parallel Training of Knowledge Graph Embedding Models: A Comparison of Techniques".
 The code extends the knowledge graph embedding library [LibKGE](https://github.com/uma-pi1/kge).
 For documentation on LibKGE refer to LibKGE repository.
+We provide the hyper-parameter settings for the experiments in their corresponding configuration files.
 
 ## Quick start
 

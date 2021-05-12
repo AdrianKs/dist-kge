@@ -7,6 +7,9 @@ dataset:
     valid_small:
       filename: valid_small.del
       type: triples
+    test_small:
+      filename: test_small.del
+      type: triples
   name: freebase
 entity_ranking:
   rank_against: 1000
