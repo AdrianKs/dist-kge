@@ -143,43 +143,43 @@ The best hyper-parameter setting per dataset and model are
 
 **ComplEx**
 
-dataset |   MRR |   config
-------  |   ----:   |   ----
-FB15k   |   0.804   |   [config](examples/experiments/fb15k/complex-fb15k-sequential.yaml)
-Yago3-10    |   0.542   |   [config](examples/experiments/yago3-10/complex-yago3-10-sequential.yaml)
-Wikidata    |   0.297   |   [config](examples/experiments/wikidata5m/complex-wikidata5m-sequential.yaml)
-Freebase (main memory)    | 0.344   |   [config](examples/experiments/freebase/complex-freebase-sequential.yaml)
+partition scheme    |   epoch time  |   time to 95% MRR |   MRR |   config
+--------------- |   ------: |   ---------: |   -------: |   ------  |
+FB15k   |   5.7s    |   2.4min  |   0.804   |   [config](examples/experiments/fb15k/complex-fb15k-sequential.yaml)
+Yago3-10    |   24.3s   |   38.5min |   0.542   |   [config](examples/experiments/yago3-10/complex-yago3-10-sequential.yaml)
+Wikidata    |   438.4s  |   219.0min    |   0.297   |   [config](examples/experiments/wikidata5m/complex-wikidata5m-sequential.yaml)
+Freebase (main memory)    | 6455.5s |   -   |   0.344   |   [config](examples/experiments/freebase/complex-freebase-sequential.yaml)
 
 
 **RotatE**
 
-dataset |   MRR |   config
-------  |   ----:   |   ----
-FB15k   |   0.780   |   [config](examples/experiments/fb15k/rotate-fb15k-sequential.yaml)
-Yago3-10    |   0.451   |   [config](examples/experiments/yago3-10/rotate-yago3-10-sequential.yaml)
-Wikidata    |   0.258   |   [config](examples/experiments/wikidata5m/rotate-wikidata5m-sequential.yaml)
-Freebase (main memory)    | 0.571   |   [config](examples/experiments/freebase/rotate-freebase-sequential.yaml)
+partition scheme    |   epoch time  |   time to 95% MRR |   MRR |   config
+--------------- |   ------: |   ---------: |   -------: |   ------  |
+FB15k   |   15.9s   |   14.5min |   0.780   |   [config](examples/experiments/fb15k/rotate-fb15k-sequential.yaml)
+Yago3-10    |   74.1s   |   259.3s  |   0.451   |   [config](examples/experiments/yago3-10/rotate-yago3-10-sequential.yaml)
+Wikidata    |   798.4s  |   199.6min    |   0.258   |   [config](examples/experiments/wikidata5m/rotate-wikidata5m-sequential.yaml)
+Freebase (main memory)    | 7785.4s |   -   |   0.571   |   [config](examples/experiments/freebase/rotate-freebase-sequential.yaml)
 
 ### Multi-Machine Training
 #### FB15k
 
 **ComplEx**
 
-partition scheme    |   MRR |   config
---------------- |   ------: |   ------
-random  |   0.800   |   [config](examples/experiments/fb15k/complex-fb15k-distributed-random.yaml)
-relation  |   0.800   |   [config](examples/experiments/fb15k/complex-fb15k-distributed-relation.yaml)
-stratification (CAR)  |   0.799   |   [config](examples/experiments/fb15k/complex-fb15k-distributed-stratification-car.yaml)
-graph-cut  |   0.601   |   [config](examples/experiments/fb15k/complex-fb15k-distributed-graph-cut.yaml)
+partition scheme    |   epoch time  |   time to 95% MRR |   data sent   |   MRR |   config
+--------------- |   ------: |   ---------: |   -------: |   -----:  |   ------  |
+random  |   4.0s   |   **1.7min**  |   2.0GB   |    **0.800**   |   [config](examples/experiments/fb15k/complex-fb15k-distributed-random.yaml)
+relation  |   **3.6s** |   2.1min  |   1.7GB   |   **0.800**   |   [config](examples/experiments/fb15k/complex-fb15k-distributed-relation.yaml)
+stratification (CAR)  |   6.9s |   8.6min  |   **0.7GB**   |   0.799   |   [config](examples/experiments/fb15k/complex-fb15k-distributed-stratification-car.yaml)
+graph-cut  |   3.9s    |   -   |   0.9GB   |   0.601   |   [config](examples/experiments/fb15k/complex-fb15k-distributed-graph-cut.yaml)
 
 **RotatE**
 
-partition scheme    |   MRR |   config
---------------- |   ------: |   ------
-random  |   0.774   |   [config](examples/experiments/fb15k/rotate-fb15k-distributed-random.yaml)
-relation  |   0.774   |   [config](examples/experiments/fb15k/rotate-fb15k-distributed-relation.yaml)
-stratification (CAR)  |   0.784   |   [config](examples/experiments/fb15k/rotate-fb15k-distributed-stratification-car.yaml)
-graph-cut  |   0.681   |   [config](examples/experiments/fb15k/rotate-fb15k-distributed-graph-cut.yaml)
+partition scheme    |   epoch time  |   time to 95% MRR |   data sent   |   MRR |   config
+--------------- |   ------: |   ---------: |   -------: |   -----:  |   ------  |
+random  |   9.5s   |   11.0min |   2.2GB   |   0.774   |   [config](examples/experiments/fb15k/rotate-fb15k-distributed-random.yaml)
+relation  |   **8.9s**  |   12.6min |   1.8GB   |   0.774   |   [config](examples/experiments/fb15k/rotate-fb15k-distributed-relation.yaml)
+stratification (CAR)  |   9.6s  |   **9.6min**  |   **0.6GB** |   **0.784**   |   [config](examples/experiments/fb15k/rotate-fb15k-distributed-stratification-car.yaml)
+graph-cut  |   9.9s |   -   |   0.9GB   |   0.681   |   [config](examples/experiments/fb15k/rotate-fb15k-distributed-graph-cut.yaml)
 
 
 
@@ -187,51 +187,52 @@ graph-cut  |   0.681   |   [config](examples/experiments/fb15k/rotate-fb15k-dist
 
 **ComplEx**
 
-partition scheme    |   MRR |   config
---------------- |   ------: |   ------
-random  |   0.538   |   [config](examples/experiments/yago3-10/complex-yago3-10-distributed-random.yaml)
-relation  |   0.538   |   [config](examples/experiments/yago3-10/complex-yago3-10-distributed-relation.yaml)
-stratification (CAR)  |   0.531   |   [config](examples/experiments/yago3-10/complex-yago3-10-distributed-stratification-car.yaml)
-graph-cut  |   0.211   |   [config](examples/experiments/yago3-10/complex-yago3-10-distributed-graph-cut.yaml)
+partition scheme    |   epoch time  |   time to 95% MRR |   data sent   |   MRR |   config
+--------------- |   ------: |   ---------: |   -------: |   -----:  |   ------  |
+random  |   21.1s   |  66.9min |   14.5GB  |   **0.538**   |   [config](examples/experiments/yago3-10/complex-yago3-10-distributed-random.yaml)
+relation  |   23.6s |   41.3min |   13.6GB  |   **0.538**   |   [config](examples/experiments/yago3-10/complex-yago3-10-distributed-relation.yaml)
+stratification (CAR)  |   **11.3s** |   **36.6min** |   0.8GB   |   0.531   |   [config](examples/experiments/yago3-10/complex-yago3-10-distributed-stratification-car.yaml)
+graph-cut  |   13.9s    |   -   |   **0.3GB**   |   0.211   |   [config](examples/experiments/yago3-10/complex-yago3-10-distributed-graph-cut.yaml)
 
 **RotatE**
 
-partition scheme    |   MRR |   config
---------------- |   ------: |   ------
-random  |   0.437   |   [config](examples/experiments/yago3-10/rotate-yago3-10-distributed-random.yaml)
-relation  |   0.441   |   [config](examples/experiments/yago3-10/rotate-yago3-10-distributed-relation.yaml)
-stratification (CAR)  |   0.438   |   [config](examples/experiments/yago3-10/rotate-yago3-10-distributed-stratification-car.yaml)
-graph-cut  |   0.336   |   [config](examples/experiments/yago3-10/rotate-yago3-10-distributed-graph-cut.yaml)
+partition scheme    |   epoch time  |   time to 95% MRR |   data sent   |   MRR |   config
+--------------- |   ------: |   ---------: |   -------: |   -----:  |   ------  |
+random  |   44.1s   |   209.6min    |   6.9GB   |   0.437   |   [config](examples/experiments/yago3-10/rotate-yago3-10-distributed-random.yaml)
+relation  |   53.0s |   265.2min    |   6.8GB   |   **0.441**   |   [config](examples/experiments/yago3-10/rotate-yago3-10-distributed-relation.yaml)
+stratification (CAR)  |   **43.3s** |   **176.8min**    |   0.6GB   |   0.438   |   [config](examples/experiments/yago3-10/rotate-yago3-10-distributed-stratification-car.yaml)
+graph-cut  |   43.3s    |   -   |   **0.3GB**   |   0.336   |   [config](examples/experiments/yago3-10/rotate-yago3-10-distributed-graph-cut.yaml)
 
 
 #### Wikidata5m
 
 **ComplEx**
 
-partition scheme    |   MRR |   config
---------------- |   ------: |   ------
-random  |   0.296   |   [config](examples/experiments/wikidata5m/complex-wikidata5m-distributed-random.yaml)
-relation  |   0.296   |   [config](examples/experiments/wikidata5m/complex-wikidata5m-distributed-relation.yaml)
-stratification (CAR)  |   0.308   |   [config](examples/experiments/wikidata5m/complex-wikidata5m-distributed-stratification-car.yaml)
-graph-cut  |   0.192   |   [config](examples/experiments/wikidata5m/complex-wikidata5m-distributed-graph-cut.yaml)
+partition scheme    |   epoch time  |   time to 95% MRR |   data sent   |   MRR |   config
+--------------- |   ------: |   ---------: |   -------: |   -----:  |   ------  |
+random  |   347.2s  |   173.6min    |   181.0GB |   0.296   |   [config](examples/experiments/wikidata5m/complex-wikidata5m-distributed-random.yaml)
+relation  |   320.5s    |   160.2min    |   178.1GB |   0.296   |   [config](examples/experiments/wikidata5m/complex-wikidata5m-distributed-relation.yaml)
+stratification (CAR)  |   **228.0s**  |   **76.0min** |   14.4GB  |   **0.308**   |   [config](examples/experiments/wikidata5m/complex-wikidata5m-distributed-stratification-car.yaml)
+graph-cut  |   317.2s   |   -   |   **9.9GB**   |   0.192   |   [config](examples/experiments/wikidata5m/complex-wikidata5m-distributed-graph-cut.yaml)
 
 **RotatE**
 
-partition scheme    |   MRR |   config
---------------- |   ------: |   ------
-random  |   0.256   |   [config](examples/experiments/wikidata5m/complex-wikidata5m-distributed-random.yaml)
-relation  |   0.259   |   [config](examples/experiments/wikidata5m/complex-wikidata5m-distributed-relation.yaml)
-stratification (CAR)  |   0.264   |   [config](examples/experiments/wikidata5m/complex-wikidata5m-distributed-stratification-car.yaml)
-graph-cut  |   0.225   |   [config](examples/experiments/wikidata5m/complex-wikidata5m-distributed-graph-cut.yaml)
+partition scheme    |   epoch time  |   time to 95% MRR |   data sent   |   MRR |   config
+--------------- |   ------: |   ---------: |   -------: |   -----:  |   ------  |
+random  |   501.2s  |   125.5min    |   82.3GB  |   0.256   |   [config](examples/experiments/wikidata5m/complex-wikidata5m-distributed-random.yaml)
+relation  |   484.5s    |   121.1min    |   79.6GB  |   0.259   |   [config](examples/experiments/wikidata5m/complex-wikidata5m-distributed-relation.yaml)
+stratification (CAR)  |   **477.7** |   **79.6**    |   16.8GB  |   **0.264**   |   [config](examples/experiments/wikidata5m/complex-wikidata5m-distributed-stratification-car.yaml)
+graph-cut  |   496.4s   |   -   |   **10.5GB**  |   0.225   |   [config](examples/experiments/wikidata5m/complex-wikidata5m-distributed-graph-cut.yaml)
 
 #### Freebase
 
 
 **ComplEx**
 
-partition scheme    |   MRR |   config
---------------- |   ------: |   ------
-random  |   0.356   |   [config](examples/experiments/freebase/complex-freebase-distributed-random.yaml)
-relation  |   0.332   |   [config](examples/experiments/freebase/complex-freebase-distributed-relation.yaml)
-stratification (CAR)  |   0.477   |   [config](examples/experiments/freebase/complex-freebase-distributed-stratification-car.yaml)
-graph-cut  |   0.268   |   [config](examples/experiments/freebase/complex-freebase-distributed-graph-cut.yaml)
+setup   |   partition scheme    |   epoch time  |   data sent   |   sMRR-1000   |   MRR |   config
+-----   |   --------------- |   ------: |   ---------: |   -------: |   -----:  |   ------  |
+2@2 |   random  |   1715.7s |   1564.0GB    |   0.829   |   0.356   |   [config](examples/experiments/freebase/complex-freebase-distributed-random-2@2.yaml)
+2@2 |   relation  |   1658.7s   |   1496.2GB    |   0.824   |   0.332   |   [config](examples/experiments/freebase/complex-freebase-distributed-relation-2@2.yaml)
+2@2 |   stratification (CAR)  |   **1105.9s**   |   277.8GB |   0.803   |   **0.477**   |   [config](examples/experiments/freebase/complex-freebase-distributed-stratification-car-2@2.yaml)
+2@2 |   graph-cut  |   1691.0s  |   **113.2GB** |   0.801   |   0.268   |   [config](examples/experiments/freebase/complex-freebase-distributed-graph-cut-2@2.yaml)
+4@2 |   stratification (CAR)  |   765.9s    |   312.2GB |   0.798   |   0.475   |   [config](examples/experiments/freebase/complex-freebase-distributed-stratification-car-4@2.yaml)
