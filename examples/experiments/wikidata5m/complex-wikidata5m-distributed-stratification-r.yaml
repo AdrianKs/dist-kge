@@ -11,7 +11,7 @@ entity_ranking:
   chunk_size: 25000
 eval:
   batch_size: 200
-  trace_level: example
+  trace_level: epoch
 import:
 - complex
 - distributed_model
@@ -42,8 +42,6 @@ lookup_embedder:
       gain: 1.0
     xavier_uniform_:
       gain: 1.0
-  pretrain:
-    model_filename: local/partition_experiment_configs/wikidata_complex_init.pt
   regularize_args:
     p: 1
     weighted: true

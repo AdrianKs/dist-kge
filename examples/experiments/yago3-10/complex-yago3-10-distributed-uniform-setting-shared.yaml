@@ -9,6 +9,8 @@ dataset:
   name: yago3-10
 entity_ranking:
   chunk_size: 25000
+  metrics_per:
+    relation_type: false
 eval:
   batch_size: 256
   trace_level: epoch
@@ -25,8 +27,6 @@ job:
     num_partitions: 4
     num_workers: 4
     num_workers_machine: 2
-    partition_type: relation
-    relation_sync_level: partition
 lookup_embedder:
   dim: 128
   initialize: uniform_
@@ -45,14 +45,16 @@ lookup_embedder:
     weighted: true
   sparse: true
 model: distributed_model
+modules:
+- kge.model
+- kge.model.embedder
+- kge.job
 negative_sampling:
   implementation: batch
   num_samples:
-    o: 8942
-    s: 8919
+    o: 894
+    s: 892
   shared: true
-  shared_type: naive
-  with_replacement: false
 train:
   auto_correct: true
   batch_size: 1024
@@ -63,7 +65,7 @@ train:
     mode: max
     patience: 5
     threshold: 0.0001
-  max_epochs: 400
+  max_epochs: 3
   num_workers: 4
   optimizer:
     default:

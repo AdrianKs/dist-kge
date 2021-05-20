@@ -32,9 +32,6 @@ lookup_embedder:
       gain: 1.0
     xavier_uniform_:
       gain: 1.0
-  pretrain:
-    ensure_all: true
-    model_filename: local/partition_experiment_configs/yago_rotate_init.pt
   regularize_args:
     p: 3
     weighted: true
