@@ -244,15 +244,15 @@ setup   |   partition scheme    |   epoch time  |   data sent   |   sMRR-1000   
 
 setting |   \#Neg   |   epoch time  |   data sent   |   MRR |   config
 -----   |   -----:  |   --------:   |   ------:     |   -----:  |   ----    |
-uniform |   s: 892, o: 894   |   114.9s  |   97.2GB  |   0.518   [config](examples/experiments/yago3-10/complex-yago3-10-distributed-uniform-sampling.yaml)
-shared |   s: 892, o: 894   |   9.3s  |   2.6GB  |   0.429   [config](examples/experiments/yago3-10/complex-yago3-10-distributed-uniform-setting-shared.yaml)
-shared |   s: 8919, o: 8942   |   21.1s  |   14.5GB  |   0.537   [config](examples/experiments/yago3-10/complex-yago3-10-distributed-random.yaml)
+uniform |   s: 892, o: 894   |   114.9s  |   97.2GB  |   0.518    |   [config](examples/experiments/yago3-10/complex-yago3-10-distributed-uniform-sampling.yaml)
+shared |   s: 892, o: 894   |   9.3s  |   2.6GB  |   0.429    |   [config](examples/experiments/yago3-10/complex-yago3-10-distributed-uniform-setting-shared.yaml)
+shared |   s: 8919, o: 8942   |   21.1s  |   14.5GB  |   0.537    |   [config](examples/experiments/yago3-10/complex-yago3-10-distributed-random.yaml)
 
 
 **Wikidata5m**
 
 setting |   \#Neg   |   epoch time  |   data sent   |   MRR |   config
 -----   |   -----:  |   --------:   |   ------:     |   -----:  |   ----    |
-uniform |   s: 66, o: 236   |   5112.3s  |   4691.0GB  |   0.218   [config](examples/experiments/wikidata5m/complex-wikidata5m-distributed-uniform-sampling.yaml)
-shared |   s: 66, o: 236   |   153.6s  |   29.6GB  |   0.171   [config](examples/experiments/wikidata5m/complex-wikidata5m-distributed-uniform-setting-shared.yaml)
-shared |   s: 2176, o: 7851   |   347.2s  |   181.0GB  |   0.297   [config](examples/experiments/wikidata5m/complex-wikidata5m-distributed-random.yaml)
+uniform |   s: 66, o: 236   |   5112.3s  |   4691.0GB  |   0.218    |   [config](examples/experiments/wikidata5m/complex-wikidata5m-distributed-uniform-sampling.yaml)
+shared |   s: 66, o: 236   |   153.6s  |   29.6GB  |   0.171    |   [config](examples/experiments/wikidata5m/complex-wikidata5m-distributed-uniform-setting-shared.yaml)
+shared |   s: 2176, o: 7851   |   347.2s  |   181.0GB  |   0.297    |   [config](examples/experiments/wikidata5m/complex-wikidata5m-distributed-random.yaml)
