@@ -236,3 +236,23 @@ setup   |   partition scheme    |   epoch time  |   data sent   |   sMRR-1000   
 2@2 |   stratification (CAR)  |   **1105.9s**   |   277.8GB |   0.803   |   **0.477**   |   [config](examples/experiments/freebase/complex-freebase-distributed-stratification-car-2@2.yaml)
 2@2 |   graph-cut  |   1691.0s  |   **113.2GB** |   0.801   |   0.268   |   [config](examples/experiments/freebase/complex-freebase-distributed-graph-cut-2@2.yaml)
 4@2 |   stratification (CAR)  |   765.9s    |   312.2GB |   0.798   |   0.475   |   [config](examples/experiments/freebase/complex-freebase-distributed-stratification-car-4@2.yaml)
+
+
+### Shared Sampling
+
+**Yago3-10**
+
+setting |   \#Neg   |   epoch time  |   data sent   |   MRR |   config
+-----   |   -----:  |   --------:   |   ------:     |   -----:  |   ----    |
+uniform |   s: 892, o: 894   |   114.9s  |   97.2GB  |   0.518   [config](examples/experiments/yago3-10/complex-yago3-10-distributed-uniform-sampling.yaml)
+shared |   s: 892, o: 894   |   9.3s  |   2.6GB  |   0.429   [config](examples/experiments/yago3-10/complex-yago3-10-distributed-uniform-setting-shared.yaml)
+shared |   s: 8919, o: 8942   |   21.1s  |   14.5GB  |   0.537   [config](examples/experiments/yago3-10/complex-yago3-10-distributed-random.yaml)
+
+
+**Wikidata5m**
+
+setting |   \#Neg   |   epoch time  |   data sent   |   MRR |   config
+-----   |   -----:  |   --------:   |   ------:     |   -----:  |   ----    |
+uniform |   s: 66, o: 236   |   5112.3s  |   4691.0GB  |   0.218   [config](examples/experiments/wikidata5m/complex-wikidata5m-distributed-uniform-sampling.yaml)
+shared |   s: 66, o: 236   |   153.6s  |   29.6GB  |   0.171   [config](examples/experiments/wikidata5m/complex-wikidata5m-distributed-uniform-setting-shared.yaml)
+shared |   s: 2176, o: 7851   |   347.2s  |   181.0GB  |   0.297   [config](examples/experiments/wikidata5m/complex-wikidata5m-distributed-random.yaml)
