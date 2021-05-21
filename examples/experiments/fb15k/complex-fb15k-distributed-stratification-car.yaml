@@ -9,7 +9,6 @@ dataset:
   name: fb15k
 eval:
   batch_size: 2048
-  trace_level: example
 import:
 - complex
 - distributed_model

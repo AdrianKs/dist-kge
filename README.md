@@ -256,3 +256,12 @@ setting |   \#Neg   |   epoch time  |   data sent   |   MRR |   config
 uniform |   s: 66, o: 236   |   5112.3s  |   4691.0GB  |   0.218    |   [config](examples/experiments/wikidata5m/complex-wikidata5m-distributed-uniform-sampling.yaml)
 shared |   s: 66, o: 236   |   153.6s  |   29.6GB  |   0.171    |   [config](examples/experiments/wikidata5m/complex-wikidata5m-distributed-uniform-setting-shared.yaml)
 shared |   s: 2176, o: 7851   |   347.2s  |   181.0GB  |   0.297    |   [config](examples/experiments/wikidata5m/complex-wikidata5m-distributed-random.yaml)
+
+
+### Batch Sampling
+
+\# Neg  |   0% - MRR    |   50% - MRR   |   100% - MRR  |   configs |
+----:   |   -----:      |   -------:    |   ------:     |   -----   |
+s: 178, o: 179  |   0.421   |   0.368   |   0.326   |   [config-0](examples/experiments/yago3-10/batch_sampling/complex-yago3-10-distributed-batch-0-s.yaml), [config-50](examples/experiments/yago3-10/batch_sampling/complex-yago3-10-distributed-batch-50-s.yaml), [config-100](examples/experiments/yago3-10/batch_sampling/complex-yago3-10-distributed-batch-100-s.yaml)
+s: 892, o: 894  |   0.478   |   0.383   |   0.353   |   [config-0](examples/experiments/yago3-10/batch_sampling/complex-yago3-10-distributed-batch-0-m.yaml), [config-50](examples/experiments/yago3-10/batch_sampling/complex-yago3-10-distributed-batch-50-m.yaml), [config-100](examples/experiments/yago3-10/batch_sampling/complex-yago3-10-distributed-batch-100-m.yaml)
+s: 8919, o: 8942  |   0.538   |   0.422   |   0.375   |   [config-0](examples/experiments/yago3-10/complex-yago3-10-distributed-random.yaml), [config-50](examples/experiments/yago3-10/batch_sampling/complex-yago3-10-distributed-batch-50-l.yaml), [config-100](examples/experiments/yago3-10/batch_sampling/complex-yago3-10-distributed-batch-100-l.yaml)

@@ -63,7 +63,7 @@ train:
     mode: max
     patience: 1
     threshold: 0.0001
-  max_epochs: 3
+  max_epochs: 300
   num_workers: 4
   optimizer:
     default:
