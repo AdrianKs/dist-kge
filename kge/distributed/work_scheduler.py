@@ -55,7 +55,8 @@ class WorkScheduler(mp.get_context("fork").Process):
         super(WorkScheduler, self).__init__(daemon=False, name="work-scheduler")
         self.config = config
         self.dataset = dataset
-        self.rank = get_min_rank(config) - 1
+        self.min_rank = get_min_rank(config)
+        self.rank = self.min_rank - 1
         self.num_clients = num_clients
         self.world_size = world_size
         self.master_ip = master_ip
@@ -180,6 +181,11 @@ class WorkScheduler(mp.get_context("fork").Process):
             rank=self.rank,
             timeout=datetime.timedelta(hours=6),
         )
+        worker_ranks = list(range(self.min_rank, self.world_size))
+        print(worker_ranks)
+        # we need to create the worker group here as well it need to be defined in
+        #  all processes
+        worker_group = dist.new_group(worker_ranks, timeout=datetime.timedelta(hours=6))
         barrier_count = 0
         shutdown_count = 0
         epoch_time = None
