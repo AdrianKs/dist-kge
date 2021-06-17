@@ -1,0 +1,78 @@
+dataset:
+  name: fb15k
+entity_ranking:
+  chunk_size: 3000
+eval:
+  batch_size: 512
+import:
+- rotate
+lookup_embedder:
+  dim: 400
+  initialize_args:
+    normal_:
+      mean: 0.0
+      std: 0.12247115405668645
+    uniform_:
+      a: -0.9548907227460481
+    xavier_normal_:
+      gain: 1.0
+    xavier_uniform_:
+      gain: 1.0
+  pretrain:
+    ensure_all: true
+    model_filename: local/partition_experiment_configs/fb15k_rotate_init.pt
+  regularize_args:
+    p: 3
+    weighted: true
+  sparse: true
+model: rotate
+modules:
+- kge.model
+- kge.model.embedder
+- kge.job
+negative_sampling:
+  implementation: batch
+  num_samples:
+    o: 361
+    s: 49
+  shared: true
+  shared_type: naive
+  with_replacement: false
+rotate:
+  entity_embedder:
+    dropout: -0.30615369975566864
+    regularize_weight: 1.0737553041346427e-08
+  l_norm: 2.0
+  relation_embedder:
+    dropout: -0.41836637165397406
+    regularize_weight: 5.952774869184378e-16
+search:
+  device_pool:
+  - cuda:0
+  - cuda:1
+  num_workers: 2
+  on_error: continue
+train:
+  auto_correct: true
+  batch_size: 1024
+  loss_arg: .nan
+  lr_scheduler: ReduceLROnPlateau
+  lr_scheduler_args:
+    factor: 0.95
+    mode: max
+    patience: 4
+    threshold: 0.0001
+  max_epochs: 400
+  num_workers: 4
+  optimizer:
+    default:
+      args:
+        lr: 0.46028005640776476
+  type: negative_sampling
+valid:
+  early_stopping:
+    patience: 10
+    threshold:
+      epochs: 50
+      metric_value: 0.05
+
