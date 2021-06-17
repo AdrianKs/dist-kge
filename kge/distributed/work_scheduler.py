@@ -181,10 +181,9 @@ class WorkScheduler(mp.get_context("fork").Process):
             rank=self.rank,
             timeout=datetime.timedelta(hours=6),
         )
-        worker_ranks = list(range(self.min_rank, self.world_size))
-        print(worker_ranks)
         # we need to create the worker group here as well it need to be defined in
         #  all processes
+        worker_ranks = list(range(self.min_rank, self.world_size))
         worker_group = dist.new_group(worker_ranks, timeout=datetime.timedelta(hours=6))
         barrier_count = 0
         shutdown_count = 0
