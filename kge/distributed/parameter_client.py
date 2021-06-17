@@ -1,9 +1,9 @@
 import torch
 try:
     import lapse
-    import lapse.Worker as LapseWorker
-    import lapse.Server as LapseServer
-except ImportError:
+    from lapse import Worker as LapseWorker
+    from lapse import Server as LapseServer
+except ImportError as e:
     from mock import Mock
     LapseWorker=Mock  # just give something to inherit from
     LapseServer=Mock  # just give something to inherit from
