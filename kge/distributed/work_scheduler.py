@@ -28,7 +28,8 @@ class SCHEDULER_CMDS(IntEnum):
     SHUTDOWN = 6
     INIT_INFO = 7
     GET_INIT_WORK = 8
-    PRE_LOCALIZE_WORK = 9
+    GET_LOCAL_ENT = 9
+    PRE_LOCALIZE_WORK = 10
 
 @dataclass
 class WorkPackage:
@@ -38,6 +39,7 @@ class WorkPackage:
     entities_in_partition = None
     relations_in_partition = None
     wait = False
+
 
 class WorkScheduler(mp.get_context("fork").Process):
     def __init__(
@@ -77,6 +79,12 @@ class WorkScheduler(mp.get_context("fork").Process):
         self.partitions = self._load_partitions(
             self.dataset.folder, self.num_partitions
         )
+        self._define_local_entities()
+
+    def _define_local_entities(self):
+        entity_keys = torch.arange(self.dataset.num_entities(), dtype=torch.long)
+        local_entities = entity_keys[torch.randperm(len(entity_keys))].chunk(self.num_clients)
+        self.local_entities = dict(zip(range(self.min_rank, self.min_rank + self.num_clients), local_entities))
 
     def _config_check(self, config):
         if (
@@ -247,6 +255,8 @@ class WorkScheduler(mp.get_context("fork").Process):
                 self._handle_get_init_work(
                     rank=rank, embedding_layer_size=cmd_buffer[1].item()
                 )
+            elif cmd == SCHEDULER_CMDS.GET_LOCAL_ENT:
+                self._handle_get_local_entities(rank=rank)
             elif cmd == SCHEDULER_CMDS.PRE_LOCALIZE_WORK:
                 machine_id = cmd_buffer[1].item()
                 work_package = self._handle_pre_localize_work(
@@ -331,6 +341,11 @@ class WorkScheduler(mp.get_context("fork").Process):
             return_buffer = torch.LongTensor([self.init_up_to_entity, entity_range_end])
         self.init_up_to_entity += embedding_layer_size
         dist.send(return_buffer, dst=rank)
+
+    def _handle_get_local_entities(self, rank):
+        size_information = torch.LongTensor([len(self.local_entities[rank]), -1])
+        dist.send(size_information, dst=rank)
+        dist.send(self.local_entities[rank], dst=rank)
 
     def _handle_pre_localize_work(self, rank, machine_id):
         raise ValueError("The current partition scheme does not support pre-localizing")
@@ -483,6 +498,9 @@ class RandomWorkScheduler(WorkScheduler):
             work_package = WorkPackage()
             work_package.partition_id = self.work_to_do.pop()
             work_package.partition_data = self.partitions[work_package.partition_id]
+            # those are not entities in the partition but "local" entities for the
+            #  worker to allow local sampling
+            work_package.entities_in_partition = self.local_entities[rank]
             return work_package
         except IndexError:
             return WorkPackage()
@@ -497,6 +515,7 @@ class RandomWorkScheduler(WorkScheduler):
     def _refill_work(self):
         if self.repartition_epoch:
             self.partitions = self._load_partitions(None, self.num_partitions)
+            self._define_local_entities()
         super(RandomWorkScheduler, self)._refill_work()
 
 
@@ -1333,6 +1352,16 @@ class SchedulerClient:
         dist.recv(cmd, src=self.scheduler_rank)
         if cmd[0] > -1:
             return torch.arange(cmd[0], cmd[1], dtype=torch.long)
+        return None
+
+    def get_local_entities(self):
+        cmd = torch.LongTensor([SCHEDULER_CMDS.GET_LOCAL_ENT, -1])
+        dist.send(cmd, dst=self.scheduler_rank)
+        dist.recv(cmd, src=self.scheduler_rank)
+        if cmd[0] > 0:
+            local_entities = torch.empty([cmd[0], ], dtype=torch.long)
+            dist.recv(local_entities, src=self.scheduler_rank)
+            return local_entities
         return None
 
     def work_done(self):

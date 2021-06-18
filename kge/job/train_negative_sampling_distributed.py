@@ -176,6 +176,7 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
                 torch.full((self.dataset.num_entities(),), -1, dtype=torch.long)
             )
 
+        # also defines the local entities
         self._initialize_parameter_server(init_for_load_only=init_for_load_only)
 
         def stop_and_wait(job):
@@ -208,17 +209,16 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             # only the first worker initializes the relations
             if self.parameter_client.rank == self.min_rank:
                 self.model.get_p_embedder().push_all()
-            while True:
-                init_entities = self.work_scheduler_client.get_init_work(
-                    self.model.get_s_embedder().vocab_size
-                )
-                if init_entities is None:
-                    break
+            entity_embedding_layer_size = self.model.get_s_embedder()._embeddings.weight.data.shape[0]
+            self.local_entities = self.work_scheduler_client.get_local_entities()
+            self.parameter_client.localize(self.local_entities, asynchronous=True)
+            init_work_packages = self.local_entities.split(entity_embedding_layer_size)
+            for init_work_package in init_work_packages:
                 self.model.get_s_embedder().initialize(
                     self.model.get_s_embedder()._embeddings.weight.data
                 )
                 self.model.get_s_embedder()._normalize_embeddings()
-                self._push_init_to_parameter_server(init_entities)
+                self._push_init_to_parameter_server(init_work_package)
         self.parameter_client.barrier()
 
     def _push_init_to_parameter_server(self, entity_ids: torch.Tensor):
@@ -269,6 +269,9 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
         )
         # initializing dataloader as soon as we got the triples from work scheduler
         self.loader = None
+        if self.config.get("negative_sampling.sampling_type") == "pooled":
+            self._sampler.set_pool(self.local_entities, S)
+            self._sampler.set_pool(self.local_entities, O)
 
     def _get_collate_fun(self):
         # create the collate function
@@ -622,6 +625,7 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
                 work_entities is not None
                 and self.config.get("negative_sampling.sampling_type") == "pooled"
             ):
+                self.local_entities = work_entities
                 self._sampler.set_pool(work_entities, S)
                 self._sampler.set_pool(work_entities, O)
             self.dataloader_dataset.set_samples(
