@@ -458,8 +458,9 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
         if hasattr(self.valid_job, "model"):
             del self.valid_job.model
         gc.collect()
-        with torch.cuda.device(self.device):
-            torch.cuda.empty_cache()
+        if "cuda" in self.device:
+            with torch.cuda.device(self.device):
+                torch.cuda.empty_cache()
         self.parameter_client.barrier()
         if self.parameter_client.rank == self.min_rank:
             # create a model for validation with entity embedder size
@@ -486,8 +487,9 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             del self.model
             del self.valid_job.model
             gc.collect()
-            with torch.cuda.device(self.device):
-                torch.cuda.empty_cache()
+            if "cuda" in self.device:
+                with torch.cuda.device(self.device):
+                    torch.cuda.empty_cache()
         else:
             self.kge_lr_scheduler.step()
         self.parameter_client.barrier()
