@@ -38,7 +38,11 @@ def monitor_hardware(folder, interval=1):
 
 
 def monitor_gpus(folder, interval=1):
-    nvmlInit()
+    try:
+        nvmlInit()
+    except Exception:
+        print("could not initialize GPU monitor")
+        return
     device_count = nvmlDeviceGetCount()
     if device_count == 0:
         return
