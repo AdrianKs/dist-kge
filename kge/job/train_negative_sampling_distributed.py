@@ -155,6 +155,7 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
         self.relation_localize = self.config.get("job.distributed.relation_localize")
         self.entity_partition_localized = False
         self.relation_partition_localized = False
+        self.local_entities = None
         self.entity_async_write_back = self.config.get(
             "job.distributed.entity_async_write_back"
         )
@@ -270,6 +271,9 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
         # initializing dataloader as soon as we got the triples from work scheduler
         self.loader = None
         if self.config.get("negative_sampling.sampling_type") == "pooled":
+            if self.local_entities is None:
+                self.local_entities = self.work_scheduler_client.get_local_entities()
+                self.parameter_client.localize(self.local_entities)
             self._sampler.set_pool(self.local_entities, S)
             self._sampler.set_pool(self.local_entities, O)
 
