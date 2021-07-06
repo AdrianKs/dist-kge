@@ -557,6 +557,9 @@ class RelationWorkScheduler(WorkScheduler):
             work_package.partition_id = self.work_to_do.pop()
             work_package.partition_data = self.partitions[work_package.partition_id]
             work_package.relations_in_partition = self.relations_to_partition[work_package.partition_id]
+            # those are not entities in the partition but "local" entities for the
+            #  worker to allow local sampling
+            work_package.entities_in_partition = self.local_entities[rank]
             return work_package
         except IndexError:
             return WorkPackage()
@@ -580,6 +583,12 @@ class RelationWorkScheduler(WorkScheduler):
                 np.where((self.relations_to_partition == partition),)[0]
             )
         return relations_in_partition
+
+    def _refill_work(self):
+        if self.repartition_epoch:
+            #self.partitions = self._load_partitions(None, self.num_partitions)
+            self._define_local_entities()
+        super(RelationWorkScheduler, self)._refill_work()
 
 
 class GraphCutWorkScheduler(WorkScheduler):
