@@ -1,3 +1,4 @@
+import warnings
 from kge import Config, Configurable, Dataset
 from kge.indexing import where_in
 
@@ -662,6 +663,23 @@ class CombinedSharedBatchNegativeSample(BatchNegativeSample):
         return torch.cat((samples_1, samples_2), dim=1)
 
     def score(self, model, indexes=None) -> torch.Tensor:
+        if type(self.batch_negative_sample_1) in [NaiveSharedNegativeSample, BatchNegativeSample] and type(self.batch_negative_sample_2) in [NaiveSharedNegativeSample, BatchNegativeSample]:
+            # lets just concat the scoring here
+            # not as flexible but faster
+            combined_batch_negative = NaiveSharedNegativeSample(
+                self.config,
+                self.configuration_key,
+                self.positive_triples,
+                self.slot,
+                self.num_samples,
+                torch.cat((
+                    self.batch_negative_sample_1.unique_samples(),
+                    self.batch_negative_sample_2.unique_samples()
+                )),
+                repeat_indexes=torch.empty(0, dtype=torch.long, device=self.positive_triples.device),
+            )
+            scores = combined_batch_negative.score(model, indexes)
+            return scores
         scores_1 = self.batch_negative_sample_1.score(model, indexes)
         scores_2 = self.batch_negative_sample_2.score(model, indexes)
         # don't concat empty tensors due to pytorch bug
@@ -974,23 +992,33 @@ class KgeBatchSampler(KgeSampler):
         batch_samples = positive_triples[:, slot][
             torch.randint(len(positive_triples), (num_samples,), dtype=torch.long)
         ]
-
-        unique_samples, counts = torch.unique(batch_samples, return_counts=True)
-        repeat_indexes = torch.from_numpy(
-            self._create_repeat_index_from_counts(
-                unique_samples.numpy(), counts.numpy()
-            )
-        ).long()
-
         return NaiveSharedNegativeSample(
             self.config,
             self.configuration_key,
             positive_triples,
             slot,
             num_samples,
-            unique_samples,
-            repeat_indexes,
+            batch_samples,
+            torch.empty(0),
         )
+
+        # don't use repeat index as it is faster without
+        # unique_samples, counts = torch.unique(batch_samples, return_counts=True)
+        # repeat_indexes = torch.from_numpy(
+        #     self._create_repeat_index_from_counts(
+        #         unique_samples.numpy(), counts.numpy()
+        #     )
+        # ).long()
+
+        # return NaiveSharedNegativeSample(
+        #     self.config,
+        #     self.configuration_key,
+        #     positive_triples,
+        #     slot,
+        #     num_samples,
+        #     unique_samples,
+        #     repeat_indexes,
+        # )
 
     @staticmethod
     @numba.njit
@@ -1028,6 +1056,11 @@ class KgeCombinedSampler(KgeSampler):
         self.sampler_2_percentage = self.get_option(
             "combined_options.negatives_percentage"
         )
+        if config.get("negative_sampling.shared_type") == "naive" and config.get("negative_sampling.shared") and type(self.sampler_2) is KgeBatchSampler:
+            # enforce more efficient scoring
+            # here we avoid that a repeat index is used in the naive shared sampler
+            warnings.warn("setting with replacement to true to sampler 1. This allows for more efficient scoring. Only used in the combination of naive shared sampling with batch sampling.")
+            self.sampler_1.with_replacement = False
 
     def _create_second_sampler_config(self):
         """
