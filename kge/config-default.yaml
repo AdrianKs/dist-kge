@@ -34,6 +34,7 @@ job:
     num_workers: 1
     num_workers_machine: -1  # number of workers on this machine. -1 equals num_workers
     already_init_workers: 0  # number of already initialized workers on other machines
+    num_eval_workers: 1  # number of workers to run the evaluation job
     num_machines: 1
     machine_id: 0
     num_threads_per_process: 2  # omp threads per process

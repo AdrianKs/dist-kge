@@ -140,6 +140,9 @@ class WorkerProcess(mp.get_context("spawn").Process):
         )
         worker_ranks = list(range(min_rank, self.num_total_workers+min_rank))
         worker_group = dist.new_group(worker_ranks, timeout=datetime.timedelta(hours=6))
+        num_eval_workers = self.config.get("job.distributed.num_eval_workers")
+        eval_worker_ranks = list(range(min_rank, num_eval_workers+min_rank))
+        eval_worker_group = dist.new_group(eval_worker_ranks, timeout=datetime.timedelta(hours=6))
 
         # create parameter server
         server = None
@@ -180,6 +183,7 @@ class WorkerProcess(mp.get_context("spawn").Process):
             num_keys=self.num_keys,
             num_meta_keys=self.num_meta_keys,
             worker_group=worker_group,
+            eval_worker_group=eval_worker_group
         )
         # don't re-initialize the model after loading checkpoint
         init_for_load_only = self.checkpoint_name is not None

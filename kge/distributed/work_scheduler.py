@@ -30,6 +30,8 @@ class SCHEDULER_CMDS(IntEnum):
     GET_INIT_WORK = 8
     GET_LOCAL_ENT = 9
     PRE_LOCALIZE_WORK = 10
+    REGISTER_EVAL_RESULT = 11
+    GET_EVAL_RESULT = 12
 
 @dataclass
 class WorkPackage:
@@ -71,6 +73,7 @@ class WorkScheduler(mp.get_context("fork").Process):
         self.repartition_epoch = repartition_epoch
         self.init_up_to_entity = -1
         self.num_processed_partitions = 0
+        self.eval_hists = []
         if self.repartition_epoch:
             self.repartition_future = None
             self.repartition_worker_pool = None
@@ -193,6 +196,9 @@ class WorkScheduler(mp.get_context("fork").Process):
         #  all processes
         worker_ranks = list(range(self.min_rank, self.world_size))
         worker_group = dist.new_group(worker_ranks, timeout=datetime.timedelta(hours=6))
+        num_eval_workers = self.config.get("job.distributed.num_eval_workers")
+        eval_worker_ranks = list(range(self.min_rank, self.min_rank + num_eval_workers))
+        eval_worker_group = dist.new_group(eval_worker_ranks, timeout=datetime.timedelta(hours=6))
         barrier_count = 0
         shutdown_count = 0
         epoch_time = None
@@ -265,6 +271,10 @@ class WorkScheduler(mp.get_context("fork").Process):
                 self._send_work(
                     rank, cmd_buffer, work_package, pre_localize=True
                 )
+            elif cmd == SCHEDULER_CMDS.REGISTER_EVAL_RESULT:
+                self._handle_register_eval_result(rank, cmd_buffer)
+            elif cmd == SCHEDULER_CMDS.GET_EVAL_RESULT:
+                self._handle_get_eval_result(rank)
             else:
                 raise ValueError(
                     f"The work scheduler received an unknown command: {cmd}"
@@ -349,6 +359,24 @@ class WorkScheduler(mp.get_context("fork").Process):
 
     def _handle_pre_localize_work(self, rank, machine_id):
         raise ValueError("The current partition scheme does not support pre-localizing")
+
+    def _handle_register_eval_result(self, rank, cmd_buffer):
+        num_sub_hists = cmd_buffer[1]
+        first_eval = False
+        if len(self.eval_hists) == 0:
+            first_eval = True
+        for j in range(num_sub_hists):
+            ranks = torch.empty(self.dataset.num_entities())
+            dist.recv(ranks, src=rank)
+            if first_eval:
+                self.eval_hists.append(ranks)
+            else:
+                self.eval_hists[j] += ranks
+
+    def _handle_get_eval_result(self, rank):
+        for i, h in enumerate(self.eval_hists):
+            dist.send(h, dst=rank)
+        self.eval_hists = []
 
     def _get_max_entities(self):
         return 0
@@ -1362,6 +1390,26 @@ class SchedulerClient:
         if cmd[0] > -1:
             return torch.arange(cmd[0], cmd[1], dtype=torch.long)
         return None
+
+    def register_eval_result(self, hist: dict, hist_filt: dict, hist_filt_test: dict):
+        hists = [hist, hist_filt, hist_filt_test]
+        cmd = torch.LongTensor([SCHEDULER_CMDS.REGISTER_EVAL_RESULT, sum(len(h) for h in hists)])
+        dist.send(cmd, dst=self.scheduler_rank)
+        for h in hists:
+            for v in h.values():
+                ranks = v.cpu()
+                dist.send(ranks, dst=self.scheduler_rank)
+
+    def get_eval_result(self, hist: dict, hist_filt: dict, hist_filt_test: dict):
+        cmd = torch.LongTensor([SCHEDULER_CMDS.GET_EVAL_RESULT, -1])
+        dist.send(cmd, dst=self.scheduler_rank)
+        hists = [hist, hist_filt, hist_filt_test]
+        for h in hists:
+            for key, values in h.items():
+                ranks = torch.empty(len(values))
+                dist.recv(ranks, src=self.scheduler_rank)
+                h[key] = ranks
+        return hist, hist_filt, hist_filt_test
 
     def get_local_entities(self):
         cmd = torch.LongTensor([SCHEDULER_CMDS.GET_LOCAL_ENT, -1])

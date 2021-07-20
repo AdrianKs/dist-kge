@@ -137,13 +137,6 @@ def init_lapse_scheduler(
     # we are only initializing dist here to have the same ranks for lapse and torch
     os.environ["MASTER_ADDR"] = master_ip
     os.environ["MASTER_PORT"] = master_port
-    dist.init_process_group(
-        backend="gloo", init_method="env://", world_size=dist_world_size, rank=0,
-        timeout=datetime.timedelta(hours=6),
-    )
-    # process groups need to be initialized in every process
-    worker_ranks = list(range(min_rank, servers + min_rank))
-    worker_group = dist.new_group(worker_ranks, timeout=datetime.timedelta(hours=6))
     os.environ["DMLC_NUM_WORKER"] = "0"
     os.environ["DMLC_NUM_SERVER"] = str(servers)
     os.environ["DMLC_ROLE"] = "scheduler"

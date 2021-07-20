@@ -462,7 +462,8 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             with torch.cuda.device(self.device):
                 torch.cuda.empty_cache()
         self.parameter_client.barrier()
-        if self.parameter_client.rank == self.min_rank:
+        num_eval_workers = self.config.get("job.distributed.num_eval_workers")
+        if self.parameter_client.rank in range(self.min_rank, self.min_rank + num_eval_workers):
             # create a model for validation with entity embedder size
             #  batch_size x 2 + eval.chunk_size
             self.config.set(self.config.get("model") + ".create_eval", True)
@@ -478,6 +479,7 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             self.config.set(self.config.get("model") + ".create_eval", False)
 
             self.valid_job.model = self.model
+            self.valid_job.work_scheduler_client = self.work_scheduler_client
             # validate and update learning rate
             super(TrainingJobNegativeSamplingDistributed, self).handle_validation(
                 metric_name

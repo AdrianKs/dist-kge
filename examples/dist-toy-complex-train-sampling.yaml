@@ -1,7 +1,10 @@
+import:
+  - complex
+  - distributed_model
 job.type: train
 job.device: cpu
 dataset.name: toy
-model: complex
+model: distributed_model
 
 train:
   type: negative_sampling

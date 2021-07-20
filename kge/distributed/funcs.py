@@ -74,7 +74,8 @@ def create_and_run_distributed(
     # specific settings for valid only jobs
     if config.get("job.type") in ["valid", "test", "eval"]:
         config.set("job.distributed.parameter_server", "shared")
-        config.set("job.distributed.num_workers", 1)
+        num_eval_workers = config.get("job.distributed.num_eval_workers")
+        config.set("job.distributed.num_workers", num_eval_workers)
         config.set("job.distributed.num_workers_machine", 1)
         config.set("job.distributed.num_machines", 1)
         config.set("job.distributed.gloo_socket_ifname", "lo")
@@ -185,27 +186,29 @@ def create_and_run_distributed(
             p.start()
 
         # create a work scheduler
-        if config.get("job.type") == "train":
+        if config.get("job.type") != "train":
+            partition_type = "random"
+        else:
             partition_type = config.get("job.distributed.partition_type")
-            print("init scheduler")
-            scheduler_init_time = time.time()
-            scheduler = WorkScheduler.create(
-                config=config,
-                partition_type=partition_type,
-                world_size=num_workers + min_rank,
-                master_ip=master_ip,
-                master_port=master_port,
-                num_partitions=num_partitions,
-                num_clients=num_workers,
-                dataset=dataset,
-                repartition_epoch=config.get("job.distributed.repartition_epoch"),
-            )
-            config.log(f"scheduler initialized after: {time.time()-scheduler_init_time}")
-            print("start scheduler")
-            scheduler_start_time = time.time()
-            processes.append(scheduler)
-            scheduler.start()
-            config.log(f"scheduler start took: {time.time()-scheduler_start_time}")
+        print("init scheduler")
+        scheduler_init_time = time.time()
+        scheduler = WorkScheduler.create(
+            config=config,
+            partition_type=partition_type,
+            world_size=num_workers + min_rank,
+            master_ip=master_ip,
+            master_port=master_port,
+            num_partitions=num_partitions,
+            num_clients=num_workers,
+            dataset=dataset,
+            repartition_epoch=config.get("job.distributed.repartition_epoch"),
+        )
+        config.log(f"scheduler initialized after: {time.time()-scheduler_init_time}")
+        print("start scheduler")
+        scheduler_start_time = time.time()
+        processes.append(scheduler)
+        scheduler.start()
+        config.log(f"scheduler start took: {time.time()-scheduler_start_time}")
 
     # create all train-workers in a worker pool
     num_workers = config.get("job.distributed.num_workers")
