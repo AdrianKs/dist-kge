@@ -595,11 +595,13 @@ class EntityRankingJob(EvaluationJob):
                         )
                     )
 
+            epoch_time += time.time()
             # update trace with results
             self.current_trace["epoch"].update(
                 dict(epoch_time=epoch_time, event="eval_completed", **metrics,)
             )
-        epoch_time += time.time()
+        else:
+            epoch_time += time.time()
 
     def _densify_labels_of_targets(
         self, labels: torch.Tensor, targets: Union[torch.Tensor, slice]
