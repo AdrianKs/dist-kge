@@ -122,8 +122,7 @@ class EntityRankingJob(EvaluationJob):
             "eval.num_workers") > 0 else None
         if "Distributed" in str(type(self.model)):
             num_eval_workers = self.config.get("job.distributed.num_eval_workers")
-            print("split rank", self.model.parameter_client.rank - get_min_rank(self.config) - 1)
-            self.triples_split = self.triples.chunk(num_eval_workers)[self.model.parameter_client.rank - get_min_rank(self.config) - 1]
+            self.triples_split = self.triples.chunk(num_eval_workers)[self.model.parameter_client.rank - get_min_rank(self.config)]
         else:
             self.triples_split = self.triples
         self.loader = torch.utils.data.DataLoader(
