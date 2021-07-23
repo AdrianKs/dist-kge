@@ -107,12 +107,16 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
         optimizer=None,
         forward_only=False,
         parameter_client=None,
+        work_scheduler_client=None,
         init_for_load_only=False,
     ):
         self.parameter_client = parameter_client
         self.min_rank = get_min_rank(config)
 
-        self.work_scheduler_client = SchedulerClient(config)
+        if work_scheduler_client is None:
+            self.work_scheduler_client = SchedulerClient(config)
+        else:
+            self.work_scheduler_client = work_scheduler_client
         (
             max_partition_entities,
             max_partition_relations,
@@ -148,6 +152,7 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             optimizer=optimizer,
             forward_only=forward_only,
             parameter_client=parameter_client,
+            work_scheduler_client=work_scheduler_client,
         )
         self.type_str = "negative_sampling"
         self.load_batch = self.config.get("job.distributed.load_batch")
@@ -479,7 +484,6 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             self.config.set(self.config.get("model") + ".create_eval", False)
 
             self.valid_job.model = self.model
-            self.valid_job.work_scheduler_client = self.work_scheduler_client
             # validate and update learning rate
             super(TrainingJobNegativeSamplingDistributed, self).handle_validation(
                 metric_name

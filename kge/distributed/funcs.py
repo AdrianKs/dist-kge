@@ -76,7 +76,7 @@ def create_and_run_distributed(
         config.set("job.distributed.parameter_server", "shared")
         num_eval_workers = config.get("job.distributed.num_eval_workers")
         config.set("job.distributed.num_workers", num_eval_workers)
-        config.set("job.distributed.num_workers_machine", 1)
+        config.set("job.distributed.num_workers_machine", num_eval_workers)
         config.set("job.distributed.num_machines", 1)
         config.set("job.distributed.gloo_socket_ifname", "lo")
         config.set("job.distributed.master_ip", "127.0.0.1")

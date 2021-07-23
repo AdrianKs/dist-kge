@@ -7,7 +7,7 @@ dataset.name: toy
 model: distributed_model
 
 train:
-  type: negative_sampling
+  type: distributed_negative_sampling
   optimizer: dist_adagrad
   optimizer_args:
     lr: 0.6

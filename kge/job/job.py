@@ -74,6 +74,7 @@ class Job:
         parent_job=None,
         model=None,
         parameter_client=None,
+        work_scheduler_client=None,
         init_for_load_only=False
     ):
         "Create a new job."
@@ -96,7 +97,7 @@ class Job:
             return SearchJob.create(config, dataset, parent_job=parent_job)
         elif job_type == "eval":
             return EvaluationJob.create(
-                config, dataset, parent_job=parent_job, model=model, parameter_client=parameter_client
+                config, dataset, parent_job=parent_job, model=model, parameter_client=parameter_client, work_scheduler_client=work_scheduler_client
             )
         else:
             raise ValueError("unknown job type")
@@ -223,13 +224,13 @@ class TrainingOrEvaluationJob(Job):
         """
         from kge.distributed.misc import get_min_rank
         self.parameter_client.barrier()
+        if self.model is None:
+            from kge.model import KgeModel
+            self.model = KgeModel.create(
+                config=self.config, dataset=self.dataset,
+                parameter_client=self.parameter_client
+            )
         if self.parameter_client.rank == get_min_rank(self.config):
-            if self.model is None:
-                from kge.model import KgeModel
-                self.model = KgeModel.create(
-                    config=self.config, dataset=self.dataset,
-                    parameter_client=self.parameter_client
-                )
             checkpoint_name, file_ending = checkpoint_name.rsplit(".", 1)
             entities_dir = checkpoint_name + "_entities"
             entities_ps_offset = self.model.get_s_embedder().lapse_offset

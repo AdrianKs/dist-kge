@@ -17,7 +17,11 @@ class EntityRankingJob(EvaluationJob):
 
     def __init__(self, config: Config, dataset: Dataset, parent_job, model, parameter_client=None, work_scheduler_client=None):
         super().__init__(config, dataset, parent_job, model, parameter_client=parameter_client)
-        self.work_scheduler_client = work_scheduler_client
+        if work_scheduler_client is None:
+            from kge.distributed.work_scheduler import SchedulerClient
+            self.work_scheduler_client = SchedulerClient(config)
+        else:
+            self.work_scheduler_client = work_scheduler_client
         self.config.check(
             "entity_ranking.tie_handling",
             ["rounded_mean_rank", "best_rank", "worst_rank"],
