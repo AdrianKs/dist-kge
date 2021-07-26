@@ -1,6 +1,8 @@
 import os
 import time
 import logging
+import warnings
+
 import psutil
 from signal import signal, SIGINT
 from py3nvml.py3nvml import *
@@ -26,14 +28,26 @@ def monitor_hardware(folder, interval=1):
     fh.setLevel(logging.DEBUG)
     logger.addHandler(fh)
 
+    # let's monitor the default connection between OUR two servers
+    # todo: just monitor all interfaces later on
+    interface = "enp130s0f0"
     while True:
         time.sleep(interval)
         cpu_percentage = psutil.cpu_percent()
         memory_percentage = psutil.virtual_memory().percent
         network_info = psutil.net_io_counters()
-        # timestamp;cpu%;mem%;net_sent;net_recv
+        bytes_sent = network_info.bytes_sent
+        bytes_recv = network_info.bytes_recv
+        # timestamp;cpu%;mem%;net_sent;net_recvm
+
+        msg = f"{time.time()};{cpu_percentage};{memory_percentage};{bytes_to_mb(bytes_sent)};{bytes_to_mb(bytes_recv)}"
+        network_info = psutil.net_io_counters(pernic=True)
+        if interface in network_info.keys():
+            bytes_sent = network_info[interface].bytes_sent
+            bytes_recv = network_info[interface].bytes_recv
+            msg += f";{bytes_to_mb(bytes_sent)};{bytes_to_mb(bytes_recv)}"
         logger.info(
-            msg=f"{time.time()};{cpu_percentage};{memory_percentage};{bytes_to_mb(network_info.bytes_sent)};{bytes_to_mb(network_info.bytes_recv)}"
+            msg=msg
         )
 
 
@@ -71,6 +85,16 @@ def monitor_gpus(folder, interval=1):
 def create_and_run_distributed(
     config: Config, dataset: Optional[Dataset] = None, checkpoint: Optional[Dict] = None
 ):
+    # setting num eval workers to 1 if < 1
+    if config.get("job.distributed.num_eval_workers") < 1:
+        warnings.warn("Need to have at least one worker for evaluation."
+                      "Setting job.distributed.num_eval_workers to 1")
+        config.set("job.distributed.num_eval_workers", 1)
+    # setting num workers to 1 if < 1
+    if config.get("job.distributed.num_workers") < 1:
+        warnings.warn("Need to have at least one worker for training."
+                      "Setting job.distribtued.num_workers to 1")
+        config.set("job.distributed.num_workers", 1)
     # specific settings for valid only jobs
     if config.get("job.type") in ["valid", "test", "eval"]:
         config.set("job.distributed.parameter_server", "shared")
@@ -179,6 +203,7 @@ def create_and_run_distributed(
                     master_ip,
                     master_port,
                     min_rank,
+                    config.get("job.distributed.num_eval_workers")
                 ),
                 daemon=True,
             )
