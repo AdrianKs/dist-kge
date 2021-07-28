@@ -1,3 +1,4 @@
+import os
 import math
 import time
 
@@ -9,13 +10,18 @@ from kge import Config, Dataset
 from kge.util import KgeSampler
 from collections import defaultdict
 from typing import Union
-
+from kge.distributed.misc import get_min_rank
 
 class EntityRankingJob(EvaluationJob):
     """ Entity ranking evaluation protocol """
 
-    def __init__(self, config: Config, dataset: Dataset, parent_job, model, parameter_client=None):
+    def __init__(self, config: Config, dataset: Dataset, parent_job, model, parameter_client=None, work_scheduler_client=None):
         super().__init__(config, dataset, parent_job, model, parameter_client=parameter_client)
+        if work_scheduler_client is None:
+            from kge.distributed.work_scheduler import SchedulerClient
+            self.work_scheduler_client = SchedulerClient(config)
+        else:
+            self.work_scheduler_client = work_scheduler_client
         self.config.check(
             "entity_ranking.tie_handling",
             ["rounded_mean_rank", "best_rank", "worst_rank"],
@@ -83,7 +89,7 @@ class EntityRankingJob(EvaluationJob):
                 "shared": True,
                 "shared_type": "naive",
                 "with_replacement": False,
-                "sampling_type": "uniform",
+                "sampling_type": self.config.get("entity_ranking.rank_against_options.sampling_type"),
                 "frequency.smoothing": 1,
                 "implementation": "batch",
                 "combined": self.config.get("entity_ranking.rank_against_options.combined"),
@@ -118,8 +124,13 @@ class EntityRankingJob(EvaluationJob):
         # and data loader
         mp_context = torch.multiprocessing.get_context("fork") if self.config.get(
             "eval.num_workers") > 0 else None
+        if "Distributed" in str(type(self.model)):
+            num_eval_workers = self.config.get("job.distributed.num_eval_workers")
+            self.triples_split = self.triples.chunk(num_eval_workers)[self.model.parameter_client.rank - get_min_rank(self.config)]
+        else:
+            self.triples_split = self.triples
         self.loader = torch.utils.data.DataLoader(
-            self.triples,
+            self.triples_split,
             collate_fn=self._collate,
             shuffle=False,
             batch_size=self.batch_size,
@@ -556,26 +567,44 @@ class EntityRankingJob(EvaluationJob):
             if filter_with_test:
                 merge_hist(hists_filt_test, batch_hists_filt_test)
 
-        # we are done; compute final metrics
         self.config.print("\033[2K\r", end="", flush=True)  # clear line and go back
-        for key, hist in hists.items():
-            name = "_" + key if key != "all" else ""
-            metrics.update(self._compute_metrics(hists[key], suffix=name))
-            metrics.update(
-                self._compute_metrics(hists_filt[key], suffix="_filtered" + name)
-            )
-            if filter_with_test:
+        calc_global_metrics = True
+        if "Distributed" in str(type(self.model)):
+            self.work_scheduler_client.register_eval_result(hists, hists_filt, hists_filt_test)
+            self.model.parameter_client.barrier_eval()
+            if self.model.parameter_client.rank == get_min_rank(self.config):
+                def _move_dict_to_device(h):
+                    for key, value in h.items():
+                        h[key] = value.to(self.device)
+                hists, hists_filt, hists_filt_test = self.work_scheduler_client.get_eval_result(hists, hists_filt, hists_filt_test)
+                _move_dict_to_device(hists)
+                _move_dict_to_device(hists_filt)
+                _move_dict_to_device(hists_filt_test)
+                calc_global_metrics = True
+            else:
+                calc_global_metrics = False
+            self.model.parameter_client.barrier_eval()
+        if calc_global_metrics:
+            for key, hist in hists.items():
+                name = "_" + key if key != "all" else ""
+                metrics.update(self._compute_metrics(hists[key], suffix=name))
                 metrics.update(
-                    self._compute_metrics(
-                        hists_filt_test[key], suffix="_filtered_with_test" + name
-                    )
+                    self._compute_metrics(hists_filt[key], suffix="_filtered" + name)
                 )
-        epoch_time += time.time()
+                if filter_with_test:
+                    metrics.update(
+                        self._compute_metrics(
+                            hists_filt_test[key], suffix="_filtered_with_test" + name
+                        )
+                    )
 
-        # update trace with results
-        self.current_trace["epoch"].update(
-            dict(epoch_time=epoch_time, event="eval_completed", **metrics,)
-        )
+            epoch_time += time.time()
+            # update trace with results
+            self.current_trace["epoch"].update(
+                dict(epoch_time=epoch_time, event="eval_completed", **metrics,)
+            )
+        else:
+            epoch_time += time.time()
 
     def _densify_labels_of_targets(
         self, labels: torch.Tensor, targets: Union[torch.Tensor, slice]

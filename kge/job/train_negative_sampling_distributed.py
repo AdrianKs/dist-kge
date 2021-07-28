@@ -107,12 +107,16 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
         optimizer=None,
         forward_only=False,
         parameter_client=None,
+        work_scheduler_client=None,
         init_for_load_only=False,
     ):
         self.parameter_client = parameter_client
         self.min_rank = get_min_rank(config)
 
-        self.work_scheduler_client = SchedulerClient(config)
+        if work_scheduler_client is None:
+            self.work_scheduler_client = SchedulerClient(config)
+        else:
+            self.work_scheduler_client = work_scheduler_client
         (
             max_partition_entities,
             max_partition_relations,
@@ -148,6 +152,7 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             optimizer=optimizer,
             forward_only=forward_only,
             parameter_client=parameter_client,
+            work_scheduler_client=work_scheduler_client,
         )
         self.type_str = "negative_sampling"
         self.load_batch = self.config.get("job.distributed.load_batch")
@@ -155,6 +160,7 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
         self.relation_localize = self.config.get("job.distributed.relation_localize")
         self.entity_partition_localized = False
         self.relation_partition_localized = False
+        self.local_entities = None
         self.entity_async_write_back = self.config.get(
             "job.distributed.entity_async_write_back"
         )
@@ -176,6 +182,7 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
                 torch.full((self.dataset.num_entities(),), -1, dtype=torch.long)
             )
 
+        # also defines the local entities
         self._initialize_parameter_server(init_for_load_only=init_for_load_only)
 
         def stop_and_wait(job):
@@ -208,17 +215,16 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             # only the first worker initializes the relations
             if self.parameter_client.rank == self.min_rank:
                 self.model.get_p_embedder().push_all()
-            while True:
-                init_entities = self.work_scheduler_client.get_init_work(
-                    self.model.get_s_embedder().vocab_size
-                )
-                if init_entities is None:
-                    break
+            entity_embedding_layer_size = self.model.get_s_embedder()._embeddings.weight.data.shape[0]
+            self.local_entities = self.work_scheduler_client.get_local_entities()
+            self.parameter_client.localize(self.local_entities, asynchronous=True)
+            init_work_packages = self.local_entities.split(entity_embedding_layer_size)
+            for init_work_package in init_work_packages:
                 self.model.get_s_embedder().initialize(
                     self.model.get_s_embedder()._embeddings.weight.data
                 )
                 self.model.get_s_embedder()._normalize_embeddings()
-                self._push_init_to_parameter_server(init_entities)
+                self._push_init_to_parameter_server(init_work_package)
         self.parameter_client.barrier()
 
     def _push_init_to_parameter_server(self, entity_ids: torch.Tensor):
@@ -269,6 +275,12 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
         )
         # initializing dataloader as soon as we got the triples from work scheduler
         self.loader = None
+        if self.config.get("negative_sampling.sampling_type") == "pooled":
+            if self.local_entities is None:
+                self.local_entities = self.work_scheduler_client.get_local_entities()
+                self.parameter_client.localize(self.local_entities)
+            self._sampler.set_pool(self.local_entities, S)
+            self._sampler.set_pool(self.local_entities, O)
 
     def _get_collate_fun(self):
         # create the collate function
@@ -451,10 +463,12 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
         if hasattr(self.valid_job, "model"):
             del self.valid_job.model
         gc.collect()
-        with torch.cuda.device(self.device):
-            torch.cuda.empty_cache()
+        if "cuda" in self.device:
+            with torch.cuda.device(self.device):
+                torch.cuda.empty_cache()
         self.parameter_client.barrier()
-        if self.parameter_client.rank == self.min_rank:
+        num_eval_workers = self.config.get("job.distributed.num_eval_workers")
+        if self.parameter_client.rank in range(self.min_rank, self.min_rank + num_eval_workers):
             # create a model for validation with entity embedder size
             #  batch_size x 2 + eval.chunk_size
             self.config.set(self.config.get("model") + ".create_eval", True)
@@ -479,8 +493,9 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             del self.model
             del self.valid_job.model
             gc.collect()
-            with torch.cuda.device(self.device):
-                torch.cuda.empty_cache()
+            if "cuda" in self.device:
+                with torch.cuda.device(self.device):
+                    torch.cuda.empty_cache()
         else:
             self.kge_lr_scheduler.step()
         self.parameter_client.barrier()
@@ -622,6 +637,7 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
                 work_entities is not None
                 and self.config.get("negative_sampling.sampling_type") == "pooled"
             ):
+                self.local_entities = work_entities
                 self._sampler.set_pool(work_entities, S)
                 self._sampler.set_pool(work_entities, O)
             self.dataloader_dataset.set_samples(

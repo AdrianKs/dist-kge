@@ -169,7 +169,7 @@ def _run_train_job(sicnk, device=None):
             for trace_entry in job.valid_trace:
                 copy_to_search_trace(None, trace_entry)
         else:
-            if train_job_config.get("job.distributed.num_workers") > 0:
+            if "distributed" in train_job_config.get("model"):
                 from kge.distributed.funcs import create_and_run_distributed
                 valid_trace = create_and_run_distributed(config=train_job_config, dataset=search_job.dataset)
             else:
@@ -179,7 +179,8 @@ def _run_train_job(sicnk, device=None):
                     parent_job=search_job,
                 )
 
-        if train_job_config.get("job.distributed.num_workers") <= 0:
+        # if train_job_config.get("job.distributed.num_workers") <= 0:
+        if "distributed" not in train_job_config.get("model"):
             valid_trace = []
 
             # run the job (adding new trace entries as we go)

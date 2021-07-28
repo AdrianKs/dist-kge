@@ -64,6 +64,7 @@ class TrainingJob(TrainingOrEvaluationJob):
         optimizer=None,
         forward_only=False,
         parameter_client=None,
+        work_scheduler_client=None,
     ) -> None:
         from kge.job import EvaluationJob
 
@@ -111,7 +112,7 @@ class TrainingJob(TrainingOrEvaluationJob):
                 valid_conf.set("eval.split", self.config.get("valid.split"))
             valid_conf.set("eval.trace_level", self.config.get("valid.trace_level"))
             self.valid_job = EvaluationJob.create(
-                valid_conf, dataset, parent_job=self, model=self.model
+                valid_conf, dataset, parent_job=self, model=self.model, parameter_client=parameter_client, work_scheduler_client=work_scheduler_client
             )
 
         # attributes filled in by implementing classes
@@ -142,6 +143,7 @@ class TrainingJob(TrainingOrEvaluationJob):
         model=None,
         forward_only=False,
         parameter_client=None,
+        work_scheduler_client=None,
         init_for_load_only=False,
     ) -> "TrainingJob":
         """Factory method to create a training job."""
@@ -159,6 +161,7 @@ class TrainingJob(TrainingOrEvaluationJob):
         if "distributed" in train_type:
             job_config_object.update({
                 "parameter_client": parameter_client,
+                "work_scheduler_client": work_scheduler_client,
                 "init_for_load_only": init_for_load_only
             })
         return init_from(**job_config_object)

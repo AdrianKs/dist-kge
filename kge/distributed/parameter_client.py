@@ -1,9 +1,9 @@
 import torch
 try:
     import lapse
-    import lapse.Worker as LapseWorker
-    import lapse.Server as LapseServer
-except ImportError:
+    from lapse import Worker as LapseWorker
+    from lapse import Server as LapseServer
+except ImportError as e:
     from mock import Mock
     LapseWorker=Mock  # just give something to inherit from
     LapseServer=Mock  # just give something to inherit from
@@ -50,6 +50,7 @@ class KgeParameterClient:
         embedding_dim,
         num_keys,
         worker_group,
+        eval_worker_group,
         server=None,
         num_meta_keys=0,
     ):
@@ -61,6 +62,7 @@ class KgeParameterClient:
                 dim=embedding_dim,
                 num_meta_keys=num_meta_keys,
                 worker_group=worker_group,
+                eval_worker_group=eval_worker_group,
             )
         elif client_type == "torch":
             return TorchParameterClient(
@@ -70,6 +72,7 @@ class KgeParameterClient:
                 num_keys=num_keys,
                 num_meta_keys=num_meta_keys,
                 worker_group=worker_group,
+                eval_worker_group=eval_worker_group,
             )
         elif client_type == "shared":
             return SharedParameterClient(
@@ -77,7 +80,8 @@ class KgeParameterClient:
                 dim=embedding_dim,
                 num_meta_keys=num_meta_keys,
                 worker_group=worker_group,
-                parameters=server
+                eval_worker_group=eval_worker_group,
+                parameters=server,
             )
         else:
             raise ValueError(client_type)
@@ -92,9 +96,11 @@ class LapseParameterClient(LapseWorker, KgeParameterClient):
         dim,
         num_meta_keys,
         worker_group,
+        eval_worker_group
     ):
         super(LapseParameterClient, self).__init__(customer_id, rank, lapse_server)
         self.worker_group = worker_group
+        self.eval_worker_group = eval_worker_group
         self.rank = rank
         self.num_meta_keys = num_meta_keys
         self.dim = dim
@@ -142,6 +148,9 @@ class LapseParameterClient(LapseWorker, KgeParameterClient):
     def barrier(self):
         dist.barrier(group=self.worker_group)
 
+    def barrier_eval(self):
+        dist.barrier(group=self.eval_worker_group)
+
     def wait(self, wait_value):
         super(LapseParameterClient, self).wait(wait_value)
 
@@ -184,7 +193,7 @@ class LapseParameterClient(LapseWorker, KgeParameterClient):
 
 
 class TorchParameterClient(KgeParameterClient):
-    def __init__(self, server_rank, rank, dim, num_keys, num_meta_keys, worker_group):
+    def __init__(self, server_rank, rank, dim, num_keys, num_meta_keys, worker_group, eval_worker_group):
         self.server_rank = server_rank
         self.rank = rank
         self.dim = dim
@@ -195,6 +204,7 @@ class TorchParameterClient(KgeParameterClient):
         self._stop_key = torch.LongTensor([self.num_keys - self.num_meta_keys])
         self._stop_value_tensor = torch.zeros((1, self.dim), dtype=torch.float32)
         self.worker_group = worker_group
+        self.eval_worker_group = eval_worker_group
 
     def pull(self, keys, pull_tensor=None, asynchronous=False):
         cmd = torch.LongTensor([TORCH_PARAMETER_SERVER_CMDS.PULL_CMD, len(keys)])
@@ -221,6 +231,9 @@ class TorchParameterClient(KgeParameterClient):
 
     def barrier(self):
         dist.barrier(group=self.worker_group)
+
+    def barrier_eval(self):
+        dist.barrier(group=self.eval_worker_group)
 
     def stop(self):
         self.push(
@@ -274,7 +287,7 @@ class TorchParameterClient(KgeParameterClient):
 
 
 class SharedParameterClient(KgeParameterClient):
-    def __init__(self, rank, dim, num_meta_keys, worker_group, parameters):
+    def __init__(self, rank, dim, num_meta_keys, worker_group, eval_worker_group, parameters):
         self.parameters = parameters
         self.num_keys = len(parameters)
         self.rank = rank
@@ -282,6 +295,7 @@ class SharedParameterClient(KgeParameterClient):
         self.data_type = torch.float32
         self.lr_buffer = torch.zeros(1, dtype=torch.float32)
         self.worker_group = worker_group
+        self.eval_worker_group = eval_worker_group
         self.num_meta_keys = num_meta_keys
         self._stop_key = torch.LongTensor([self.num_keys - self.num_meta_keys])
         self._optim_entity_step_key = torch.LongTensor(
@@ -323,6 +337,9 @@ class SharedParameterClient(KgeParameterClient):
 
     def barrier(self):
         dist.barrier(group=self.worker_group)
+
+    def barrier_eval(self):
+        dist.barrier(group=self.eval_worker_group)
 
     def stop(self):
         self.push(

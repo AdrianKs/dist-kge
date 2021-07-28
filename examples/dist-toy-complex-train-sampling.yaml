@@ -1,10 +1,13 @@
+import:
+  - complex
+  - distributed_model
 job.type: train
 job.device: cpu
 dataset.name: toy
-model: complex
+model: distributed_model
 
 train:
-  type: negative_sampling
+  type: distributed_negative_sampling
   optimizer: dist_adagrad
   optimizer_args:
     lr: 0.6

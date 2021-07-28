@@ -137,13 +137,6 @@ def init_lapse_scheduler(
     # we are only initializing dist here to have the same ranks for lapse and torch
     os.environ["MASTER_ADDR"] = master_ip
     os.environ["MASTER_PORT"] = master_port
-    dist.init_process_group(
-        backend="gloo", init_method="env://", world_size=dist_world_size, rank=0,
-        timeout=datetime.timedelta(hours=6),
-    )
-    # process groups need to be initialized in every process
-    worker_ranks = list(range(min_rank, servers + min_rank))
-    worker_group = dist.new_group(worker_ranks, timeout=datetime.timedelta(hours=6))
     os.environ["DMLC_NUM_WORKER"] = "0"
     os.environ["DMLC_NUM_SERVER"] = str(servers)
     os.environ["DMLC_ROLE"] = "scheduler"
@@ -153,7 +146,7 @@ def init_lapse_scheduler(
     lapse.scheduler(num_keys, num_workers_per_server)
 
 
-def init_torch_server(num_clients, num_keys, dim, master_ip, master_port, min_rank):
+def init_torch_server(num_clients, num_keys, dim, master_ip, master_port, min_rank, num_eval_workers):
     world_size = num_clients + min_rank
     os.environ["MASTER_ADDR"] = master_ip
     os.environ["MASTER_PORT"] = master_port
@@ -164,4 +157,7 @@ def init_torch_server(num_clients, num_keys, dim, master_ip, master_port, min_ra
     # process groups need to be initialized in every process
     worker_ranks = list(range(min_rank, num_clients + min_rank))
     worker_group = dist.new_group(worker_ranks, timeout=datetime.timedelta(hours=6))
+    eval_worker_ranks = list(range(min_rank, min_rank + num_eval_workers))
+    eval_worker_group = dist.new_group(eval_worker_ranks,
+                                       timeout=datetime.timedelta(hours=6))
     TorchParameterServer(world_size, num_keys, dim)

@@ -1,3 +1,4 @@
+import warnings
 from kge import Config, Configurable, Dataset
 from kge.indexing import where_in
 
@@ -82,6 +83,8 @@ class KgeSampler(Configurable):
             return KgeUniformSampler(config, configuration_key, dataset)
         elif sampling_type == "frequency":
             return KgeFrequencySampler(config, configuration_key, dataset)
+        elif sampling_type == "hfrequency":
+            return KgeHierarchicalFrequencySampler(config, configuration_key, dataset)
         elif sampling_type == "pooled":
             return KgePooledSampler(config, configuration_key, dataset)
         elif sampling_type == "batch":
@@ -662,6 +665,23 @@ class CombinedSharedBatchNegativeSample(BatchNegativeSample):
         return torch.cat((samples_1, samples_2), dim=1)
 
     def score(self, model, indexes=None) -> torch.Tensor:
+        if type(self.batch_negative_sample_1) in [NaiveSharedNegativeSample, BatchNegativeSample] and type(self.batch_negative_sample_2) in [NaiveSharedNegativeSample, BatchNegativeSample]:
+            # lets just concat the scoring here
+            # not as flexible but faster
+            combined_batch_negative = NaiveSharedNegativeSample(
+                self.config,
+                self.configuration_key,
+                self.positive_triples,
+                self.slot,
+                self.num_samples,
+                torch.cat((
+                    self.batch_negative_sample_1.unique_samples(),
+                    self.batch_negative_sample_2.unique_samples()
+                )),
+                repeat_indexes=torch.empty(0, dtype=torch.long, device=self.positive_triples.device),
+            )
+            scores = combined_batch_negative.score(model, indexes)
+            return scores
         scores_1 = self.batch_negative_sample_1.score(model, indexes)
         scores_2 = self.batch_negative_sample_2.score(model, indexes)
         # don't concat empty tensors due to pytorch bug
@@ -847,7 +867,9 @@ class KgeUniformSampler(KgeSampler):
 class KgeFrequencySampler(KgeSampler):
     """
     Sample negatives based on their relative occurrence in the slot in the train set.
+    Sample frequency based in hierarchical fashion
     Can be smoothed with a symmetric prior.
+    Todo: this implementation is very unclean and unfinished
     """
 
     def __init__(self, config, configuration_key, dataset):
@@ -948,6 +970,92 @@ class KgeFrequencySampler(KgeSampler):
             repeat_indexes,
         )
 
+class KgeHierarchicalFrequencySampler(KgeSampler):
+    """
+    Sample negatives based on their relative occurrence in the slot in the train set.
+    Can be smoothed with a symmetric prior.
+    """
+
+    def __init__(self, config, configuration_key, dataset):
+        super().__init__(config, configuration_key, dataset)
+        self._multinomials = []
+        self._h2_multinomials = []
+        alpha = self.get_option("frequency.smoothing")
+        for slot in SLOTS:
+            self.smoothed_counts = (
+                    np.bincount(
+                        dataset.split(config.get("train.split"))[:, slot],
+                        minlength=self.vocabulary_size[slot].item(),
+                    )
+                    + alpha
+            )
+            self.h2_unique_counts, h2_counts_counts= np.unique(self.smoothed_counts, return_counts=True)
+            if self.with_replacement:
+                raise NotImplementedError("with replacement sampling not yet supported with hierarchical frequency sampling")
+            else:
+                self._h2_multinomials.append(torch.from_numpy(h2_counts_counts / np.sum(h2_counts_counts)))
+
+    def _sample(self, positive_triples: torch.Tensor, slot: int, num_samples: int):
+        if num_samples is None:
+            num_samples = self.num_samples[slot].item()
+
+        if num_samples == 0:
+            result = torch.empty([positive_triples.size(0), num_samples])
+        else:
+            if self.with_replacement:
+                raise NotImplementedError()
+            else:
+                result_1 = torch.multinomial(
+                    self._h2_multinomials[slot],
+                    #self.h2_unique_counts,
+                    positive_triples.size(0) * num_samples,
+                    #replacement=False,
+                    replacement=True,  # todo: here we need to sample with replacement, in the next hierarchy replacement should be taken into account...
+                    ).view(positive_triples.size(0), num_samples)
+                result = self._sample_second_hierarchy(self.h2_unique_counts, self.smoothed_counts, result_1.view(-1).numpy())
+                result = torch.from_numpy(result)
+
+        return result
+
+    @staticmethod
+    @numba.njit
+    def _sample_second_hierarchy(h2_unique_counts, smoothed_counts, result_1):
+        return_vector = np.empty(int(len(result_1)), dtype=np.int64)
+        for i, sample_index in enumerate(result_1):
+            unique_count = h2_unique_counts[sample_index]
+            mask = smoothed_counts == unique_count
+            index = np.flatnonzero(mask)
+            s = np.random.randint(0, len(index))
+            return_vector[i] = index[s]
+        return return_vector
+
+    def _sample_shared(
+            self, positive_triples: torch.Tensor, slot: int, num_samples: int
+    ):
+        # note: those are not unique. This is just a quick implementation for evaluation
+        unique_samples = self._sample(
+            positive_triples[0].view(1, -1),
+            slot,
+            num_samples if self.shared_type == "naive" else num_samples + 1,
+        ).view(-1)
+        repeat_indexes = torch.empty(0)
+
+        # for naive shared sampling, we are done
+        if self.shared_type == "naive":
+            return NaiveSharedNegativeSample(
+                self.config,
+                self.configuration_key,
+                positive_triples,
+                slot,
+                num_samples,
+                unique_samples.long(),
+                repeat_indexes,
+            )
+        else:
+            raise NotImplementedError(
+                "shared hierarchical frequency sampling is not yet supported")
+
+
 class KgeBatchSampler(KgeSampler):
     def __init__(self, config, configuration_key, dataset):
         super().__init__(config, configuration_key, dataset)
@@ -974,23 +1082,33 @@ class KgeBatchSampler(KgeSampler):
         batch_samples = positive_triples[:, slot][
             torch.randint(len(positive_triples), (num_samples,), dtype=torch.long)
         ]
-
-        unique_samples, counts = torch.unique(batch_samples, return_counts=True)
-        repeat_indexes = torch.from_numpy(
-            self._create_repeat_index_from_counts(
-                unique_samples.numpy(), counts.numpy()
-            )
-        ).long()
-
         return NaiveSharedNegativeSample(
             self.config,
             self.configuration_key,
             positive_triples,
             slot,
             num_samples,
-            unique_samples,
-            repeat_indexes,
+            batch_samples,
+            torch.empty(0),
         )
+
+        # don't use repeat index as it is faster without
+        # unique_samples, counts = torch.unique(batch_samples, return_counts=True)
+        # repeat_indexes = torch.from_numpy(
+        #     self._create_repeat_index_from_counts(
+        #         unique_samples.numpy(), counts.numpy()
+        #     )
+        # ).long()
+
+        # return NaiveSharedNegativeSample(
+        #     self.config,
+        #     self.configuration_key,
+        #     positive_triples,
+        #     slot,
+        #     num_samples,
+        #     unique_samples,
+        #     repeat_indexes,
+        # )
 
     @staticmethod
     @numba.njit
@@ -1028,6 +1146,11 @@ class KgeCombinedSampler(KgeSampler):
         self.sampler_2_percentage = self.get_option(
             "combined_options.negatives_percentage"
         )
+        if config.get("negative_sampling.shared_type") == "naive" and config.get("negative_sampling.shared") and type(self.sampler_2) is KgeBatchSampler:
+            # enforce more efficient scoring
+            # here we avoid that a repeat index is used in the naive shared sampler
+            warnings.warn("setting with replacement to true to sampler 1. This allows for more efficient scoring. Only used in the combination of naive shared sampling with batch sampling.")
+            self.sampler_1.with_replacement = False
 
     def _create_second_sampler_config(self):
         """

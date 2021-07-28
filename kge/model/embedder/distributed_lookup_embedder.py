@@ -1,3 +1,4 @@
+import math
 import time
 from torch import Tensor
 import torch.nn
@@ -116,22 +117,29 @@ class DistributedLookupEmbedder(LookupEmbedder):
             self_intersect_ind,
             pretrained_intersect_ind,
         ) = self._intersect_ids_with_pretrained_embedder(pretrained_embedder)
-        pretrained_embeddings = pretrained_embedder.embed(
-            torch.from_numpy(pretrained_intersect_ind)
-        )
-        self.parameter_client.push(
-            torch.from_numpy(self_intersect_ind) + self.lapse_offset,
-            torch.cat(
-                (
-                    pretrained_embeddings,
-                    torch.zeros(
-                        (len(pretrained_embeddings), self.optimizer_dim + self.unnecessary_dim),
-                        dtype=pretrained_embeddings.dtype,
+        # process in chunks to reduce memory footprint
+        chunk_size = 1000000
+        num_objects = len(pretrained_intersect_ind)
+        for chunk_number in range(math.ceil(num_objects / chunk_size)):
+            chunk_start = chunk_size * chunk_number
+            chunk_end = min(chunk_size * (chunk_number + 1), num_objects)
+            current_chunk_size = chunk_end - chunk_start
+            pretrained_embeddings = pretrained_embedder.embed(
+                torch.from_numpy(pretrained_intersect_ind[chunk_start:chunk_end])
+            )
+            self.parameter_client.push(
+                torch.from_numpy(self_intersect_ind[chunk_start:chunk_end]) + self.lapse_offset,
+                torch.cat(
+                    (
+                        pretrained_embeddings,
+                        torch.zeros(
+                            (current_chunk_size, self.optimizer_dim + self.unnecessary_dim),
+                            dtype=pretrained_embeddings.dtype,
+                        ),
                     ),
+                    dim=1,
                 ),
-                dim=1,
-            ),
-        )
+            )
 
     def push_all(self):
         if self.unnecessary_dim > 0:
