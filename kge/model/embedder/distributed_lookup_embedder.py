@@ -60,38 +60,26 @@ class DistributedLookupEmbedder(LookupEmbedder):
 
         # 3 pull tensors to pre-pull up to 3 batches
         # first boolean denotes if the tensor is free
-        self.pull_tensors = [
-            [
-                True,
-                torch.empty(
-                    (self.vocab_size, self.parameter_client.dim),
-                    # (self.vocab_size, self.dim + self.optimizer_dim),
-                    dtype=torch.float32,
-                    device="cpu",
-                    requires_grad=False,
-                ),
-            ],
-            [
-                True,
-                torch.empty(
-                    (self.vocab_size, self.parameter_client.dim),
-                    # (self.vocab_size, self.dim + self.optimizer_dim),
-                    dtype=torch.float32,
-                    device="cpu",
-                    requires_grad=False,
-                ),
-            ],
-            [
-                True,
-                torch.empty(
-                    (self.vocab_size, self.parameter_client.dim),
-                    # (self.vocab_size, self.dim + self.optimizer_dim),
-                    dtype=torch.float32,
-                    device="cpu",
-                    requires_grad=False,
-                ),
-            ],
-        ]
+        number_of_pre_pulls = 0
+        if "entity" in self.configuration_key:
+            number_of_pre_pulls = self.config.get("job.distributed.entity_pre_pull")
+        elif "relation" in self.configuration_key:
+            number_of_pre_pulls = self.config.get("job.distributed.relation_pre_pull")
+        self.pull_tensors = []
+        for i in range(number_of_pre_pulls + 1):
+            self.pull_tensors.append(
+                [
+                    True,
+                    torch.empty(
+                        (self.vocab_size, self.parameter_client.dim),
+                        # (self.vocab_size, self.dim + self.optimizer_dim),
+                        dtype=torch.float32,
+                        device="cpu",
+                        requires_grad=False,
+                    ),
+                ]
+            )
+
         if "cuda" in config.get("job.device"):
             # only pin tensors if we are using gpu
             # otherwise gpu memory will be allocated for no reason
