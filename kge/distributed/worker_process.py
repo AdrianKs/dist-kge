@@ -11,7 +11,6 @@ from copy import deepcopy
 from torch import multiprocessing as mp
 from torch import distributed as dist
 
-from kge import Dataset
 from kge.misc import set_seeds
 from kge.job import Job
 from kge.util.io import load_checkpoint
@@ -172,7 +171,6 @@ class WorkerProcess(mp.get_context("spawn").Process):
         config.set("job.device", device_pool[worker_id % len(device_pool)])
         config.folder = os.path.join(self.config.folder, f"worker-{self.rank}")
         config.init_folder()
-        dataset = deepcopy(self.dataset)
 
         parameter_client = KgeParameterClient.create(
             client_type=self.config.get("job.distributed.parameter_server"),
@@ -189,7 +187,7 @@ class WorkerProcess(mp.get_context("spawn").Process):
         init_for_load_only = self.checkpoint_name is not None
         job = Job.create(
             config=config,
-            dataset=dataset,
+            dataset=self.dataset,
             parameter_client=parameter_client,
             init_for_load_only=init_for_load_only,
         )
