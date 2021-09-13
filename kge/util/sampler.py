@@ -1302,6 +1302,9 @@ class KgePooledSampler(KgeSampler):
         # unique_samples = np.random.choice(
         #     self.vocabulary_size[slot], num_unique, replace=False
         # )
+
+        # set pool size to ensure it does not fail in P-slot
+        pool_size = max(1, pool_size)
         unique_samples = self.sample_pools[slot][torch.tensor(random.sample(
             range(pool_size),
             num_unique if self.shared_type == "naive" else num_unique + 1,
