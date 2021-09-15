@@ -36,6 +36,7 @@ job:
   - cuda:0
   - cuda:1
   distributed:
+    parameter_server: lapse
     entity_sync_level: partition
     gloo_socket_ifname: bond0
     master_port: 8899
