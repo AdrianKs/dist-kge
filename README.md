@@ -130,8 +130,8 @@ job:
     master_ip: <some ip>  # ip address of one of your machines
     num_machines: 2
     num_workers_machine: 2
-    gloo_socket_ifname: "bond0"  # name of the interface to use. Use command 'ip address' to find names
-    parameter_server: "lapse"
+    gloo_socket_ifname: bond0  # name of the interface to use. Use command 'ip address' to find names
+    parameter_server: lapse
 ````
 
 
