@@ -38,14 +38,14 @@ For random partitioning no further preparation is needed.
 **Relation Partitioning**
 ```sh
 cd data
-python partition_relation.py <dataset-name> <num-partitions>
+python partition_relation.py <dataset-name> -n <num-partitions>
 cd ..
 ```
 
 **Stratification**
 ```sh
 cd data 
-python partition_stratification.py <dataset-name> <num-partitions>
+python partition_stratification.py <dataset-name> -n <num-partitions>
 cd ..
 ```
 
@@ -53,7 +53,7 @@ cd ..
 
 ````sh
 cd data
-python partition_graph_cut.py <dataset-name> <num-partitions>
+python partition_graph_cut.py <dataset-name> -n <num-partitions>
 cd ..
 ````
 

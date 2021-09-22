@@ -153,15 +153,6 @@ if __name__ == "__main__":
             delimiter="\t",
             fmt="%s",
         )
-    # print("some counting")
-    # unique_pairs, counts = np.unique(
-    #     triple_partition_assignment, return_counts=True, axis=0
-    # )
-    # print(unique_pairs)
-    # print(counts)
-    # print("number of partitions:", len(unique_pairs))
-    # print("\nmean and std of block sizes")
-    # print(round(np.mean(counts), 2), round(np.std(counts), 2))
 
     print("construct partitions")
     partitions = _construct_partitions(triple_partition_assignment, num_partitions)
