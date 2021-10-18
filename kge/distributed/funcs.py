@@ -241,6 +241,8 @@ def create_and_run_distributed(
     if num_workers_machine <= 0:
         num_workers_machine = num_workers
     already_init_workers = config.get("job.distributed.already_init_workers")
+    if already_init_workers < 0:
+        already_init_workers = config.get("job.distributed.machine_id") * config.get("job.distributed.num_workers_machine")
     worker_process_pool = WorkerProcessPool(
         num_workers,
         num_workers_machine,
