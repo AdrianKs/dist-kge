@@ -64,7 +64,7 @@ train:
       type: dist_adagrad
   type: distributed_negative_sampling
 valid:
-  every:5
+  every: 5
   early_stopping:
     patience: 10
     threshold:

@@ -76,7 +76,7 @@ job:
     num_partitions: 4
     num_workers: 4
     partition_type: random
-    master_port: 8888  # change in case this port is used on your machine
+    master_port: '8888'  # change in case this port is used on your machine
   device_pool:
     - cuda:0
     - cuda:1
@@ -114,12 +114,12 @@ Run the following example to train on two machines with one GPU each (1@2) with 
 
 Command for machine 1
 ````sh
-python -m kge start examples/fb15k_complex_parallel.yaml --job.distributed.machine_id 0 --job.distributed.master_ip <some_ip>
+python -m kge start examples/fb15k_complex_distributed.yaml --job.distributed.machine_id 0 --job.distributed.master_ip <some_ip>
 ````
 
 Command for machine 2
 ````sh
-python -m kge start examples/fb15k_complex_parallel.yaml --job.distributed.machine_id 1 --job.distributed.master_ip <some_ip>
+python -m kge start examples/fb15k_complex_distributed.yaml --job.distributed.machine_id 1 --job.distributed.master_ip <some_ip>
 ````
 
 
@@ -127,7 +127,7 @@ Important options for distributed training in addition to the options specified 
 ````yaml
 job:
   distributed:
-    master_ip: <some ip>  # ip address of one of your machines
+    master_ip: '<some ip>'  # ip address of one of your machines
     num_machines: 2
     num_workers_machine: 2
     gloo_socket_ifname: bond0  # name of the interface to use. Use command 'ip address' to find names
