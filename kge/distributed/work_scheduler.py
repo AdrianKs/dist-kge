@@ -599,7 +599,7 @@ class RelationWorkScheduler(WorkScheduler):
         # todo: let the partitions start at zero, then we do not need this unique
         partition_indexes = np.unique(partition_assignment)
         partitions = [
-            torch.from_numpy(np.where(partition_assignment == i)[0])
+            torch.from_numpy(np.where(partition_assignment == i)[0]).contiguous()
             for i in partition_indexes
         ]
         return partitions
@@ -609,7 +609,7 @@ class RelationWorkScheduler(WorkScheduler):
         for partition in range(self.num_partitions):
             relations_in_partition[partition] = torch.from_numpy(
                 np.where((self.relations_to_partition == partition),)[0]
-            )
+            ).contiguous()
         return relations_in_partition
 
     def _refill_work(self):
