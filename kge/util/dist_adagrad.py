@@ -44,6 +44,7 @@ class DistAdagrad(Optimizer):
         async_write_back=[],
         is_row=False,
         use_lr_scheduler=False,
+        min_rank=-1,
     ):
         if not 0.0 <= lr:
             raise ValueError("Invalid learning rate: {}".format(lr))
@@ -77,6 +78,7 @@ class DistAdagrad(Optimizer):
             "relation": None,
         }
         self.use_lr_scheduler = use_lr_scheduler
+        self.min_rank = min_rank
         self.entity_async_wait_values = deque()
         self.relation_async_wait_values = deque()
         self.async_wait_values = {
@@ -147,7 +149,7 @@ class DistAdagrad(Optimizer):
                 else:
                     state["step"] += 1
                 if self.use_lr_scheduler:
-                    if self.parameter_client.rank == 2:
+                    if self.parameter_client.rank == self.min_rank:
                         if group["prev_lr"] != group["lr"]:
                             self.parameter_client.set_lr(group["name"], group["lr"])
                     group["lr"] = self.parameter_client.get_lr(group["name"])

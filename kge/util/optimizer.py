@@ -23,14 +23,20 @@ class KgeOptimizer:
             )
             return optimizer
         if config.get("train.optimizer.default.type") in ["dist_adagrad", "dist_rowadagrad"]:
-            is_row=False
-            use_lr_scheduler=False
+            from kge.distributed.misc import get_min_rank
+            is_row = False
+            use_lr_scheduler = False
             if config.get("train.optimizer.default.type") == "dist_rowadagrad":
                 is_row = True
             if config.get("train.lr_scheduler") != "":
                 use_lr_scheduler = True
+            min_rank = get_min_rank(config)
             optimizer = DistAdagrad(
-                KgeOptimizer._get_parameters_and_optimizer_args(config, model, distributed=True),
+                KgeOptimizer._get_parameters_and_optimizer_args(
+                    config,
+                    model,
+                    distributed=True
+                ),
                 parameter_client=parameter_client,
                 lapse_indexes=lapse_indexes,
                 lapse_optimizer_index_offset=model.dataset.num_entities() + model.dataset.num_relations(),
@@ -38,6 +44,7 @@ class KgeOptimizer:
                                   config.get("job.distributed.relation_async_write_back")],
                 is_row=is_row,
                 use_lr_scheduler=use_lr_scheduler,
+                min_rank=min_rank,
                 **config.get("train.optimizer.default.args"),
             )
             return optimizer
