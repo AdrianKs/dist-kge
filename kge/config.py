@@ -751,6 +751,12 @@ def _process_deprecated_options(options: Dict[str, Any]):
                     renamed_keys.add(key)
         return renamed_keys
 
+    # 19.10.21
+    rename_key(
+        "job.distributed.combine_mirror_blocks",
+        "job.distributed.stratification.combine_mirror"
+    )
+
     # 21.04.21
     delete_key_with_value("num_workers", 1)
     delete_key_with_value("job.distributed.scheduling_order", "random")
