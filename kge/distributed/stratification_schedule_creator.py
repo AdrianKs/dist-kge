@@ -3,9 +3,9 @@ import numpy as np
 from typing import List, Tuple
 
 
-class TwoDBlockScheduleCreator:
+class StratificationScheduleCreator:
     """
-    Creates a non blocking schedule for TwoDBLock partitioning
+    Creates a non blocking schedule for stratification partitioning
     can only handle num partitions of base 2
     num partitions needs to be 2*num_workers
     """
