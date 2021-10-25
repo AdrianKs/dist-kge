@@ -127,7 +127,7 @@ class WorkerProcess(mp.get_context("spawn").Process):
         set_seeds(self.config, self.rank)
 
         os.environ["MASTER_ADDR"] = self.config.get("job.distributed.master_ip")
-        os.environ["MASTER_PORT"] = self.config.get("job.distributed.master_port")
+        os.environ["MASTER_PORT"] = str(self.config.get("job.distributed.master_port"))
         min_rank = get_min_rank(self.config)
         print("before init", self.rank + min_rank)
         dist.init_process_group(
@@ -152,9 +152,9 @@ class WorkerProcess(mp.get_context("spawn").Process):
             os.environ["DMLC_PS_ROOT_URI"] = self.config.get(
                 "job.distributed.master_ip"
             )
-            os.environ["DMLC_PS_ROOT_PORT"] = self.config.get(
+            os.environ["DMLC_PS_ROOT_PORT"] = str(self.config.get(
                 "job.distributed.lapse_port"
-            )
+            ))
 
             num_workers_per_server = 1
             lapse.setup(self.num_keys, num_workers_per_server)

@@ -181,7 +181,7 @@ class WorkScheduler(mp.get_context("fork").Process):
         self._init_in_started_process()
         set_seeds(config=self.config)
         os.environ["MASTER_ADDR"] = self.master_ip
-        os.environ["MASTER_PORT"] = self.master_port
+        os.environ["MASTER_PORT"] = str(self.master_port)
         # we have to have a huge timeout here, since it is only called after a complete
         #  epoch on a partition
         print("start scheduler with rank", self.rank, "world_size", self.world_size)

@@ -136,12 +136,12 @@ def init_lapse_scheduler(
 ):
     # we are only initializing dist here to have the same ranks for lapse and torch
     os.environ["MASTER_ADDR"] = master_ip
-    os.environ["MASTER_PORT"] = master_port
+    os.environ["MASTER_PORT"] = str(master_port)
     os.environ["DMLC_NUM_WORKER"] = "0"
     os.environ["DMLC_NUM_SERVER"] = str(servers)
     os.environ["DMLC_ROLE"] = "scheduler"
     os.environ["DMLC_PS_ROOT_URI"] = master_ip
-    os.environ["DMLC_PS_ROOT_PORT"] = lapse_port
+    os.environ["DMLC_PS_ROOT_PORT"] = str(lapse_port)
     num_workers_per_server = 1
     lapse.scheduler(num_keys, num_workers_per_server)
 

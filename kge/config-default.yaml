@@ -43,8 +43,8 @@ job:
     num_threads_per_process: 2  # omp threads per process
     parameter_server: 'lapse'  # options: lapse, torch
     master_ip: '127.0.0.1'
-    master_port: '8888'
-    lapse_port: '9091'
+    master_port: 8888
+    lapse_port: 9091
     gloo_socket_ifname: 'lo'  # 'eno1np0' get possible interfaces by echo /sys/class/net/*, corresponding ipaddresses with ip addr
     num_partitions: 2
     partition_type: 'random'  # random, relation, stratification, graph-cut
