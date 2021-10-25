@@ -76,7 +76,7 @@ job:
     num_partitions: 4
     num_workers: 4
     partition_type: random
-    master_port: '8888'  # change in case this port is used on your machine
+    master_port: 8888  # change in case this port is used on your machine
   device_pool:
     - cuda:0
     - cuda:1
@@ -127,12 +127,20 @@ Important options for distributed training in addition to the options specified 
 ````yaml
 job:
   distributed:
-    master_ip: '<some ip>'  # ip address of one of your machines
+    master_ip: '<some ip>'  # ip address of the machine with machine_id 0
     num_machines: 2
     num_workers_machine: 2
     gloo_socket_ifname: bond0  # name of the interface to use. Use command 'ip address' to find names
     parameter_server: lapse
 ````
+
+## Analyze Experiment Results
+- by default, each experiment will create a new folder in `local/experiments/<timestamp>-<config-name>`
+- this folder can be changed with command line argument `--folder path/to/folder`
+- each worker will have its own subfolder logging partition-processing times
+- the complete epoch time over all partitions is logged in the main `kge.log` file
+- hardware information is logged into `hardware_monitor.log` and `gpu_monitor.log`
+- evaluation is performed by worker-0. Therefore, evaluation results are logged into folder `<experiment-folder>/worker-0/` in the files `kge.log` and `trace.yaml`
 
 
 ## Experiments and Configuration
