@@ -1,4 +1,4 @@
-# <img src="docs/source/images/logo/libkge-header-2880.png" alt="Distributed LibKGE: A knowledge graph embedding library" width="80%">
+# Dist-KGE: A knowledge graph embedding library for multi-GPU and multi-machine training
 
 
 This is the code and configuration accompanying the paper "Parallel Training of Knowledge Graph Embedding Models: A Comparison of Techniques".
