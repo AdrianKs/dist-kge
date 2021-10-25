@@ -134,7 +134,7 @@ job:
     parameter_server: lapse
 ````
 
-## Analyze Experiment Results
+## Folder structure of experiment results
 - by default, each experiment will create a new folder in `local/experiments/<timestamp>-<config-name>`
 - this folder can be changed with command line argument `--folder path/to/folder`
 - each worker will have its own subfolder logging partition-processing times
@@ -143,7 +143,7 @@ job:
 - evaluation is performed by worker-0. Therefore, evaluation results are logged into folder `<experiment-folder>/worker-0/` in the files `kge.log` and `trace.yaml`
 
 
-## Experiments and Configuration
+## Results and Configurations
 - all ranking metrics are filtered with train, valid and test if not mentioned otherwise
 - configuration files for the experiments can be found [here](examples/experiments)
 
