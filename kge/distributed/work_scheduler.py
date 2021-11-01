@@ -8,7 +8,7 @@ import torch
 from collections import deque, OrderedDict, defaultdict
 from copy import deepcopy
 from kge.misc import set_seeds
-from kge.distributed.two_d_block_schedule_creator import TwoDBlockScheduleCreator
+from kge.distributed.stratification_schedule_creator import StratificationScheduleCreator
 from torch import multiprocessing as mp
 from torch import distributed as dist
 from enum import IntEnum
@@ -93,13 +93,7 @@ class WorkScheduler(mp.get_context("fork").Process):
     def create(
         config,
         partition_type,
-        world_size,
-        master_ip,
-        master_port,
-        num_partitions,
-        num_clients,
         dataset,
-        repartition_epoch=True,
     ):
         if partition_type == "random":
             return RandomWorkScheduler(config=config, dataset=dataset)
@@ -120,7 +114,7 @@ class WorkScheduler(mp.get_context("fork").Process):
         self._init_in_started_process()
         set_seeds(config=self.config)
         os.environ["MASTER_ADDR"] = self.master_ip
-        os.environ["MASTER_PORT"] = self.master_port
+        os.environ["MASTER_PORT"] = str(self.master_port)
         # we have to have a huge timeout here, since it is only called after a complete
         #  epoch on a partition
         print("start scheduler with rank", self.rank, "world_size", self.world_size)
@@ -512,12 +506,12 @@ class StratificationWorkScheduler(WorkScheduler):
         dataset,
     ):
         self.partition_type = "stratification"
-        self.combine_mirror_blocks = config.get("job.distributed.combine_mirror_blocks")
+        self.combine_mirror_blocks = config.get("job.distributed.stratification.combine_mirror")
         super(StratificationWorkScheduler, self).__init__(
             config=config,
             dataset=dataset,
         )
-        self.schedule_creator = TwoDBlockScheduleCreator(
+        self.schedule_creator = StratificationScheduleCreator(
             num_partitions=self.num_partitions,
             num_workers=self.num_clients,
             randomize_iterations=True,
@@ -957,7 +951,7 @@ class SuperStratificationWorkScheduler(StratificationWorkScheduler):
         # fixme: here we assume each machine has the same amount of workers
         #  this is not necessarily true
         num_workers_per_machine = int(self.config.get("job.distributed.num_workers")/self.config.get("job.distributed.num_machines"))
-        self.schedule_creator = TwoDBlockScheduleCreator(
+        self.schedule_creator = StratificationScheduleCreator(
             num_partitions=int(self.num_partitions/self.num_super_partitions),
             num_workers=num_workers_per_machine,
             randomize_iterations=True,
@@ -1018,7 +1012,7 @@ class RandomStratificationWorkScheduler(StratificationWorkScheduler):
         self.num_machines = self.config.get("job.distributed.num_machines")
         self.num_partitions = self.num_machines * 4
         # override the schedule creator
-        self.schedule_creator = TwoDBlockScheduleCreator(
+        self.schedule_creator = StratificationScheduleCreator(
             num_partitions=self.num_partitions,
             num_workers=self.num_machines,
             randomize_iterations=True,
