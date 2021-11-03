@@ -751,6 +751,12 @@ def _process_deprecated_options(options: Dict[str, Any]):
                     renamed_keys.add(key)
         return renamed_keys
 
+    # 03.11.21
+    rename_key(
+        "job.distributed.stratification.entities_needed_only"
+        "job.distributed.stratification.active_only"
+    )
+
     # 19.10.21
     rename_key(
         "job.distributed.combine_mirror_blocks",

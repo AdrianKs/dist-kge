@@ -62,11 +62,11 @@ job:
 
     load_batch: True  # load all embeddings once at beginning of the batch
     stratification:
-      # not all the entities in a strata are used for the positives
-      # this option allows to load only needed entities and only sample negatives
-      # from this needed subset
-      entities_needed_only: True
-      # combine mirrored strata to reduce number of partitions
+      # not all the entities in a strata are used ("active") for the positives
+      # this option allows to load only active entities and only sample negatives
+      # from this needed subset if local sampling is used
+      active_only: True
+      # combine mirrored partitions to reduce number of partitions
       #  e.g.: (1,2) and (2,1)
       #  diagonals lying next to each other will be combined
       #  e.g.: (0,0) and (1,1)
