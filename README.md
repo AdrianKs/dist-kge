@@ -6,6 +6,16 @@ The code extends the knowledge graph embedding library [LibKGE](https://github.c
 For documentation on LibKGE refer to LibKGE repository.
 We provide the hyper-parameter settings for the experiments in their corresponding configuration files.
 
+
+## Table of contents
+
+1. [Quick start](#quick-start)
+2. [Dataset preparation for parallel training](#dataset-preparation-for-parallel-training)
+3. [Single Machine Multi-GPU Training](#single-machine-multi-gpu-training)
+4. [Multi-GPU Multi-Machine Training](#multi-gpu-multi-machine-training)
+5. [Folder structure of experiment results](#folder-structure-of-experiment-results)
+6. [Results and Configurations](#results-and-configurations)
+
 ## Quick start
 
 ```sh
@@ -58,7 +68,7 @@ cd ..
 ````
 
 
-### Single Machine Multi-GPU Training
+## Single Machine Multi-GPU Training
 Run following example to train on two GPUs with random partitioning (two worker per GPU):
 ````
 python -m kge start examples/fb15k-complex-parallel.yaml
@@ -87,9 +97,9 @@ train:
       type: dist_adagrad
 ````
 
-### Multi-GPU Multi-Machine Training
-#### Parameter Server
-For multi-machine training we rely on the parameter server [Lapse](https://github.com/alexrenz/lapse-ps).
+## Multi-GPU Multi-Machine Training
+### Parameter Server
+For multi-machine training we use the parameter server [Lapse](https://github.com/alexrenz/lapse-ps).
 To install Lapse and the corresponding python bindings run the following commands:
 ````sh
 git clone https://github.com/alexrenz/lapse-ps.git
@@ -102,24 +112,24 @@ For further documentation on the python bindings refer to [Lapse-Binding documen
 
 In case you can not use Lapse, we provide a very inefficient parameter server (for debugging). To use this debugging PS use the option `--job.distributed.parameter_server torch`
 
-#### Interface
+### Interface
 As we use the gloo backend to communicate between master and worker nodes you need to specify the interface connecting your machines and specify it as `--job.distributed.gloo_socket_ifname`.
 You can find out the names of your interfaces with the command
 ````sh
 ip address
 ````
 
-#### Example
+### Example
 Run the following example to train on two machines with one GPU each (1@2) with random partitioning:
 
 Command for machine 1
 ````sh
-python -m kge start examples/fb15k_complex_distributed.yaml --job.distributed.machine_id 0 --job.distributed.master_ip <some_ip>
+python -m kge start examples/fb15k_complex_distributed.yaml --job.distributed.machine_id 0 --job.distributed.master_ip <ip_of_machine_0>
 ````
 
 Command for machine 2
 ````sh
-python -m kge start examples/fb15k_complex_distributed.yaml --job.distributed.machine_id 1 --job.distributed.master_ip <some_ip>
+python -m kge start examples/fb15k_complex_distributed.yaml --job.distributed.machine_id 1 --job.distributed.master_ip <ip_of_machine_0>
 ````
 
 
@@ -127,7 +137,7 @@ Important options for distributed training in addition to the options specified 
 ````yaml
 job:
   distributed:
-    master_ip: '<some ip>'  # ip address of the machine with machine_id 0
+    master_ip: '<ip_of_machine_0>'  # ip address of the machine with machine_id 0
     num_machines: 2
     num_workers_machine: 2
     gloo_socket_ifname: bond0  # name of the interface to use. Use command 'ip address' to find names
@@ -137,10 +147,11 @@ job:
 ## Folder structure of experiment results
 - by default, each experiment will create a new folder in `local/experiments/<timestamp>-<config-name>`
 - this folder can be changed with command line argument `--folder path/to/folder`
+- for multi-machine training a folder is created for each machine. Therefore, specify a separate folder name for each machine if you work on a shared filesystem.
 - each worker will have its own subfolder logging partition-processing times
 - the complete epoch time over all partitions is logged in the main `kge.log` file
 - hardware information is logged into `hardware_monitor.log` and `gpu_monitor.log`
-- evaluation is performed by worker-0. Therefore, evaluation results are logged into folder `<experiment-folder>/worker-0/` in the files `kge.log` and `trace.yaml`
+- evaluation is performed on machine-0 by worker-0. Therefore, evaluation results are logged into folder `<experiment-folder-machine-0>/worker-0/` in the files `kge.log` and `trace.yaml`
 
 
 ## Results and Configurations
