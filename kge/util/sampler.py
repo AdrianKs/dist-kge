@@ -1305,10 +1305,15 @@ class KgePooledSampler(KgeSampler):
 
         # set pool size to ensure it does not fail in P-slot
         pool_size = max(1, pool_size)
-        unique_samples = self.sample_pools[slot][torch.tensor(random.sample(
-            range(pool_size),
-            num_unique if self.shared_type == "naive" else num_unique + 1,
-        ), dtype=torch.long)]
+        if not num_unique + 1 > pool_size:
+            unique_samples = self.sample_pools[slot][torch.tensor(random.sample(
+                range(pool_size),
+                num_unique if self.shared_type == "naive" else num_unique + 1,
+            ), dtype=torch.long)]
+        else:
+            unique_samples = self.sample_pools[slot][torch.tensor(
+                np.random.randint(0, pool_size, [num_unique if self.shared_type == "naive" else num_unique + 1,]),
+                dtype=torch.long)]
 
         # For WR, we need to upsample. To do so, we compute the set of additional
         # (repeated) sample indexes.
