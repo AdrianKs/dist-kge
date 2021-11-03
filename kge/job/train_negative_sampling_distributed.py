@@ -402,10 +402,7 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
         # result.cpu_gpu_time += time.time()
         result.unique_time += batch["unique_time"]
         if self.entity_sync_level == "batch":
-            # result.unique_time -= time.time()
             unique_entities = batch["unique_entities"]
-            # unique_entities = torch.unique(torch.cat((batch["triples"][:, [S,O]].view(-1), batch["negative_samples"][S].unique_samples(), batch["negative_samples"][O].unique_samples())))
-            # result.unique_time += time.time()
 
             result.ps_wait_time -= time.time()
             if not self.entity_async_write_back:
@@ -426,10 +423,7 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             result.entity_pull_time += entity_pull_time
             result.cpu_gpu_time += cpu_gpu_time
         if self.relation_sync_level == "batch":
-            # result.unique_time -= time.time()
             unique_relations = batch["unique_relations"]
-            # unique_relations = torch.unique(torch.cat((batch["triples"][:, [P]].view(-1), batch["negative_samples"][P].unique_samples())))
-            # result.unique_time += time.time()
             result.ps_wait_time -= time.time()
             if not self.relation_async_write_back:
                 for wait_value in self.optimizer.relation_async_wait_values:
@@ -534,9 +528,10 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             self.dataloader_dataset,
             sampler=InfiniteSequentialSampler(self.dataloader_dataset),
             collate_fn=self._get_collate_fun(),
+            # shuffle needs to be False since it is handled in the dataset object
             shuffle=False,
-            # shuffle needs to be False, since it is handled in the dataset object
-            # batch_size=self.batch_size,  # batch size needs to be 1 since it is handled in the dataset object
+            # batch size needs to be 1 since it is handled in the dataset object
+            # batch_size=self.batch_size,
             num_workers=self.config.get("train.num_workers"),
             worker_init_fn=_generate_worker_init_fn(self.config),
             pin_memory=self.config.get("train.pin_memory"),
