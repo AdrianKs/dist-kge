@@ -217,17 +217,7 @@ def create_and_run_distributed(
             partition_type = config.get("job.distributed.partition_type")
         print("init scheduler")
         scheduler_init_time = time.time()
-        scheduler = WorkScheduler.create(
-            config=config,
-            partition_type=partition_type,
-            world_size=num_workers + min_rank,
-            master_ip=master_ip,
-            master_port=master_port,
-            num_partitions=num_partitions,
-            num_clients=num_workers,
-            dataset=dataset,
-            repartition_epoch=config.get("job.distributed.repartition_epoch"),
-        )
+        scheduler = WorkScheduler.create(config=config, partition_type=partition_type, dataset=dataset)
         config.log(f"scheduler initialized after: {time.time()-scheduler_init_time}")
         print("start scheduler")
         scheduler_start_time = time.time()

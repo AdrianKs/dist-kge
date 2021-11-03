@@ -3,7 +3,6 @@ import math
 import datetime
 import time
 import numpy as np
-import pandas as pd
 import numba
 import torch
 from collections import deque, OrderedDict, defaultdict
@@ -47,13 +46,7 @@ class WorkScheduler(mp.get_context("fork").Process):
     def __init__(
         self,
         config,
-        world_size,
-        master_ip,
-        master_port,
-        num_partitions,
-        num_clients,
         dataset,
-        repartition_epoch=True,
     ):
         self._config_check(config)
         super(WorkScheduler, self).__init__(daemon=False, name="work-scheduler")
@@ -61,16 +54,16 @@ class WorkScheduler(mp.get_context("fork").Process):
         self.dataset = dataset
         self.min_rank = get_min_rank(config)
         self.rank = self.min_rank - 1
-        self.num_clients = num_clients
-        self.world_size = world_size
-        self.master_ip = master_ip
-        self.master_port = master_port
-        self.num_partitions = num_partitions
+        self.num_clients = config.get("job.distributed.num_workers")
+        self.world_size = self.num_clients + self.min_rank
+        self.master_ip = config.get("job.distributed.master_ip")
+        self.master_port = config.get("job.distributed.master_port")
+        self.num_partitions = config.get("job.distributed.num_partitions")
         self.done_workers = []
         self.asking_workers = []
-        self.work_to_do = deque(list(range(num_partitions)))
+        self.work_to_do = deque(list(range(self.num_partitions)))
         self.wait_time = 0.4
-        self.repartition_epoch = repartition_epoch
+        self.repartition_epoch = config.get("job.distributed.repartition_epoch")
         self.init_up_to_entity = -1
         self.num_processed_partitions = 0
         self.eval_hists = []
@@ -79,9 +72,7 @@ class WorkScheduler(mp.get_context("fork").Process):
             self.repartition_worker_pool = None
 
     def _init_in_started_process(self):
-        self.partitions = self._load_partitions(
-            self.dataset.folder, self.num_partitions
-        )
+        self.partitions = self._load_partitions(self.num_partitions)
         self._define_local_entities()
 
     def _define_local_entities(self):
@@ -102,78 +93,20 @@ class WorkScheduler(mp.get_context("fork").Process):
     def create(
         config,
         partition_type,
-        world_size,
-        master_ip,
-        master_port,
-        num_partitions,
-        num_clients,
         dataset,
-        repartition_epoch=True,
     ):
         if partition_type == "random":
-            return RandomWorkScheduler(
-                config=config,
-                world_size=world_size,
-                master_ip=master_ip,
-                master_port=master_port,
-                num_partitions=num_partitions,
-                num_clients=num_clients,
-                dataset=dataset,
-                repartition_epoch=repartition_epoch,
-            )
+            return RandomWorkScheduler(config=config, dataset=dataset)
         elif partition_type == "relation":
-            return RelationWorkScheduler(
-                config=config,
-                world_size=world_size,
-                master_ip=master_ip,
-                master_port=master_port,
-                num_partitions=num_partitions,
-                num_clients=num_clients,
-                dataset=dataset,
-            )
+            return RelationWorkScheduler(config=config, dataset=dataset)
         elif partition_type == "graph-cut":
-            return GraphCutWorkScheduler(
-                config=config,
-                world_size=world_size,
-                master_ip=master_ip,
-                master_port=master_port,
-                num_partitions=num_partitions,
-                num_clients=num_clients,
-                dataset=dataset,
-            )
+            return GraphCutWorkScheduler(config=config, dataset=dataset)
         elif partition_type == "stratification":
-            return StratificationWorkScheduler(
-                config=config,
-                world_size=world_size,
-                master_ip=master_ip,
-                master_port=master_port,
-                num_partitions=num_partitions,
-                num_clients=num_clients,
-                dataset=dataset,
-                repartition_epoch=repartition_epoch,
-            )
+            return StratificationWorkScheduler(config=config, dataset=dataset)
         elif partition_type == "super-stratification":
-            return SuperStratificationWorkScheduler(
-                config=config,
-                world_size=world_size,
-                master_ip=master_ip,
-                master_port=master_port,
-                num_partitions=num_partitions,
-                num_clients=num_clients,
-                dataset=dataset,
-                repartition_epoch=repartition_epoch,
-            )
+            return SuperStratificationWorkScheduler(config=config, dataset=dataset)
         elif partition_type == "random-stratification":
-            return RandomStratificationWorkScheduler(
-                config=config,
-                world_size=world_size,
-                master_ip=master_ip,
-                master_port=master_port,
-                num_partitions=num_partitions,
-                num_clients=num_clients,
-                dataset=dataset,
-                repartition_epoch=repartition_epoch,
-            )
+            return RandomStratificationWorkScheduler(config=config, dataset=dataset)
         else:
             raise NotImplementedError()
 
@@ -384,138 +317,21 @@ class WorkScheduler(mp.get_context("fork").Process):
     def _get_max_relations(self):
         return 0
 
-    @staticmethod
-    def _load_partition_file(partition_type, dataset_folder, num_partitions):
-        print("loading partitions")
-        # todo: we should probably build a clean variant of this in the dataset object
-        if os.path.exists(
-            os.path.join(
-                dataset_folder,
-                "partitions",
-                partition_type,
-                f"num_{num_partitions}",
-                "train_assign_partitions.del.npy",
-            )
-        ):
-            partition_assignment = np.load(
-                os.path.join(
-                    dataset_folder,
-                    "partitions",
-                    partition_type,
-                    f"num_{num_partitions}",
-                    "train_assign_partitions.del.npy",
-                )
-            )
-        else:
-            partition_assignment = pd.read_csv(
-                os.path.join(
-                    dataset_folder,
-                    "partitions",
-                    partition_type,
-                    f"num_{num_partitions}",
-                    "train_assign_partitions.del",
-                ),
-                header=None,
-                sep="\t",
-                dtype=np.long,
-            ).to_numpy()
-            np.save(
-                os.path.join(
-                    dataset_folder,
-                    "partitions",
-                    partition_type,
-                    f"num_{num_partitions}",
-                    "train_assign_partitions.del.npy",
-                ),
-                partition_assignment,
-            )
-        return partition_assignment
-
-    def _load_entities_to_partitions_file(
-        self, partition_type, dataset_folder, num_partitions
-    ):
-        return self._load_partition_mapper_file(
-            "entity_to_partitions.del", partition_type, dataset_folder, num_partitions
-        )
-
-    def _load_relations_to_partitions_file(
-        self, partition_type, dataset_folder, num_partitions
-    ):
-        return self._load_partition_mapper_file(
-            "relation_to_partitions.del", partition_type, dataset_folder, num_partitions
-        )
-
-    @staticmethod
-    def _load_partition_mapper_file(
-        file_name, partition_type, dataset_folder, num_partitions
-    ):
-        if os.path.exists(
-            os.path.join(
-                dataset_folder,
-                "partitions",
-                partition_type,
-                f"num_{num_partitions}",
-                f"{file_name}.npy",
-            )
-        ):
-            partition_assignment = np.load(
-                os.path.join(
-                    dataset_folder,
-                    "partitions",
-                    partition_type,
-                    f"num_{num_partitions}",
-                    f"{file_name}.npy",
-                )
-            )
-        else:
-            partition_assignment = pd.read_csv(
-                os.path.join(
-                    dataset_folder,
-                    "partitions",
-                    partition_type,
-                    f"num_{num_partitions}",
-                    file_name,
-                ),
-                header=None,
-                sep="\t",
-                dtype=np.long,
-            ).to_numpy()
-            np.save(
-                os.path.join(
-                    dataset_folder,
-                    "partitions",
-                    partition_type,
-                    f"num_{num_partitions}",
-                    file_name,
-                ),
-                partition_assignment,
-            )
-        return partition_assignment
+    def _load_partitions(self, num_partitions):
+        raise NotImplementedError()
 
 
 class RandomWorkScheduler(WorkScheduler):
     def __init__(
         self,
         config,
-        world_size,
-        master_ip,
-        master_port,
-        num_partitions,
-        num_clients,
         dataset,
-        repartition_epoch,
     ):
         self.partition_type = "random"
         self.dataset = dataset
         super(RandomWorkScheduler, self).__init__(
             config=config,
-            world_size=world_size,
-            master_ip=master_ip,
-            master_port=master_port,
-            num_partitions=num_partitions,
-            num_clients=num_clients,
             dataset=dataset,
-            repartition_epoch=repartition_epoch,
         )
 
     def _next_work(
@@ -533,7 +349,7 @@ class RandomWorkScheduler(WorkScheduler):
         except IndexError:
             return WorkPackage()
 
-    def _load_partitions(self, dataset_folder, num_partitions):
+    def _load_partitions(self, num_partitions):
         num_triples = len(self.dataset.split("train"))
         permuted_triple_index = torch.from_numpy(np.random.permutation(num_triples))
         partitions = list(torch.chunk(permuted_triple_index, num_partitions))
@@ -542,7 +358,7 @@ class RandomWorkScheduler(WorkScheduler):
 
     def _refill_work(self):
         if self.repartition_epoch:
-            self.partitions = self._load_partitions(None, self.num_partitions)
+            self.partitions = self._load_partitions(self.num_partitions)
             self._define_local_entities()
         super(RandomWorkScheduler, self)._refill_work()
 
@@ -551,28 +367,18 @@ class RelationWorkScheduler(WorkScheduler):
     def __init__(
         self,
         config,
-        world_size,
-        master_ip,
-        master_port,
-        num_partitions,
-        num_clients,
         dataset,
     ):
         self.partition_type = "relation"
         super(RelationWorkScheduler, self).__init__(
             config=config,
-            world_size=world_size,
-            master_ip=master_ip,
-            master_port=master_port,
-            num_partitions=num_partitions,
-            num_clients=num_clients,
             dataset=dataset,
         )
 
     def _init_in_started_process(self):
         super(RelationWorkScheduler, self)._init_in_started_process()
-        self.relations_to_partition = self._load_relations_to_partitions_file(
-            self.partition_type, self.dataset.folder, self.num_partitions
+        self.relations_to_partition = self.dataset.load_relations_to_partitions(
+            self.partition_type, self.num_partitions
         )
         self.relations_to_partition = self._get_relations_in_partition()
 
@@ -592,9 +398,9 @@ class RelationWorkScheduler(WorkScheduler):
         except IndexError:
             return WorkPackage()
 
-    def _load_partitions(self, dataset_folder, num_partitions):
-        partition_assignment = self._load_partition_file(
-            self.partition_type, dataset_folder, num_partitions
+    def _load_partitions(self, num_partitions):
+        partition_assignment = self.dataset.load_train_partitions(
+            self.partition_type, num_partitions
         )
         # todo: let the partitions start at zero, then we do not need this unique
         partition_indexes = np.unique(partition_assignment)
@@ -614,7 +420,7 @@ class RelationWorkScheduler(WorkScheduler):
 
     def _refill_work(self):
         if self.repartition_epoch:
-            #self.partitions = self._load_partitions(None, self.num_partitions)
+            # self.partitions = self._load_partitions(self.num_partitions)
             self._define_local_entities()
         super(RelationWorkScheduler, self)._refill_work()
 
@@ -623,28 +429,18 @@ class GraphCutWorkScheduler(WorkScheduler):
     def __init__(
         self,
         config,
-        world_size,
-        master_ip,
-        master_port,
-        num_partitions,
-        num_clients,
         dataset,
     ):
         self.partition_type = "graph-cut"
         super(GraphCutWorkScheduler, self).__init__(
             config=config,
-            world_size=world_size,
-            master_ip=master_ip,
-            master_port=master_port,
-            num_partitions=num_partitions,
-            num_clients=num_clients,
             dataset=dataset,
         )
 
     def _init_in_started_process(self):
         super(GraphCutWorkScheduler, self)._init_in_started_process()
-        self.entities_to_partition = self._load_entities_to_partitions_file(
-            self.partition_type, self.dataset.folder, self.num_partitions
+        self.entities_to_partition = self.dataset.load_entities_to_partitions(
+            self.partition_type, self.num_partitions
         )
         self.entities_to_partition = self._get_entities_in_partition()
         self.previous_partition_per_worker = defaultdict(lambda: None)
@@ -675,9 +471,9 @@ class GraphCutWorkScheduler(WorkScheduler):
         except IndexError:
             return WorkPackage()
 
-    def _load_partitions(self, dataset_folder, num_partitions):
-        partition_assignment = self._load_partition_file(
-            self.partition_type, dataset_folder, num_partitions
+    def _load_partitions(self, num_partitions):
+        partition_assignment = self.dataset.load_train_partitions(
+            self.partition_type, num_partitions
         )
         # todo: let the partitions start at zero, then we do not need this unique
         partition_indexes = np.unique(partition_assignment)
@@ -707,25 +503,13 @@ class StratificationWorkScheduler(WorkScheduler):
     def __init__(
         self,
         config,
-        world_size,
-        master_ip,
-        master_port,
-        num_partitions,
-        num_clients,
         dataset,
-        repartition_epoch=True,
     ):
         self.partition_type = "stratification"
         self.combine_mirror_blocks = config.get("job.distributed.stratification.combine_mirror")
         super(StratificationWorkScheduler, self).__init__(
             config=config,
-            world_size=world_size,
-            master_ip=master_ip,
-            master_port=master_port,
-            num_partitions=num_partitions,
-            num_clients=num_clients,
             dataset=dataset,
-            repartition_epoch=repartition_epoch,
         )
         self.schedule_creator = StratificationScheduleCreator(
             num_partitions=self.num_partitions,
@@ -747,8 +531,8 @@ class StratificationWorkScheduler(WorkScheduler):
         super(StratificationWorkScheduler, self)._init_in_started_process()
         # self.work_to_do = deepcopy(self.partitions)
         self._initialized_entity_blocks = set()
-        entities_to_partition = self._load_entities_to_partitions_file(
-            self.partition_type, self.dataset.folder, self.num_partitions
+        entities_to_partition = self.dataset.load_entities_to_partitions(
+            self.partition_type, self.num_partitions
         )
         self._entities_in_bucket = self._get_entities_in_strata(
             entities_to_partition,
@@ -1080,10 +864,10 @@ class StratificationWorkScheduler(WorkScheduler):
         if self.fixed_schedule is None:
             self.work_to_do = self._order_by_schedule(deepcopy(self.partitions))
 
-    def _load_partitions(self, dataset_folder, num_partitions):
+    def _load_partitions(self, num_partitions):
         start = time.time()
-        partition_assignment = self._load_partition_file(
-            self.partition_type, dataset_folder, num_partitions
+        partition_assignment = self.dataset.load_train_partitions(
+            self.partition_type, num_partitions
         )
         partitions = self._construct_partitions(partition_assignment, num_partitions)
         print("partition load time", time.time() - start)
@@ -1150,40 +934,16 @@ class SuperStratificationWorkScheduler(StratificationWorkScheduler):
     def __init__(
             self,
             config,
-            world_size,
-            master_ip,
-            master_port,
-            num_partitions,
-            num_clients,
             dataset,
-            repartition_epoch=True,
     ):
         # create a super scheduler with num_machines*4 partitions
         self.num_machines = config.get("job.distributed.num_machines")
         self.num_super_partitions = self.num_machines*2
-        super(SuperStratificationWorkScheduler, self).__init__(
-            config=config,
-            world_size=world_size,
-            master_ip=master_ip,
-            master_port=master_port,
-            num_partitions=num_partitions,
-            num_clients=num_clients,
-            dataset=dataset,
-            repartition_epoch=repartition_epoch,
-        )
+        super(SuperStratificationWorkScheduler, self).__init__(config=config, dataset=dataset)
 
     def _init_in_started_process(self):
         super(SuperStratificationWorkScheduler, self)._init_in_started_process()
-        self.super_stratification_scheduler = StratificationWorkScheduler(
-            config=self.config,
-            world_size=self.world_size,
-            master_ip=self.master_ip,
-            master_port=self.master_port,
-            num_partitions=self.num_super_partitions,
-            num_clients=self.num_machines,
-            dataset=self.dataset,
-            repartition_epoch=self.repartition_epoch,
-        )
+        self.super_stratification_scheduler = StratificationWorkScheduler(config=self.config, dataset=self.dataset)
         self.super_stratification_scheduler.partitions = defaultdict(lambda: None)
         self.super_stratification_scheduler._entities_in_bucket = defaultdict(lambda: None)
         self.current_machine_strata: Dict[Optional[Tuple[int, int]]] = defaultdict(lambda: None)
@@ -1244,26 +1004,11 @@ class RandomStratificationWorkScheduler(StratificationWorkScheduler):
     def __init__(
             self,
             config,
-            world_size,
-            master_ip,
-            master_port,
-            num_partitions,
-            num_clients,
             dataset,
-            repartition_epoch=True,
     ):
         # num_partitions = self.config.get("job.distributed.num_machines")*2
         # num_clients = self.config.get("job.distributed.num_machines")
-        super(RandomStratificationWorkScheduler, self).__init__(
-            config,
-            world_size,
-            master_ip,
-            master_port,
-            num_partitions,
-            num_clients,
-            dataset,
-            repartition_epoch=repartition_epoch,
-        )
+        super(RandomStratificationWorkScheduler, self).__init__(config, dataset)
         self.num_machines = self.config.get("job.distributed.num_machines")
         self.num_partitions = self.num_machines * 4
         # override the schedule creator
