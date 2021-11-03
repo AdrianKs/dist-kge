@@ -43,7 +43,7 @@ lookup_embedder:
     p: 1
     weighted: true
   sparse: true
-model: distribtued_model
+model: distributed_model
 modules:
 - kge.job
 - kge.model.embedder
