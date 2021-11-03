@@ -754,7 +754,7 @@ def _process_deprecated_options(options: Dict[str, Any]):
     # 03.11.21
     delete_key_with_value("job.distributed.load_batch", True)
     rename_key(
-        "job.distributed.stratification.entities_needed_only"
+        "job.distributed.stratification.entities_needed_only",
         "job.distributed.stratification.active_only"
     )
 
