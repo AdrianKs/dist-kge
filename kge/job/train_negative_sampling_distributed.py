@@ -155,7 +155,6 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
             work_scheduler_client=work_scheduler_client,
         )
         self.type_str = "negative_sampling"
-        self.load_batch = self.config.get("job.distributed.load_batch")
         self.entity_localize = self.config.get("job.distributed.entity_localize")
         self.relation_localize = self.config.get("job.distributed.relation_localize")
         self.entity_partition_localized = False
@@ -402,54 +401,53 @@ class TrainingJobNegativeSamplingDistributed(TrainingJobNegativeSampling):
         ]
         # result.cpu_gpu_time += time.time()
         result.unique_time += batch["unique_time"]
-        if self.config.get("job.distributed.load_batch"):
-            if self.entity_sync_level == "batch":
-                # result.unique_time -= time.time()
-                unique_entities = batch["unique_entities"]
-                # unique_entities = torch.unique(torch.cat((batch["triples"][:, [S,O]].view(-1), batch["negative_samples"][S].unique_samples(), batch["negative_samples"][O].unique_samples())))
-                # result.unique_time += time.time()
+        if self.entity_sync_level == "batch":
+            # result.unique_time -= time.time()
+            unique_entities = batch["unique_entities"]
+            # unique_entities = torch.unique(torch.cat((batch["triples"][:, [S,O]].view(-1), batch["negative_samples"][S].unique_samples(), batch["negative_samples"][O].unique_samples())))
+            # result.unique_time += time.time()
 
-                result.ps_wait_time -= time.time()
-                if not self.entity_async_write_back:
-                    for wait_value in self.optimizer.entity_async_wait_values:
-                        self.parameter_client.wait(wait_value)
-                    self.optimizer.entity_async_wait_values.clear()
-                result.ps_wait_time += time.time()
-                if self.entity_localize and not self.entity_partition_localized:
-                    self.model.get_s_embedder().localize(
-                        unique_entities, asynchronous=True
-                    )
-                result.pull_and_map_time -= time.time()
-                (
-                    entity_pull_time,
-                    cpu_gpu_time,
-                ) = self.model.get_s_embedder()._pull_embeddings(unique_entities)
-                result.pull_and_map_time += time.time()
-                result.entity_pull_time += entity_pull_time
-                result.cpu_gpu_time += cpu_gpu_time
-            if self.relation_sync_level == "batch":
-                # result.unique_time -= time.time()
-                unique_relations = batch["unique_relations"]
-                # unique_relations = torch.unique(torch.cat((batch["triples"][:, [P]].view(-1), batch["negative_samples"][P].unique_samples())))
-                # result.unique_time += time.time()
-                result.ps_wait_time -= time.time()
-                if not self.relation_async_write_back:
-                    for wait_value in self.optimizer.relation_async_wait_values:
-                        self.parameter_client.wait(wait_value)
-                    self.optimizer.relation_async_wait_values.clear()
-                result.ps_wait_time += time.time()
-                if self.relation_localize and not self.relation_partition_localized:
-                    self.model.get_p_embedder().localize(
-                        unique_relations, asynchronous=True
-                    )
-                result.pull_and_map_time -= time.time()
-                (
-                    relation_pull_time,
-                    cpu_gpu_time,
-                ) = self.model.get_p_embedder()._pull_embeddings(unique_relations)
-                result.pull_and_map_time += time.time()
-                result.relation_pull_time += relation_pull_time
-                result.cpu_gpu_time += cpu_gpu_time
+            result.ps_wait_time -= time.time()
+            if not self.entity_async_write_back:
+                for wait_value in self.optimizer.entity_async_wait_values:
+                    self.parameter_client.wait(wait_value)
+                self.optimizer.entity_async_wait_values.clear()
+            result.ps_wait_time += time.time()
+            if self.entity_localize and not self.entity_partition_localized:
+                self.model.get_s_embedder().localize(
+                    unique_entities, asynchronous=True
+                )
+            result.pull_and_map_time -= time.time()
+            (
+                entity_pull_time,
+                cpu_gpu_time,
+            ) = self.model.get_s_embedder()._pull_embeddings(unique_entities)
+            result.pull_and_map_time += time.time()
+            result.entity_pull_time += entity_pull_time
+            result.cpu_gpu_time += cpu_gpu_time
+        if self.relation_sync_level == "batch":
+            # result.unique_time -= time.time()
+            unique_relations = batch["unique_relations"]
+            # unique_relations = torch.unique(torch.cat((batch["triples"][:, [P]].view(-1), batch["negative_samples"][P].unique_samples())))
+            # result.unique_time += time.time()
+            result.ps_wait_time -= time.time()
+            if not self.relation_async_write_back:
+                for wait_value in self.optimizer.relation_async_wait_values:
+                    self.parameter_client.wait(wait_value)
+                self.optimizer.relation_async_wait_values.clear()
+            result.ps_wait_time += time.time()
+            if self.relation_localize and not self.relation_partition_localized:
+                self.model.get_p_embedder().localize(
+                    unique_relations, asynchronous=True
+                )
+            result.pull_and_map_time -= time.time()
+            (
+                relation_pull_time,
+                cpu_gpu_time,
+            ) = self.model.get_p_embedder()._pull_embeddings(unique_relations)
+            result.pull_and_map_time += time.time()
+            result.relation_pull_time += relation_pull_time
+            result.cpu_gpu_time += cpu_gpu_time
 
         batch["labels"] = [None] * 3  # reuse label tensors b/w subbatches
         result.size = len(batch["triples"])

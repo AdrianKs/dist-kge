@@ -44,7 +44,6 @@ class DistributedLookupEmbedder(LookupEmbedder):
         self.parameter_client = parameter_client
         self.lapse_offset = lapse_offset
         self.pulled_ids = None
-        self.load_batch = self.config.get("job.distributed.load_batch")
         # global to local mapper only used in sync level partition
         self.global_to_local_mapper = torch.full(
             (self.dataset.num_entities(),), -1, dtype=torch.long, device="cpu"
